@@ -364,7 +364,7 @@ async function createTemplate({ name, config, snapshot, actor, req }) {
 
   await applyTemplateAssets({
     template,
-    snapshot,
+    snapshotInput: snapshot,
   });
   await template.save();
 
@@ -397,7 +397,7 @@ async function updateTemplate({ templateId, name, config, snapshot, actor, req }
   template.snapshot = sanitizeSnapshot(snapshot);
   await applyTemplateAssets({
     template,
-    snapshot,
+    snapshotInput: snapshot,
     existingSnapshot,
   });
   template.updatedBy = actor._id;
