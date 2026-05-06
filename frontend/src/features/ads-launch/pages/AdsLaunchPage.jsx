@@ -224,12 +224,13 @@ const AdsLaunchPage = () => {
   );
   const selectedCountry = countryOptions.find((country) => country.value === form.country) || null;
   const isVideoAsset = mediaFile?.type?.startsWith('video/') || false;
+  const pixelRequired = form.objective === 'OUTCOME_LEADS' || form.objective === 'OUTCOME_SALES';
   const canGenerate = Boolean(
     form.tokenId &&
       form.launchLabel.trim() &&
       form.selectedAdAccountIds.length &&
       form.pageId &&
-      form.pixelId &&
+      (!pixelRequired || form.pixelId) &&
       form.headline.trim() &&
       form.primaryText.trim() &&
       form.websiteUrl.trim()
@@ -535,7 +536,11 @@ const AdsLaunchPage = () => {
 
   const handleGenerate = () => {
     if (!canGenerate) {
-      toast.error('Select the token, ad accounts, page, pixel, and required copy fields first');
+      toast.error(
+        pixelRequired
+          ? 'Select the token, ad accounts, page, shared pixel, and required copy fields first'
+          : 'Select the token, ad accounts, page, and required copy fields first'
+      );
       return;
     }
 
@@ -544,7 +549,13 @@ const AdsLaunchPage = () => {
 
   const handlePublish = async () => {
     if (!canPublish) {
-      toast.error('Add the creative file, and for video also upload a thumbnail before publishing');
+      toast.error(
+        canGenerate
+          ? 'Add the creative file, and for video also upload a thumbnail before publishing'
+          : pixelRequired
+            ? 'Complete the token, ad account, page, shared pixel, and copy fields before publishing'
+            : 'Complete the token, ad account, page, and copy fields before publishing'
+      );
       return;
     }
 
@@ -782,7 +793,11 @@ const AdsLaunchPage = () => {
                 <FormFieldCard
                   htmlFor="pixel-id"
                   label="Pixel"
-                  helper="Shared pixels are only shown when they are available across the selected ad accounts."
+                  helper={
+                    pixelRequired
+                      ? 'Shared pixels are required for leads and sales. Only common pixels across the selected accounts are shown.'
+                      : 'Shared pixels are optional for traffic and engagement. When available, you can still attach one here.'
+                  }
                 >
                   <select
                     id="pixel-id"
@@ -790,9 +805,14 @@ const AdsLaunchPage = () => {
                     onChange={(event) => updateField('pixelId', event.target.value)}
                     className="h-12 w-full rounded-xl border border-sky-100 bg-white px-4 outline-none transition focus:border-sky-400 focus:ring-4 focus:ring-sky-100"
                     disabled={loadingPixels || !pixels.length}
-                    required
                   >
-                    <option value="">{loadingPixels ? 'Loading shared pixels...' : 'Select shared pixel'}</option>
+                    <option value="">
+                      {loadingPixels
+                        ? 'Loading shared pixels...'
+                        : pixelRequired
+                          ? 'Select shared pixel'
+                          : 'No shared pixel selected (optional)'}
+                    </option>
                     {pixels.map((pixel) => (
                       <option key={pixel.id} value={pixel.id}>
                         {pixel.name}
@@ -1257,7 +1277,11 @@ const AdsLaunchPage = () => {
             )}
 
             {!loadingPixels && form.selectedAdAccountIds.length > 1 && !pixels.length ? (
-              <EmptyState>No common pixel was found across the selected ad accounts for this token.</EmptyState>
+              <EmptyState>
+                {pixelRequired
+                  ? 'No common pixel was found across the selected ad accounts for this token.'
+                  : 'No common pixel was found across the selected ad accounts. Traffic and engagement launches can still publish without one.'}
+              </EmptyState>
             ) : null}
 
             <div className="rounded-2xl bg-amber-50 px-4 py-4 text-amber-800">

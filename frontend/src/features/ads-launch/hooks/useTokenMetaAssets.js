@@ -35,6 +35,18 @@ function intersectPixels(pixelCollections) {
     .sort((left, right) => left.name.localeCompare(right.name));
 }
 
+function normalizePixelCollection(payload) {
+  if (Array.isArray(payload)) {
+    return payload;
+  }
+
+  if (Array.isArray(payload?.pixels)) {
+    return payload.pixels;
+  }
+
+  return [];
+}
+
 export const useTokenMetaAssets = () => {
   const [adAccounts, setAdAccounts] = useState([]);
   const [pages, setPages] = useState([]);
@@ -100,7 +112,7 @@ export const useTokenMetaAssets = () => {
 
       const fulfilled = results
         .filter((result) => result.status === 'fulfilled')
-        .map((result) => result.value.pixels || []);
+        .map((result) => normalizePixelCollection(result.value));
 
       const rejected = results.filter((result) => result.status === 'rejected');
 

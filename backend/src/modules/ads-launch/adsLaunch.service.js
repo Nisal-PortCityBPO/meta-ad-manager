@@ -10,14 +10,19 @@ const GRAPH_VIDEO_API_BASE = `https://graph-video.facebook.com/${META_GRAPH_VERS
 
 const SUPPORTED_OBJECTIVES = Object.freeze({
   OUTCOME_TRAFFIC: {
+    requiresPixel: false,
     optimizationGoal: 'LINK_CLICKS',
     destinationType: 'WEBSITE',
-    buildPromotedObject: ({ pixelId }) => ({
-      pixel_id: pixelId,
-      custom_event_type: 'PAGE_VIEW',
-    }),
+    buildPromotedObject: ({ pixelId }) =>
+      pixelId
+        ? {
+            pixel_id: pixelId,
+            custom_event_type: 'PAGE_VIEW',
+          }
+        : null,
   },
   OUTCOME_ENGAGEMENT: {
+    requiresPixel: false,
     optimizationGoal: 'POST_ENGAGEMENT',
     destinationType: null,
     buildPromotedObject: ({ pageId }) => ({
@@ -25,6 +30,7 @@ const SUPPORTED_OBJECTIVES = Object.freeze({
     }),
   },
   OUTCOME_LEADS: {
+    requiresPixel: true,
     optimizationGoal: 'OFFSITE_CONVERSIONS',
     destinationType: 'WEBSITE',
     buildPromotedObject: ({ pixelId }) => ({
@@ -33,6 +39,7 @@ const SUPPORTED_OBJECTIVES = Object.freeze({
     }),
   },
   OUTCOME_SALES: {
+    requiresPixel: true,
     optimizationGoal: 'OFFSITE_CONVERSIONS',
     destinationType: 'WEBSITE',
     buildPromotedObject: ({ pixelId }) => ({
@@ -421,8 +428,8 @@ function ensurePublishPayload(payload) {
     throw new HttpError(400, 'Page is required');
   }
 
-  if (!cleaned.pixelId) {
-    throw new HttpError(400, 'Pixel is required');
+  if (SUPPORTED_OBJECTIVES[cleaned.objective].requiresPixel && !cleaned.pixelId) {
+    throw new HttpError(400, 'Pixel is required for the selected objective');
   }
 
   if (!cleaned.headline) {
@@ -518,8 +525,12 @@ async function createAdSet({
     bid_strategy: staticDefaults.bidStrategy || DEFAULT_STATIC_DEFAULTS.bidStrategy,
     status: staticDefaults.campaignStatus || DEFAULT_STATIC_DEFAULTS.campaignStatus,
     targeting,
-    promoted_object: settings.buildPromotedObject({ pageId, pixelId }),
   };
+
+  const promotedObject = settings.buildPromotedObject({ pageId, pixelId });
+  if (promotedObject) {
+    params.promoted_object = promotedObject;
+  }
 
   if (settings.destinationType) {
     params.destination_type = settings.destinationType;
