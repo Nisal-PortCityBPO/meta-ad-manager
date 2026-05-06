@@ -1,6 +1,7 @@
 import { Navigate, Outlet, Route, Routes } from 'react-router-dom';
 import DashboardLayout from '../layouts/DashboardLayout';
 import ActivityLogsPage from '../../features/activity-logs/pages/ActivityLogsPage';
+import AdsLaunchPage from '../../features/ads-launch/pages/AdsLaunchPage';
 import LoginPage from '../../features/auth/pages/LoginPage';
 import DashboardPage from '../../features/dashboard/pages/DashboardPage';
 import NotificationsPage from '../../features/notifications/pages/NotificationsPage';
@@ -59,6 +60,7 @@ const AppRouter = () => {
           <Route path="/notifications" element={<NotificationsPage />} />
 
           <Route element={<RoleRoute roles={[USER_ROLES.SUPER_ADMIN, USER_ROLES.ADMIN]} />}>
+            <Route path="/ads-launch" element={<AdsLaunchPage />} />
             <Route path="/tokens" element={<TokenManagementPage />} />
           </Route>
 
