@@ -15,6 +15,7 @@ const brandRoutes = require('./modules/brands/brand.route');
 const agencyRoutes = require('./modules/agencies/agency.route');
 const businessProfileRoutes = require('./modules/business-profiles/businessProfile.route');
 const metaAssetsRoutes = require('./modules/meta-assets/metaAssets.route');
+const adsLaunchRoutes = require('./modules/ads-launch/adsLaunch.route');
 
 const frontendRoot = path.resolve(__dirname, '../../frontend');
 const frontendDist = path.join(frontendRoot, 'dist');
@@ -62,6 +63,7 @@ function registerApiRoutes(app) {
   app.use('/api/activity-logs', activityLogRoutes);
   app.use('/api/tokens', tokenRoutes);
   app.use('/api/meta-assets', metaAssetsRoutes);
+  app.use('/api/ads-launch', adsLaunchRoutes);
   app.use('/api/brands', brandRoutes);
   app.use('/api/agencies', agencyRoutes);
   app.use('/api/business-profiles', businessProfileRoutes);
@@ -120,7 +122,7 @@ async function createApp() {
   const app = express();
 
   app.use(cors(corsOptions()));
-  app.use(express.json());
+  app.use(express.json({ limit: '100mb' }));
   app.use(cookieParser());
 
   registerApiRoutes(app);

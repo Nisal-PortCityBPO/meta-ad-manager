@@ -1,5 +1,5 @@
 import { useCallback, useState } from 'react';
-import { adsLaunchApi } from '../api/adsLaunchApi';
+import { metaAssetsApi } from '../api/metaAssetsApi';
 
 function intersectPixels(pixelCollections) {
   if (!pixelCollections.length) {
@@ -66,7 +66,7 @@ export const useTokenMetaAssets = () => {
     setPixelError('');
 
     try {
-      const data = await adsLaunchApi.getMetaAssets(tokenId);
+      const data = await metaAssetsApi.getMetaAssets(tokenId);
       setAdAccounts(data.adAccounts || []);
       setPages(data.pages || []);
       setPixels([]);
@@ -95,7 +95,7 @@ export const useTokenMetaAssets = () => {
 
     try {
       const results = await Promise.allSettled(
-        adAccountIds.map((adAccountId) => adsLaunchApi.getMetaPixels(tokenId, adAccountId))
+        adAccountIds.map((adAccountId) => metaAssetsApi.getMetaPixels(tokenId, adAccountId))
       );
 
       const fulfilled = results
