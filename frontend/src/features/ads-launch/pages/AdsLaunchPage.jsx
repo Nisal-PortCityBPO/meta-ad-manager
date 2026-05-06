@@ -694,7 +694,7 @@ const AdsLaunchPage = () => {
             <InfoPill icon={KeyRound}>Token-scoped assets</InfoPill>
             <InfoPill icon={Layers3}>Reusable templates</InfoPill>
             <InfoPill icon={Globe2}>China and Indonesia ready</InfoPill>
-            <InfoPill icon={MousePointerClick}>Page + pixel from API</InfoPill>
+            <InfoPill icon={MousePointerClick}>Page + pixel from one asset call</InfoPill>
           </div>
 
           <form className="space-y-5" onSubmit={(event) => event.preventDefault()}>

@@ -2,6 +2,8 @@ const HttpError = require('../../app/utils/httpError');
 const tokenService = require('../token-management/token.service');
 
 const META_GRAPH_VERSION = process.env.META_GRAPH_VERSION || 'v24.0';
+const META_ASSET_CACHE_TTL_MS = Number(process.env.META_ASSET_CACHE_TTL_MS || 5 * 60 * 1000);
+const metaAssetCache = new Map();
 
 function buildGraphUrl(path, params = {}) {
   const normalizedPath = path.startsWith('http')
@@ -15,6 +17,49 @@ function buildGraphUrl(path, params = {}) {
   });
 
   return normalizedPath;
+}
+
+function getCacheEntry(key) {
+  const entry = metaAssetCache.get(key);
+
+  if (!entry) {
+    return null;
+  }
+
+  if (entry.expiresAt <= Date.now()) {
+    metaAssetCache.delete(key);
+    return null;
+  }
+
+  return entry.value;
+}
+
+function setCacheEntry(key, value) {
+  metaAssetCache.set(key, {
+    value,
+    expiresAt: Date.now() + META_ASSET_CACHE_TTL_MS,
+  });
+
+  return value;
+}
+
+async function getOrSetCacheEntry(key, loader) {
+  const cached = getCacheEntry(key);
+
+  if (cached) {
+    return cached;
+  }
+
+  const value = await loader();
+  return setCacheEntry(key, value);
+}
+
+function getBaseAssetsCacheKey(tokenId) {
+  return `base:${tokenId}`;
+}
+
+function getPixelsCacheKey(tokenId, adAccountId) {
+  return `pixels:${tokenId}:${adAccountId}`;
 }
 
 async function fetchGraphCollection({ token, path, fields, limit = 100 }) {
@@ -72,55 +117,173 @@ function normalizePixel(item) {
   };
 }
 
-async function getMetaAssets({ tokenId }) {
+function intersectPixels(pixelCollections) {
+  if (!pixelCollections.length) {
+    return [];
+  }
+
+  const frequency = new Map();
+
+  pixelCollections.forEach((pixels) => {
+    const seen = new Set();
+
+    pixels.forEach((pixel) => {
+      if (!pixel?.id || seen.has(pixel.id)) {
+        return;
+      }
+
+      seen.add(pixel.id);
+
+      if (!frequency.has(pixel.id)) {
+        frequency.set(pixel.id, {
+          count: 0,
+          pixel,
+        });
+      }
+
+      frequency.get(pixel.id).count += 1;
+    });
+  });
+
+  return Array.from(frequency.values())
+    .filter((entry) => entry.count === pixelCollections.length)
+    .map((entry) => entry.pixel)
+    .sort((left, right) => left.name.localeCompare(right.name));
+}
+
+async function getBaseAssets({ tokenId, token }) {
+  return getOrSetCacheEntry(getBaseAssetsCacheKey(tokenId), async () => {
+    const warnings = [];
+
+    const [adAccountsResult, pagesResult] = await Promise.allSettled([
+      fetchGraphCollection({
+        token,
+        path: 'me/adaccounts',
+        fields: 'id,account_id,name,account_status,currency',
+      }),
+      fetchGraphCollection({
+        token,
+        path: 'me/accounts',
+        fields: 'id,name,category',
+      }),
+    ]);
+
+    const adAccounts =
+      adAccountsResult.status === 'fulfilled'
+        ? adAccountsResult.value.map(normalizeAdAccount).sort((a, b) => a.name.localeCompare(b.name))
+        : [];
+
+    const pages =
+      pagesResult.status === 'fulfilled'
+        ? pagesResult.value.map(normalizePage).sort((a, b) => a.name.localeCompare(b.name))
+        : [];
+
+    if (adAccountsResult.status === 'rejected') {
+      warnings.push({
+        scope: 'adAccounts',
+        message: adAccountsResult.reason.message,
+      });
+    }
+
+    if (pagesResult.status === 'rejected') {
+      warnings.push({
+        scope: 'pages',
+        message: pagesResult.reason.message,
+      });
+    }
+
+    return {
+      adAccounts,
+      pages,
+      warnings,
+    };
+  });
+}
+
+async function getPixelsForAdAccount({ tokenId, token, adAccountId }) {
+  const normalizedAccountNodeId = String(adAccountId).startsWith('act_') ? String(adAccountId) : `act_${adAccountId}`;
+
+  return getOrSetCacheEntry(getPixelsCacheKey(tokenId, normalizedAccountNodeId), async () => {
+    const pixels = await fetchGraphCollection({
+      token,
+      path: `${normalizedAccountNodeId}/adspixels`,
+      fields: 'id,name',
+    });
+
+    return pixels.map(normalizePixel).sort((a, b) => a.name.localeCompare(b.name));
+  });
+}
+
+async function getSharedPixels({ tokenId, token, adAccountIds }) {
+  if (!adAccountIds.length) {
+    return {
+      pixels: [],
+      warnings: [],
+    };
+  }
+
+  const results = await Promise.allSettled(
+    adAccountIds.map((adAccountId) =>
+      getPixelsForAdAccount({
+        tokenId,
+        token,
+        adAccountId,
+      })
+    )
+  );
+
+  const fulfilled = results.filter((result) => result.status === 'fulfilled').map((result) => result.value);
+  const rejected = results
+    .map((result, index) =>
+      result.status === 'rejected'
+        ? {
+            adAccountId: adAccountIds[index],
+            message: result.reason.message,
+          }
+        : null
+    )
+    .filter(Boolean);
+
+  return {
+    pixels: rejected.length ? [] : intersectPixels(fulfilled),
+    warnings: rejected.map((item) => ({
+      scope: `pixels:${item.adAccountId}`,
+      message: item.message,
+    })),
+  };
+}
+
+async function getMetaAssets({ tokenId, adAccountIds = [] }) {
   if (!tokenId) {
     throw new HttpError(400, 'Token id is required');
   }
 
   const token = await tokenService.getActiveTokenWithSecret(tokenId);
-  const warnings = [];
+  const baseAssets = await getBaseAssets({
+    tokenId,
+    token,
+  });
 
-  const [adAccountsResult, pagesResult] = await Promise.allSettled([
-    fetchGraphCollection({
-      token,
-      path: 'me/adaccounts',
-      fields: 'id,account_id,name,account_status,currency',
-    }),
-    fetchGraphCollection({
-      token,
-      path: 'me/accounts',
-      fields: 'id,name,category',
-    }),
-  ]);
-
-  const adAccounts =
-    adAccountsResult.status === 'fulfilled'
-      ? adAccountsResult.value.map(normalizeAdAccount).sort((a, b) => a.name.localeCompare(b.name))
-      : [];
-
-  const pages =
-    pagesResult.status === 'fulfilled'
-      ? pagesResult.value.map(normalizePage).sort((a, b) => a.name.localeCompare(b.name))
-      : [];
-
-  if (adAccountsResult.status === 'rejected') {
-    warnings.push({
-      scope: 'adAccounts',
-      message: adAccountsResult.reason.message,
-    });
+  if (!adAccountIds.length) {
+    return {
+      adAccounts: baseAssets.adAccounts,
+      pages: baseAssets.pages,
+      pixels: [],
+      warnings: baseAssets.warnings,
+    };
   }
 
-  if (pagesResult.status === 'rejected') {
-    warnings.push({
-      scope: 'pages',
-      message: pagesResult.reason.message,
-    });
-  }
+  const sharedPixels = await getSharedPixels({
+    tokenId,
+    token,
+    adAccountIds,
+  });
 
   return {
-    adAccounts,
-    pages,
-    warnings,
+    adAccounts: baseAssets.adAccounts,
+    pages: baseAssets.pages,
+    pixels: sharedPixels.pixels,
+    warnings: [...baseAssets.warnings, ...sharedPixels.warnings],
   };
 }
 
@@ -134,15 +297,12 @@ async function getMetaPixels({ tokenId, adAccountId }) {
   }
 
   const token = await tokenService.getActiveTokenWithSecret(tokenId);
-  const normalizedAccountNodeId = String(adAccountId).startsWith('act_') ? String(adAccountId) : `act_${adAccountId}`;
 
-  const pixels = await fetchGraphCollection({
+  return getPixelsForAdAccount({
+    tokenId,
     token,
-    path: `${normalizedAccountNodeId}/adspixels`,
-    fields: 'id,name',
+    adAccountId,
   });
-
-  return pixels.map(normalizePixel).sort((a, b) => a.name.localeCompare(b.name));
 }
 
 module.exports = {

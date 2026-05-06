@@ -1,52 +1,6 @@
 import { useCallback, useState } from 'react';
 import { metaAssetsApi } from '../api/metaAssetsApi';
 
-function intersectPixels(pixelCollections) {
-  if (!pixelCollections.length) {
-    return [];
-  }
-
-  const frequency = new Map();
-
-  pixelCollections.forEach((pixels, collectionIndex) => {
-    const seen = new Set();
-
-    pixels.forEach((pixel) => {
-      if (!pixel?.id || seen.has(pixel.id)) {
-        return;
-      }
-
-      seen.add(pixel.id);
-
-      if (!frequency.has(pixel.id)) {
-        frequency.set(pixel.id, {
-          pixel,
-          count: 0,
-        });
-      }
-
-      frequency.get(pixel.id).count += 1;
-    });
-  });
-
-  return Array.from(frequency.values())
-    .filter((entry) => entry.count === pixelCollections.length)
-    .map((entry) => entry.pixel)
-    .sort((left, right) => left.name.localeCompare(right.name));
-}
-
-function normalizePixelCollection(payload) {
-  if (Array.isArray(payload)) {
-    return payload;
-  }
-
-  if (Array.isArray(payload?.pixels)) {
-    return payload.pixels;
-  }
-
-  return [];
-}
-
 export const useTokenMetaAssets = () => {
   const [adAccounts, setAdAccounts] = useState([]);
   const [pages, setPages] = useState([]);
@@ -68,63 +22,59 @@ export const useTokenMetaAssets = () => {
     setLoadingPixels(false);
   }, []);
 
-  const loadAssets = useCallback(async (tokenId) => {
-    if (!tokenId) {
-      resetAssets();
-      return;
-    }
+  const loadAssets = useCallback(
+    async (tokenId, adAccountIds = []) => {
+      if (!tokenId) {
+        resetAssets();
+        return;
+      }
 
-    setLoadingAssets(true);
-    setPixelError('');
+      const loadingSetter = adAccountIds.length ? setLoadingPixels : setLoadingAssets;
+      loadingSetter(true);
 
-    try {
-      const data = await metaAssetsApi.getMetaAssets(tokenId);
-      setAdAccounts(data.adAccounts || []);
-      setPages(data.pages || []);
-      setPixels([]);
-      setWarnings(data.warnings || []);
-      setError('');
-    } catch (requestError) {
-      setAdAccounts([]);
-      setPages([]);
-      setPixels([]);
-      setWarnings([]);
-      setError(requestError.message);
-    } finally {
-      setLoadingAssets(false);
-    }
-  }, [resetAssets]);
+      if (!adAccountIds.length) {
+        setPixelError('');
+      }
 
-  const loadPixels = useCallback(async (tokenId, adAccountIds) => {
-    if (!tokenId || !adAccountIds.length) {
-      setPixels([]);
-      setPixelError('');
-      setLoadingPixels(false);
-      return;
-    }
+      try {
+        const data = await metaAssetsApi.getMetaAssets(tokenId, adAccountIds);
+        setAdAccounts(data.adAccounts || []);
+        setPages(data.pages || []);
+        setPixels(data.pixels || []);
+        setWarnings(data.warnings || []);
+        setError('');
+        setPixelError('');
+      } catch (requestError) {
+        if (!adAccountIds.length) {
+          setAdAccounts([]);
+          setPages([]);
+          setWarnings([]);
+          setError(requestError.message);
+        } else {
+          setPixelError(requestError.message);
+        }
 
-    setLoadingPixels(true);
+        setPixels([]);
+      } finally {
+        loadingSetter(false);
+      }
+    },
+    [resetAssets]
+  );
 
-    try {
-      const results = await Promise.allSettled(
-        adAccountIds.map((adAccountId) => metaAssetsApi.getMetaPixels(tokenId, adAccountId))
-      );
+  const loadPixels = useCallback(
+    async (tokenId, adAccountIds) => {
+      if (!tokenId || !adAccountIds.length) {
+        setPixels([]);
+        setPixelError('');
+        setLoadingPixels(false);
+        return;
+      }
 
-      const fulfilled = results
-        .filter((result) => result.status === 'fulfilled')
-        .map((result) => normalizePixelCollection(result.value));
-
-      const rejected = results.filter((result) => result.status === 'rejected');
-
-      setPixels(rejected.length ? [] : intersectPixels(fulfilled));
-      setPixelError(rejected.length ? rejected[0].reason.message : '');
-    } catch (requestError) {
-      setPixels([]);
-      setPixelError(requestError.message);
-    } finally {
-      setLoadingPixels(false);
-    }
-  }, []);
+      await loadAssets(tokenId, adAccountIds);
+    },
+    [loadAssets]
+  );
 
   return {
     adAccounts,
