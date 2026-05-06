@@ -8,6 +8,7 @@ const router = express.Router();
 router.use(authenticate, authorize(USER_ROLES.SUPER_ADMIN, USER_ROLES.ADMIN));
 
 router.get('/templates', adsLaunchController.getTemplates);
+router.get('/templates/:id/assets/:assetKind', adsLaunchController.getTemplateAsset);
 router.post('/templates', adsLaunchController.createTemplate);
 router.put('/templates/:id', adsLaunchController.updateTemplate);
 router.delete('/templates/:id', adsLaunchController.deleteTemplate);

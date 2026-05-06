@@ -1,5 +1,33 @@
 const mongoose = require('mongoose');
 
+const launchTemplateAssetSchema = new mongoose.Schema(
+  {
+    name: {
+      type: String,
+      default: '',
+      trim: true,
+    },
+    type: {
+      type: String,
+      default: '',
+      trim: true,
+    },
+    size: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
+    storageKey: {
+      type: String,
+      default: '',
+      trim: true,
+    },
+  },
+  {
+    _id: false,
+  }
+);
+
 const launchTemplateConfigSchema = new mongoose.Schema(
   {
     launchLabel: {
@@ -151,6 +179,14 @@ const launchTemplateSnapshotSchema = new mongoose.Schema(
       ],
       default: [],
     },
+    media: {
+      type: launchTemplateAssetSchema,
+      default: null,
+    },
+    thumbnail: {
+      type: launchTemplateAssetSchema,
+      default: null,
+    },
   },
   {
     _id: false,
@@ -193,11 +229,31 @@ const launchTemplateSchema = new mongoose.Schema(
 );
 
 launchTemplateSchema.methods.toSafeObject = function toSafeObject() {
+  const mapAsset = (asset, assetKind) => {
+    if (!asset?.storageKey) {
+      return null;
+    }
+
+    return {
+      name: asset.name,
+      type: asset.type,
+      size: asset.size || 0,
+      url: `/api/ads-launch/templates/${this._id.toString()}/assets/${assetKind}`,
+    };
+  };
+
   return {
     id: this._id.toString(),
     name: this.name,
     config: this.config,
-    snapshot: this.snapshot,
+    snapshot: {
+      tokenLabel: this.snapshot?.tokenLabel || '',
+      pageName: this.snapshot?.pageName || '',
+      pixelName: this.snapshot?.pixelName || '',
+      adAccounts: Array.isArray(this.snapshot?.adAccounts) ? this.snapshot.adAccounts : [],
+      media: mapAsset(this.snapshot?.media, 'media'),
+      thumbnail: mapAsset(this.snapshot?.thumbnail, 'thumbnail'),
+    },
     lastPublishedAt: this.lastPublishedAt,
     createdBy: this.createdBy
       ? {

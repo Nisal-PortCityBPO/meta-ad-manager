@@ -1,3 +1,5 @@
+const fs = require('fs');
+const path = require('path');
 const HttpError = require('../../app/utils/httpError');
 const { writeActivityLog } = require('../activity-logs/activityLog.service');
 const { USER_ROLES } = require('../users/user.model');
@@ -7,6 +9,7 @@ const tokenService = require('../token-management/token.service');
 const META_GRAPH_VERSION = process.env.META_GRAPH_VERSION || 'v24.0';
 const GRAPH_API_BASE = `https://graph.facebook.com/${META_GRAPH_VERSION}`;
 const GRAPH_VIDEO_API_BASE = `https://graph-video.facebook.com/${META_GRAPH_VERSION}`;
+const TEMPLATE_ASSET_DIR = path.resolve(__dirname, '../../../storage/ads-launch-template-assets');
 
 const SUPPORTED_OBJECTIVES = Object.freeze({
   OUTCOME_TRAFFIC: {
@@ -146,6 +149,177 @@ function sanitizeSnapshot(input = {}) {
           }))
           .filter((account) => account.id)
       : [],
+    media: null,
+    thumbnail: null,
+  };
+}
+
+function sanitizeTemplateAssetInput(asset) {
+  if (!asset || typeof asset !== 'object') {
+    return null;
+  }
+
+  const name = normalizeText(asset.name);
+  const mimeType = normalizeText(asset.type);
+  const dataUrl = typeof asset.dataUrl === 'string' ? asset.dataUrl.trim() : '';
+
+  if (!name || !mimeType || !dataUrl) {
+    return null;
+  }
+
+  return {
+    name,
+    type: mimeType,
+    dataUrl,
+  };
+}
+
+function ensureTemplateAssetDir() {
+  fs.mkdirSync(TEMPLATE_ASSET_DIR, { recursive: true });
+}
+
+function getAssetFileExtension(name, mimeType) {
+  const fileExtension = path.extname(name || '').trim();
+  if (fileExtension) {
+    return fileExtension.toLowerCase();
+  }
+
+  const normalizedMimeType = String(mimeType || '').toLowerCase();
+
+  if (normalizedMimeType === 'image/jpeg') {
+    return '.jpg';
+  }
+
+  if (normalizedMimeType === 'image/png') {
+    return '.png';
+  }
+
+  if (normalizedMimeType === 'image/webp') {
+    return '.webp';
+  }
+
+  if (normalizedMimeType === 'image/gif') {
+    return '.gif';
+  }
+
+  if (normalizedMimeType === 'video/mp4') {
+    return '.mp4';
+  }
+
+  if (normalizedMimeType === 'video/quicktime') {
+    return '.mov';
+  }
+
+  if (normalizedMimeType === 'video/webm') {
+    return '.webm';
+  }
+
+  return '';
+}
+
+function deleteStoredTemplateAsset(asset) {
+  if (!asset?.storageKey) {
+    return;
+  }
+
+  const filePath = path.join(TEMPLATE_ASSET_DIR, asset.storageKey);
+
+  try {
+    fs.rmSync(filePath, { force: true });
+  } catch (error) {
+    // Ignore cleanup failures so template operations still complete.
+  }
+}
+
+function deleteTemplateStoredAssets(template) {
+  deleteStoredTemplateAsset(template?.snapshot?.media);
+  deleteStoredTemplateAsset(template?.snapshot?.thumbnail);
+}
+
+function persistTemplateAsset({ templateId, asset, assetKind }) {
+  const parsed = parseDataUrlFile(asset, assetKind === 'thumbnail' ? 'Thumbnail' : 'Creative');
+  const extension = getAssetFileExtension(parsed.name, parsed.mimeType);
+  const storageKey = `${templateId}-${assetKind}-${Date.now()}${extension}`;
+  const filePath = path.join(TEMPLATE_ASSET_DIR, storageKey);
+
+  ensureTemplateAssetDir();
+  fs.writeFileSync(filePath, parsed.buffer);
+
+  return {
+    name: parsed.name,
+    type: parsed.mimeType,
+    size: parsed.buffer.length,
+    storageKey,
+  };
+}
+
+function readStoredTemplateAsset(asset) {
+  if (!asset?.storageKey) {
+    return null;
+  }
+
+  const filePath = path.join(TEMPLATE_ASSET_DIR, asset.storageKey);
+
+  if (!fs.existsSync(filePath)) {
+    return null;
+  }
+
+  const buffer = fs.readFileSync(filePath);
+
+  return {
+    name: asset.name,
+    type: asset.type,
+    dataUrl: `data:${asset.type};base64,${buffer.toString('base64')}`,
+  };
+}
+
+function getStoredTemplateAssetPath(asset) {
+  if (!asset?.storageKey) {
+    return null;
+  }
+
+  const filePath = path.join(TEMPLATE_ASSET_DIR, asset.storageKey);
+  return fs.existsSync(filePath) ? filePath : null;
+}
+
+async function applyTemplateAssets({ template, snapshotInput, existingSnapshot = null }) {
+  const nextMediaInput = sanitizeTemplateAssetInput(snapshotInput?.media);
+  const nextThumbnailInput = sanitizeTemplateAssetInput(snapshotInput?.thumbnail);
+  let mediaAsset = existingSnapshot?.media || template.snapshot?.media || null;
+  let thumbnailAsset = existingSnapshot?.thumbnail || template.snapshot?.thumbnail || null;
+
+  if (nextMediaInput) {
+    const previousMedia = mediaAsset;
+    mediaAsset = persistTemplateAsset({
+      templateId: template._id.toString(),
+      asset: nextMediaInput,
+      assetKind: 'media',
+    });
+    deleteStoredTemplateAsset(previousMedia);
+
+    if (!mediaAsset.type.startsWith('video/')) {
+      deleteStoredTemplateAsset(thumbnailAsset);
+      thumbnailAsset = null;
+    } else if (!nextThumbnailInput) {
+      deleteStoredTemplateAsset(thumbnailAsset);
+      thumbnailAsset = null;
+    }
+  }
+
+  if (nextThumbnailInput) {
+    const previousThumbnail = thumbnailAsset;
+    thumbnailAsset = persistTemplateAsset({
+      templateId: template._id.toString(),
+      asset: nextThumbnailInput,
+      assetKind: 'thumbnail',
+    });
+    deleteStoredTemplateAsset(previousThumbnail);
+  }
+
+  template.snapshot = {
+    ...template.snapshot,
+    media: mediaAsset,
+    thumbnail: thumbnailAsset,
   };
 }
 
@@ -188,6 +362,12 @@ async function createTemplate({ name, config, snapshot, actor, req }) {
     updatedBy: actor._id,
   });
 
+  await applyTemplateAssets({
+    template,
+    snapshot,
+  });
+  await template.save();
+
   await writeActivityLog({
     user: actor,
     action: 'ADS_LAUNCH_TEMPLATE_CREATED',
@@ -205,6 +385,7 @@ async function createTemplate({ name, config, snapshot, actor, req }) {
 
 async function updateTemplate({ templateId, name, config, snapshot, actor, req }) {
   const template = await getTemplateForActor(templateId, actor);
+  const existingSnapshot = template.snapshot ? template.snapshot.toObject?.() || template.snapshot : null;
 
   const normalizedName = normalizeText(name);
   if (!normalizedName) {
@@ -214,6 +395,11 @@ async function updateTemplate({ templateId, name, config, snapshot, actor, req }
   template.name = normalizedName;
   template.config = sanitizeTemplateConfig(config);
   template.snapshot = sanitizeSnapshot(snapshot);
+  await applyTemplateAssets({
+    template,
+    snapshot,
+    existingSnapshot,
+  });
   template.updatedBy = actor._id;
   await template.save();
 
@@ -234,6 +420,7 @@ async function updateTemplate({ templateId, name, config, snapshot, actor, req }
 
 async function deleteTemplate({ templateId, actor, req }) {
   const template = await getTemplateForActor(templateId, actor);
+  deleteTemplateStoredAssets(template);
   await template.deleteOne();
 
   await writeActivityLog({
@@ -400,8 +587,8 @@ function ensurePublishPayload(payload) {
       billingEvent: normalizeText(staticDefaults.billingEvent) || DEFAULT_STATIC_DEFAULTS.billingEvent,
       bidStrategy: normalizeText(staticDefaults.bidStrategy) || DEFAULT_STATIC_DEFAULTS.bidStrategy,
     },
-    media: payload.media || null,
-    thumbnail: payload.thumbnail || null,
+    media: sanitizeTemplateAssetInput(payload.media),
+    thumbnail: sanitizeTemplateAssetInput(payload.thumbnail),
   };
 
   if (!cleaned.launchLabel) {
@@ -446,14 +633,6 @@ function ensurePublishPayload(payload) {
 
   if (!cleaned.callToAction) {
     throw new HttpError(400, 'Call to action is required');
-  }
-
-  if (!cleaned.media) {
-    throw new HttpError(400, 'Upload an image or video before publishing');
-  }
-
-  if (String(cleaned.media.type || '').startsWith('video/') && !cleaned.thumbnail) {
-    throw new HttpError(400, 'Video publishing requires a thumbnail image');
   }
 
   return cleaned;
@@ -660,8 +839,63 @@ async function markTemplatePublished(templateId, actor) {
   await template.save();
 }
 
+async function getTemplateAssetForActor({ templateId, assetKind, actor }) {
+  if (!['media', 'thumbnail'].includes(assetKind)) {
+    throw new HttpError(404, 'Template asset not found');
+  }
+
+  const template = await getTemplateForActor(templateId, actor);
+  const asset = assetKind === 'thumbnail' ? template.snapshot?.thumbnail : template.snapshot?.media;
+  const filePath = getStoredTemplateAssetPath(asset);
+
+  if (!filePath || !asset?.type) {
+    throw new HttpError(404, 'Template asset not found');
+  }
+
+  return {
+    filePath,
+    filename: asset.name || `${assetKind}`,
+    mimeType: asset.type,
+  };
+}
+
+async function resolvePublishCreativeAssets({ launch, actor }) {
+  if (launch.media) {
+    return {
+      media: launch.media,
+      thumbnail: launch.thumbnail,
+    };
+  }
+
+  if (!launch.templateId) {
+    throw new HttpError(400, 'Upload an image or video before publishing');
+  }
+
+  const template = await getTemplateForActor(launch.templateId, actor);
+  const media = readStoredTemplateAsset(template.snapshot?.media);
+  const thumbnail = readStoredTemplateAsset(template.snapshot?.thumbnail);
+
+  if (!media) {
+    throw new HttpError(400, 'The selected template does not have a saved creative asset');
+  }
+
+  return {
+    media,
+    thumbnail,
+  };
+}
+
 async function publishLaunch({ payload, actor, req }) {
   const launch = ensurePublishPayload(payload);
+  const creativeAssets = await resolvePublishCreativeAssets({
+    launch,
+    actor,
+  });
+
+  if (String(creativeAssets.media.type || '').startsWith('video/') && !creativeAssets.thumbnail) {
+    throw new HttpError(400, 'Video publishing requires a thumbnail image');
+  }
+
   const token = await tokenService.getActiveTokenWithSecret(launch.tokenId);
   const accountMap = new Map(launch.selectedAdAccounts.map((account) => [account.id, account]));
   const results = [];
@@ -714,8 +948,8 @@ async function publishLaunch({ payload, actor, req }) {
         headline: launch.headline,
         description: launch.description,
         callToAction: launch.callToAction,
-        media: launch.media,
-        thumbnail: launch.thumbnail,
+        media: creativeAssets.media,
+        thumbnail: creativeAssets.thumbnail,
       });
 
       const ad = await createAd({
@@ -783,6 +1017,7 @@ async function publishLaunch({ payload, actor, req }) {
 module.exports = {
   createTemplate,
   deleteTemplate,
+  getTemplateAssetForActor,
   listTemplates,
   publishLaunch,
   updateTemplate,

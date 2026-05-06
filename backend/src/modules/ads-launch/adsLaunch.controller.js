@@ -9,6 +9,18 @@ const getTemplates = asyncHandler(async (req, res) => {
   res.json({ templates });
 });
 
+const getTemplateAsset = asyncHandler(async (req, res) => {
+  const asset = await adsLaunchService.getTemplateAssetForActor({
+    templateId: req.params.id,
+    assetKind: req.params.assetKind,
+    actor: req.user,
+  });
+
+  res.setHeader('Content-Type', asset.mimeType);
+  res.setHeader('Content-Disposition', `inline; filename="${encodeURIComponent(asset.filename)}"`);
+  res.sendFile(asset.filePath);
+});
+
 const createTemplate = asyncHandler(async (req, res) => {
   const template = await adsLaunchService.createTemplate({
     name: req.body.name,
@@ -66,6 +78,7 @@ module.exports = {
   createTemplate,
   deleteTemplate,
   getTemplates,
+  getTemplateAsset,
   publishLaunch,
   updateTemplate,
 };

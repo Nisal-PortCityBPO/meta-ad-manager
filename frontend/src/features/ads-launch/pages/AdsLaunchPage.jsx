@@ -166,6 +166,24 @@ const readFileAsDataUrl = (file) =>
     reader.readAsDataURL(file);
   });
 
+const normalizeStoredAsset = (asset) => {
+  if (!asset?.name || !asset?.type) {
+    return null;
+  }
+
+  const previewUrl = asset.url || asset.dataUrl || '';
+  if (!previewUrl) {
+    return null;
+  }
+
+  return {
+    name: asset.name,
+    type: asset.type,
+    url: previewUrl,
+    size: asset.size || 0,
+  };
+};
+
 const buildName = (...parts) => parts.filter(Boolean).join(' | ');
 
 const MetricCard = ({ label, value, detail }) => (
@@ -211,6 +229,8 @@ const AdsLaunchPage = () => {
   const [latestPublish, setLatestPublish] = useState(null);
   const [mediaFile, setMediaFile] = useState(null);
   const [thumbnailFile, setThumbnailFile] = useState(null);
+  const [savedMediaAsset, setSavedMediaAsset] = useState(null);
+  const [savedThumbnailAsset, setSavedThumbnailAsset] = useState(null);
   const [mediaPreviewUrl, setMediaPreviewUrl] = useState('');
   const [thumbnailPreviewUrl, setThumbnailPreviewUrl] = useState('');
 
@@ -223,7 +243,23 @@ const AdsLaunchPage = () => {
     [adAccounts, form.selectedAdAccountIds]
   );
   const selectedCountry = countryOptions.find((country) => country.value === form.country) || null;
-  const isVideoAsset = mediaFile?.type?.startsWith('video/') || false;
+  const activeMediaAsset = mediaFile
+    ? {
+        name: mediaFile.name,
+        type: mediaFile.type,
+        url: mediaPreviewUrl,
+      }
+    : savedMediaAsset;
+  const activeThumbnailAsset = thumbnailFile
+    ? {
+        name: thumbnailFile.name,
+        type: thumbnailFile.type,
+        url: thumbnailPreviewUrl,
+      }
+    : savedThumbnailAsset;
+  const activeMediaPreviewUrl = activeMediaAsset?.url || '';
+  const activeThumbnailPreviewUrl = activeThumbnailAsset?.url || '';
+  const isVideoAsset = activeMediaAsset?.type?.startsWith('video/') || false;
   const pixelRequired = form.objective === 'OUTCOME_LEADS' || form.objective === 'OUTCOME_SALES';
   const canGenerate = Boolean(
     form.tokenId &&
@@ -235,7 +271,7 @@ const AdsLaunchPage = () => {
       form.primaryText.trim() &&
       form.websiteUrl.trim()
   );
-  const canPublish = Boolean(canGenerate && mediaFile && (!isVideoAsset || thumbnailFile));
+  const canPublish = Boolean(canGenerate && activeMediaAsset && (!isVideoAsset || activeThumbnailAsset));
 
   useEffect(() => {
     if (!mediaFile) {
@@ -345,9 +381,15 @@ const AdsLaunchPage = () => {
     }));
   };
 
-  const resetCreativeFiles = () => {
+  const clearUploadedCreativeFiles = () => {
     setMediaFile(null);
     setThumbnailFile(null);
+  };
+
+  const resetCreativeFiles = () => {
+    clearUploadedCreativeFiles();
+    setSavedMediaAsset(null);
+    setSavedThumbnailAsset(null);
   };
 
   const resetComposer = () => {
@@ -393,39 +435,73 @@ const AdsLaunchPage = () => {
   const handleMediaChange = (event) => {
     const file = event.target.files?.[0] || null;
     setMediaFile(file);
+    setSavedMediaAsset(null);
 
     if (file && !file.type.startsWith('video/')) {
       setThumbnailFile(null);
+      setSavedThumbnailAsset(null);
     }
   };
 
   const handleThumbnailChange = (event) => {
     const file = event.target.files?.[0] || null;
     setThumbnailFile(file);
+    setSavedThumbnailAsset(null);
   };
 
-  const buildTemplatePayload = () => ({
-    name: (templateName || form.launchLabel).trim(),
-    config: {
-      ...form,
-      staticDefaults: {
-        ...form.staticDefaults,
+  const serializeAssetForTemplate = async (file) => {
+    if (!file) {
+      return null;
+    }
+
+    return {
+      name: file.name,
+      type: file.type,
+      dataUrl: await readFileAsDataUrl(file),
+    };
+  };
+
+  const buildTemplatePayload = async () => {
+    const media = await serializeAssetForTemplate(mediaFile);
+    const thumbnail = isVideoAsset ? await serializeAssetForTemplate(thumbnailFile) : null;
+
+    return {
+      name: (templateName || form.launchLabel).trim(),
+      config: {
+        ...form,
+        staticDefaults: {
+          ...form.staticDefaults,
+        },
       },
-    },
-    snapshot: {
-      tokenLabel: selectedToken?.label || '',
-      pageName: selectedPage?.name || '',
-      pixelName: selectedPixel?.name || '',
-      adAccounts: selectedAdAccounts.map((account) => ({
-        id: account.id,
-        name: account.name,
-      })),
-    },
-  });
+      snapshot: {
+        tokenLabel: selectedToken?.label || '',
+        pageName: selectedPage?.name || '',
+        pixelName: selectedPixel?.name || '',
+        adAccounts: selectedAdAccounts.map((account) => ({
+          id: account.id,
+          name: account.name,
+        })),
+        media,
+        thumbnail,
+      },
+    };
+  };
 
   const buildPublishPayload = async () => {
-    const mediaDataUrl = await readFileAsDataUrl(mediaFile);
-    const thumbnailDataUrl = thumbnailFile ? await readFileAsDataUrl(thumbnailFile) : null;
+    const media = mediaFile
+      ? {
+          name: mediaFile.name,
+          type: mediaFile.type,
+          dataUrl: await readFileAsDataUrl(mediaFile),
+        }
+      : null;
+    const thumbnail = isVideoAsset && thumbnailFile
+      ? {
+          name: thumbnailFile.name,
+          type: thumbnailFile.type,
+          dataUrl: await readFileAsDataUrl(thumbnailFile),
+        }
+      : null;
 
     return {
       templateId: activeTemplateId || undefined,
@@ -453,18 +529,8 @@ const AdsLaunchPage = () => {
       staticDefaults: {
         ...form.staticDefaults,
       },
-      media: {
-        name: mediaFile.name,
-        type: mediaFile.type,
-        dataUrl: mediaDataUrl,
-      },
-      thumbnail: thumbnailDataUrl
-        ? {
-            name: thumbnailFile.name,
-            type: thumbnailFile.type,
-            dataUrl: thumbnailDataUrl,
-          }
-        : null,
+      media,
+      thumbnail,
     };
   };
 
@@ -478,13 +544,16 @@ const AdsLaunchPage = () => {
     setSavingTemplate(true);
 
     try {
-      const payload = buildTemplatePayload();
+      const payload = await buildTemplatePayload();
       const data = activeTemplateId
         ? await adsLaunchApi.updateTemplate(activeTemplateId, payload)
         : await adsLaunchApi.createTemplate(payload);
 
       setActiveTemplateId(data.template.id);
       setTemplateName(data.template.name);
+      setSavedMediaAsset(normalizeStoredAsset(data.template.snapshot?.media));
+      setSavedThumbnailAsset(normalizeStoredAsset(data.template.snapshot?.thumbnail));
+      clearUploadedCreativeFiles();
       await loadTemplates();
       toast.success(data.message);
     } catch (requestError) {
@@ -506,6 +575,8 @@ const AdsLaunchPage = () => {
       if (activeTemplateId === template.id) {
         setActiveTemplateId('');
         setTemplateName('');
+        setSavedMediaAsset(null);
+        setSavedThumbnailAsset(null);
       }
       await loadTemplates();
       toast.success(data.message);
@@ -530,7 +601,9 @@ const AdsLaunchPage = () => {
     setTemplateName(template.name);
     setEditingStaticDefaults(false);
     setLatestPublish(null);
-    resetCreativeFiles();
+    clearUploadedCreativeFiles();
+    setSavedMediaAsset(normalizeStoredAsset(template.snapshot?.media));
+    setSavedThumbnailAsset(normalizeStoredAsset(template.snapshot?.thumbnail));
     toast.success(`Loaded template "${template.name}"`);
   };
 
@@ -636,7 +709,7 @@ const AdsLaunchPage = () => {
                   placeholder="Evergreen Website Visits"
                 />
                 <p className="text-xs font-semibold text-slate-400">
-                  Templates save the configuration only. Creative files are re-uploaded when you publish again.
+                  Templates can keep the launch setup and the saved creative asset for later reuse.
                 </p>
               </div>
 
@@ -720,7 +793,7 @@ const AdsLaunchPage = () => {
               </div>
             </div>
 
-            <div className="grid items-start gap-4 xl:grid-cols-[minmax(0,1.25fr)_minmax(300px,0.75fr)]">
+            <div className="space-y-4">
               <div className="space-y-2">
                 <div className="flex items-center justify-between gap-3">
                   <FieldLabel htmlFor="ad-account-list">Ad accounts</FieldLabel>
@@ -771,7 +844,7 @@ const AdsLaunchPage = () => {
                 </div>
               </div>
 
-              <div className="grid auto-rows-fr gap-4 sm:grid-cols-2 xl:grid-cols-1">
+              <div className="grid gap-4 md:grid-cols-2">
                 <FormFieldCard htmlFor="page-id" label="Facebook page" helper="Loaded directly from the selected token page access.">
                   <select
                     id="page-id"
@@ -898,21 +971,21 @@ const AdsLaunchPage = () => {
                 >
                   <Upload size={26} strokeWidth={2.1} className="text-sky-600" />
                   <p className="mt-3 text-sm font-black text-slate-950">Upload image or video</p>
-                  <p className="mt-1 text-xs font-semibold text-slate-500">This file is uploaded to Meta during publish.</p>
+                  <p className="mt-1 text-xs font-semibold text-slate-500">This file can be saved with the template and reused later.</p>
                 </label>
                 <input id="media-upload" type="file" accept="image/*,video/*" onChange={handleMediaChange} className="hidden" />
 
-                {mediaPreviewUrl ? (
+                {activeMediaPreviewUrl ? (
                   <div className="overflow-hidden rounded-2xl border border-sky-100 bg-white">
                     {isVideoAsset ? (
-                      <video src={mediaPreviewUrl} controls className="h-56 w-full bg-slate-950 object-contain" />
+                      <video src={activeMediaPreviewUrl} controls className="h-56 w-full bg-slate-950 object-contain" />
                     ) : (
-                      <img src={mediaPreviewUrl} alt="Uploaded creative preview" className="h-56 w-full object-cover" />
+                      <img src={activeMediaPreviewUrl} alt="Uploaded creative preview" className="h-56 w-full object-cover" />
                     )}
                     <div className="flex items-center justify-between gap-3 px-4 py-3">
                       <div className="min-w-0">
-                        <p className="truncate text-sm font-black text-slate-950">{mediaFile?.name}</p>
-                        <p className="mt-1 text-xs font-semibold text-slate-400">{mediaFile?.type || 'Unknown file type'}</p>
+                        <p className="truncate text-sm font-black text-slate-950">{activeMediaAsset?.name}</p>
+                        <p className="mt-1 text-xs font-semibold text-slate-400">{activeMediaAsset?.type || 'Unknown file type'}</p>
                       </div>
                       {isVideoAsset ? (
                         <InfoPill icon={Video} tone="amber">
@@ -938,7 +1011,7 @@ const AdsLaunchPage = () => {
                 >
                   <Upload size={26} strokeWidth={2.1} className={isVideoAsset ? 'text-sky-600' : 'text-slate-300'} />
                   <p className="mt-3 text-sm font-black text-slate-950">Upload thumbnail</p>
-                  <p className="mt-1 text-xs font-semibold text-slate-500">Required when the main creative is a video.</p>
+                  <p className="mt-1 text-xs font-semibold text-slate-500">Required when the main creative is a video and stored with the template too.</p>
                 </label>
                 <input
                   id="thumbnail-upload"
@@ -949,12 +1022,12 @@ const AdsLaunchPage = () => {
                   disabled={!isVideoAsset}
                 />
 
-                {thumbnailPreviewUrl ? (
+                {activeThumbnailPreviewUrl ? (
                   <div className="overflow-hidden rounded-2xl border border-sky-100 bg-white">
-                    <img src={thumbnailPreviewUrl} alt="Video thumbnail preview" className="h-56 w-full object-cover" />
+                    <img src={activeThumbnailPreviewUrl} alt="Video thumbnail preview" className="h-56 w-full object-cover" />
                     <div className="px-4 py-3">
-                      <p className="truncate text-sm font-black text-slate-950">{thumbnailFile?.name}</p>
-                      <p className="mt-1 text-xs font-semibold text-slate-400">{thumbnailFile?.type || 'Unknown file type'}</p>
+                      <p className="truncate text-sm font-black text-slate-950">{activeThumbnailAsset?.name}</p>
+                      <p className="mt-1 text-xs font-semibold text-slate-400">{activeThumbnailAsset?.type || 'Unknown file type'}</p>
                     </div>
                   </div>
                 ) : null}
@@ -1012,6 +1085,37 @@ const AdsLaunchPage = () => {
                       {template.snapshot?.tokenLabel ? <InfoPill icon={KeyRound}>{template.snapshot.tokenLabel}</InfoPill> : null}
                       {template.snapshot?.pageName ? <InfoPill icon={MousePointerClick}>{template.snapshot.pageName}</InfoPill> : null}
                     </div>
+
+                    {template.snapshot?.media?.url ? (
+                      <div className="mt-3 overflow-hidden rounded-2xl border border-sky-100 bg-sky-50/60">
+                        {template.snapshot.media.type?.startsWith('video/') ? (
+                          template.snapshot?.thumbnail?.url ? (
+                            <img
+                              src={template.snapshot.thumbnail.url}
+                              alt={`${template.name} thumbnail`}
+                              className="h-36 w-full object-cover"
+                            />
+                          ) : (
+                            <video src={template.snapshot.media.url} className="h-36 w-full bg-slate-950 object-contain" />
+                          )
+                        ) : (
+                          <img src={template.snapshot.media.url} alt={template.name} className="h-36 w-full object-cover" />
+                        )}
+                        <div className="flex items-center justify-between gap-3 px-4 py-3">
+                          <div className="min-w-0">
+                            <p className="truncate text-sm font-black text-slate-950">{template.snapshot.media.name}</p>
+                            <p className="mt-1 text-xs font-semibold text-slate-400">{template.snapshot.media.type}</p>
+                          </div>
+                          {template.snapshot.media.type?.startsWith('video/') ? (
+                            <InfoPill icon={Video} tone="amber">
+                              {template.snapshot?.thumbnail?.url ? 'Video + thumbnail' : 'Video'}
+                            </InfoPill>
+                          ) : (
+                            <InfoPill icon={ImageIcon}>Image</InfoPill>
+                          )}
+                        </div>
+                      </div>
+                    ) : null}
 
                     <div className="mt-4 flex flex-wrap gap-2">
                       <button
@@ -1288,8 +1392,8 @@ const AdsLaunchPage = () => {
               <div className="flex items-start gap-3">
                 <AlertCircle size={18} strokeWidth={2.2} className="mt-0.5 shrink-0" />
                 <p className="text-sm font-semibold">
-                  Templates store the launch configuration only. To publish again later, reload the template and upload the current
-                  image or video before sending.
+                  Templates now keep the launch configuration and can also keep the saved creative asset. Reload a template to preview,
+                  adjust, and send it again with the same permissions enforced for the signed-in admin.
                 </p>
               </div>
             </div>
