@@ -66,6 +66,53 @@ const launchTemplateConfigSchema = new mongoose.Schema(
       default: '',
       trim: true,
     },
+    staticDefaults: {
+      buyingType: {
+        type: String,
+        default: 'AUCTION',
+        trim: true,
+      },
+      campaignStatus: {
+        type: String,
+        default: 'PAUSED',
+        trim: true,
+      },
+      specialAdCategories: {
+        type: String,
+        default: 'NONE',
+        trim: true,
+      },
+      placements: {
+        type: String,
+        default: 'ADVANTAGE_PLUS',
+        trim: true,
+      },
+      audienceAgeMin: {
+        type: String,
+        default: '18',
+        trim: true,
+      },
+      audienceAgeMax: {
+        type: String,
+        default: '65',
+        trim: true,
+      },
+      genderTargeting: {
+        type: String,
+        default: 'ALL',
+        trim: true,
+      },
+      billingEvent: {
+        type: String,
+        default: 'IMPRESSIONS',
+        trim: true,
+      },
+      bidStrategy: {
+        type: String,
+        default: 'LOWEST_COST_WITHOUT_CAP',
+        trim: true,
+      },
+    },
   },
   {
     _id: false,

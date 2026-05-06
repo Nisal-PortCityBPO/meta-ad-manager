@@ -62,6 +62,18 @@ const ZERO_DECIMAL_CURRENCIES = new Set([
   'XPF',
 ]);
 
+const DEFAULT_STATIC_DEFAULTS = Object.freeze({
+  buyingType: 'AUCTION',
+  campaignStatus: 'PAUSED',
+  specialAdCategories: 'NONE',
+  placements: 'ADVANTAGE_PLUS',
+  audienceAgeMin: '18',
+  audienceAgeMax: '65',
+  genderTargeting: 'ALL',
+  billingEvent: 'IMPRESSIONS',
+  bidStrategy: 'LOWEST_COST_WITHOUT_CAP',
+});
+
 function isSuperAdmin(user) {
   return user?.role === USER_ROLES.SUPER_ADMIN;
 }
@@ -83,6 +95,8 @@ function dedupeStrings(values) {
 }
 
 function sanitizeTemplateConfig(input = {}) {
+  const staticDefaults = input.staticDefaults || {};
+
   return {
     launchLabel: normalizeText(input.launchLabel),
     tokenId: normalizeText(input.tokenId),
@@ -97,6 +111,18 @@ function sanitizeTemplateConfig(input = {}) {
     description: normalizeText(input.description),
     websiteUrl: normalizeText(input.websiteUrl),
     callToAction: normalizeText(input.callToAction),
+    staticDefaults: {
+      buyingType: normalizeText(staticDefaults.buyingType) || DEFAULT_STATIC_DEFAULTS.buyingType,
+      campaignStatus: normalizeText(staticDefaults.campaignStatus) || DEFAULT_STATIC_DEFAULTS.campaignStatus,
+      specialAdCategories:
+        normalizeText(staticDefaults.specialAdCategories) || DEFAULT_STATIC_DEFAULTS.specialAdCategories,
+      placements: normalizeText(staticDefaults.placements) || DEFAULT_STATIC_DEFAULTS.placements,
+      audienceAgeMin: normalizeText(staticDefaults.audienceAgeMin) || DEFAULT_STATIC_DEFAULTS.audienceAgeMin,
+      audienceAgeMax: normalizeText(staticDefaults.audienceAgeMax) || DEFAULT_STATIC_DEFAULTS.audienceAgeMax,
+      genderTargeting: normalizeText(staticDefaults.genderTargeting) || DEFAULT_STATIC_DEFAULTS.genderTargeting,
+      billingEvent: normalizeText(staticDefaults.billingEvent) || DEFAULT_STATIC_DEFAULTS.billingEvent,
+      bidStrategy: normalizeText(staticDefaults.bidStrategy) || DEFAULT_STATIC_DEFAULTS.bidStrategy,
+    },
   };
 }
 
@@ -327,6 +353,7 @@ function toMetaBudget(value, currency) {
 }
 
 function ensurePublishPayload(payload) {
+  const staticDefaults = payload.staticDefaults || {};
   const cleaned = {
     templateId: normalizeText(payload.templateId),
     launchLabel: normalizeText(payload.launchLabel),
@@ -354,6 +381,18 @@ function ensurePublishPayload(payload) {
       : [],
     pageName: normalizeText(payload.pageName),
     pixelName: normalizeText(payload.pixelName),
+    staticDefaults: {
+      buyingType: normalizeText(staticDefaults.buyingType) || DEFAULT_STATIC_DEFAULTS.buyingType,
+      campaignStatus: normalizeText(staticDefaults.campaignStatus) || DEFAULT_STATIC_DEFAULTS.campaignStatus,
+      specialAdCategories:
+        normalizeText(staticDefaults.specialAdCategories) || DEFAULT_STATIC_DEFAULTS.specialAdCategories,
+      placements: normalizeText(staticDefaults.placements) || DEFAULT_STATIC_DEFAULTS.placements,
+      audienceAgeMin: normalizeText(staticDefaults.audienceAgeMin) || DEFAULT_STATIC_DEFAULTS.audienceAgeMin,
+      audienceAgeMax: normalizeText(staticDefaults.audienceAgeMax) || DEFAULT_STATIC_DEFAULTS.audienceAgeMax,
+      genderTargeting: normalizeText(staticDefaults.genderTargeting) || DEFAULT_STATIC_DEFAULTS.genderTargeting,
+      billingEvent: normalizeText(staticDefaults.billingEvent) || DEFAULT_STATIC_DEFAULTS.billingEvent,
+      bidStrategy: normalizeText(staticDefaults.bidStrategy) || DEFAULT_STATIC_DEFAULTS.bidStrategy,
+    },
     media: payload.media || null,
     thumbnail: payload.thumbnail || null,
   };
@@ -421,16 +460,19 @@ function buildNames({ launchLabel, countryLabel, adAccountName, pageName, index 
   };
 }
 
-async function createCampaign({ token, adAccountId, name, objective }) {
+async function createCampaign({ token, adAccountId, name, objective, staticDefaults }) {
   return postToMeta({
     token,
     path: `${adAccountId}/campaigns`,
     params: {
       name,
       objective,
-      status: 'PAUSED',
-      buying_type: 'AUCTION',
-      special_ad_categories: [],
+      status: staticDefaults.campaignStatus || DEFAULT_STATIC_DEFAULTS.campaignStatus,
+      buying_type: staticDefaults.buyingType || DEFAULT_STATIC_DEFAULTS.buyingType,
+      special_ad_categories:
+        staticDefaults.specialAdCategories && staticDefaults.specialAdCategories !== 'NONE'
+          ? [staticDefaults.specialAdCategories]
+          : [],
     },
   });
 }
@@ -446,23 +488,36 @@ async function createAdSet({
   country,
   pageId,
   pixelId,
+  staticDefaults,
 }) {
   const settings = SUPPORTED_OBJECTIVES[objective];
+  const ageMin = Number.parseInt(staticDefaults.audienceAgeMin, 10);
+  const ageMax = Number.parseInt(staticDefaults.audienceAgeMax, 10);
+  const targeting = {
+    geo_locations: {
+      countries: [country],
+    },
+    age_min: Number.isFinite(ageMin) ? ageMin : 18,
+    age_max: Number.isFinite(ageMax) ? ageMax : 65,
+  };
+
+  if ((staticDefaults.genderTargeting || DEFAULT_STATIC_DEFAULTS.genderTargeting) === 'MALE') {
+    targeting.genders = [1];
+  }
+
+  if ((staticDefaults.genderTargeting || DEFAULT_STATIC_DEFAULTS.genderTargeting) === 'FEMALE') {
+    targeting.genders = [2];
+  }
+
   const params = {
     name,
     campaign_id: campaignId,
     daily_budget: toMetaBudget(dailyBudget, currency),
-    billing_event: 'IMPRESSIONS',
+    billing_event: staticDefaults.billingEvent || DEFAULT_STATIC_DEFAULTS.billingEvent,
     optimization_goal: settings.optimizationGoal,
-    bid_strategy: 'LOWEST_COST_WITHOUT_CAP',
-    status: 'PAUSED',
-    targeting: {
-      geo_locations: {
-        countries: [country],
-      },
-      age_min: 18,
-      age_max: 65,
-    },
+    bid_strategy: staticDefaults.bidStrategy || DEFAULT_STATIC_DEFAULTS.bidStrategy,
+    status: staticDefaults.campaignStatus || DEFAULT_STATIC_DEFAULTS.campaignStatus,
+    targeting,
     promoted_object: settings.buildPromotedObject({ pageId, pixelId }),
   };
 
@@ -561,14 +616,14 @@ async function createAdCreative({
   });
 }
 
-async function createAd({ token, adAccountId, adSetId, creativeId, name }) {
+async function createAd({ token, adAccountId, adSetId, creativeId, name, staticDefaults }) {
   return postToMeta({
     token,
     path: `${adAccountId}/ads`,
     params: {
       name,
       adset_id: adSetId,
-      status: 'PAUSED',
+      status: staticDefaults.campaignStatus || DEFAULT_STATIC_DEFAULTS.campaignStatus,
       creative: {
         creative_id: creativeId,
       },
@@ -621,6 +676,7 @@ async function publishLaunch({ payload, actor, req }) {
         adAccountId,
         name: names.campaignName,
         objective: launch.objective,
+        staticDefaults: launch.staticDefaults,
       });
 
       const adSet = await createAdSet({
@@ -634,6 +690,7 @@ async function publishLaunch({ payload, actor, req }) {
         country: launch.country,
         pageId: launch.pageId,
         pixelId: launch.pixelId,
+        staticDefaults: launch.staticDefaults,
       });
 
       const creative = await createAdCreative({
@@ -656,6 +713,7 @@ async function publishLaunch({ payload, actor, req }) {
         adSetId: adSet.id,
         creativeId: creative.id,
         name: names.adName,
+        staticDefaults: launch.staticDefaults,
       });
 
       results.push({

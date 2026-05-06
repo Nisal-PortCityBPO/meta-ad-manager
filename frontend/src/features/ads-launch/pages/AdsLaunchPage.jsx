@@ -10,6 +10,7 @@ import {
   Layers3,
   LoaderCircle,
   MousePointerClick,
+  Pencil,
   Rocket,
   Save,
   Trash2,
@@ -49,16 +50,51 @@ const callToActionOptions = [
   { value: 'APPLY_NOW', label: 'Apply Now' },
 ];
 
-const lockedDefaults = [
-  { label: 'Buying type', value: 'Auction' },
-  { label: 'Campaign status', value: 'Paused on create' },
-  { label: 'Special ad categories', value: 'None' },
-  { label: 'Placements', value: 'Advantage+ placements' },
-  { label: 'Audience age', value: '18 to 65+' },
-  { label: 'Gender targeting', value: 'All genders' },
-  { label: 'Billing event', value: 'Impressions' },
-  { label: 'Bid strategy', value: 'Lowest cost' },
-];
+const staticDefaultOptions = {
+  buyingType: [
+    { value: 'AUCTION', label: 'Auction' },
+    { value: 'RESERVED', label: 'Reserved' },
+  ],
+  campaignStatus: [
+    { value: 'PAUSED', label: 'Paused on create' },
+    { value: 'ACTIVE', label: 'Active on create' },
+  ],
+  specialAdCategories: [
+    { value: 'NONE', label: 'None' },
+    { value: 'HOUSING', label: 'Housing' },
+    { value: 'EMPLOYMENT', label: 'Employment' },
+    { value: 'CREDIT', label: 'Credit' },
+  ],
+  placements: [
+    { value: 'ADVANTAGE_PLUS', label: 'Advantage+ placements' },
+    { value: 'MANUAL', label: 'Manual placements' },
+  ],
+  genderTargeting: [
+    { value: 'ALL', label: 'All genders' },
+    { value: 'MALE', label: 'Male' },
+    { value: 'FEMALE', label: 'Female' },
+  ],
+  billingEvent: [
+    { value: 'IMPRESSIONS', label: 'Impressions' },
+    { value: 'LINK_CLICKS', label: 'Link clicks' },
+  ],
+  bidStrategy: [
+    { value: 'LOWEST_COST_WITHOUT_CAP', label: 'Lowest cost' },
+    { value: 'COST_CAP', label: 'Cost cap' },
+  ],
+};
+
+const defaultStaticDefaults = {
+  buyingType: 'AUCTION',
+  campaignStatus: 'PAUSED',
+  specialAdCategories: 'NONE',
+  placements: 'ADVANTAGE_PLUS',
+  audienceAgeMin: '18',
+  audienceAgeMax: '65',
+  genderTargeting: 'ALL',
+  billingEvent: 'IMPRESSIONS',
+  bidStrategy: 'LOWEST_COST_WITHOUT_CAP',
+};
 
 const emptyForm = {
   launchLabel: '',
@@ -74,7 +110,16 @@ const emptyForm = {
   description: '',
   websiteUrl: '',
   callToAction: 'LEARN_MORE',
+  staticDefaults: defaultStaticDefaults,
 };
+
+const createEmptyForm = () => ({
+  ...emptyForm,
+  selectedAdAccountIds: [],
+  staticDefaults: {
+    ...defaultStaticDefaults,
+  },
+});
 
 const FieldLabel = ({ htmlFor, children }) => (
   <label htmlFor={htmlFor} className="text-sm font-semibold text-slate-700">
@@ -131,6 +176,16 @@ const MetricCard = ({ label, value, detail }) => (
   </div>
 );
 
+const FormFieldCard = ({ htmlFor, label, helper, children }) => (
+  <div className="flex h-full flex-col rounded-2xl border border-sky-100 bg-white p-4">
+    <FieldLabel htmlFor={htmlFor}>{label}</FieldLabel>
+    <div className="mt-2">{children}</div>
+    <p className="mt-2 min-h-10 text-xs font-semibold text-slate-400">{helper}</p>
+  </div>
+);
+
+const getOptionLabel = (options, value) => options.find((option) => option.value === value)?.label || value;
+
 const AdsLaunchPage = () => {
   const { error: tokensError, loading: tokensLoading, tokens } = useTokens();
   const {
@@ -147,9 +202,10 @@ const AdsLaunchPage = () => {
   } = useTokenMetaAssets();
   const { error: templatesError, loadTemplates, loading: templatesLoading, templates } = useLaunchTemplates();
 
-  const [form, setForm] = useState(emptyForm);
+  const [form, setForm] = useState(createEmptyForm);
   const [activeTemplateId, setActiveTemplateId] = useState('');
   const [templateName, setTemplateName] = useState('');
+  const [editingStaticDefaults, setEditingStaticDefaults] = useState(false);
   const [savingTemplate, setSavingTemplate] = useState(false);
   const [publishing, setPublishing] = useState(false);
   const [latestPublish, setLatestPublish] = useState(null);
@@ -278,15 +334,26 @@ const AdsLaunchPage = () => {
     }));
   };
 
+  const updateStaticDefault = (field, value) => {
+    setForm((current) => ({
+      ...current,
+      staticDefaults: {
+        ...current.staticDefaults,
+        [field]: value,
+      },
+    }));
+  };
+
   const resetCreativeFiles = () => {
     setMediaFile(null);
     setThumbnailFile(null);
   };
 
   const resetComposer = () => {
-    setForm(emptyForm);
+    setForm(createEmptyForm());
     setActiveTemplateId('');
     setTemplateName('');
+    setEditingStaticDefaults(false);
     setLatestPublish(null);
     resetCreativeFiles();
   };
@@ -340,6 +407,9 @@ const AdsLaunchPage = () => {
     name: (templateName || form.launchLabel).trim(),
     config: {
       ...form,
+      staticDefaults: {
+        ...form.staticDefaults,
+      },
     },
     snapshot: {
       tokenLabel: selectedToken?.label || '',
@@ -379,6 +449,9 @@ const AdsLaunchPage = () => {
       description: form.description.trim(),
       websiteUrl: form.websiteUrl.trim(),
       callToAction: form.callToAction,
+      staticDefaults: {
+        ...form.staticDefaults,
+      },
       media: {
         name: mediaFile.name,
         type: mediaFile.type,
@@ -444,12 +517,17 @@ const AdsLaunchPage = () => {
 
   const handleLoadTemplate = (template) => {
     setForm({
-      ...emptyForm,
+      ...createEmptyForm(),
       ...template.config,
       selectedAdAccountIds: Array.isArray(template.config.selectedAdAccountIds) ? template.config.selectedAdAccountIds : [],
+      staticDefaults: {
+        ...defaultStaticDefaults,
+        ...(template.config.staticDefaults || {}),
+      },
     });
     setActiveTemplateId(template.id);
     setTemplateName(template.name);
+    setEditingStaticDefaults(false);
     setLatestPublish(null);
     resetCreativeFiles();
     toast.success(`Loaded template "${template.name}"`);
@@ -631,7 +709,7 @@ const AdsLaunchPage = () => {
               </div>
             </div>
 
-            <div className="grid gap-4 xl:grid-cols-[minmax(0,1.25fr)_minmax(0,0.75fr)]">
+            <div className="grid items-start gap-4 xl:grid-cols-[minmax(0,1.25fr)_minmax(300px,0.75fr)]">
               <div className="space-y-2">
                 <div className="flex items-center justify-between gap-3">
                   <FieldLabel htmlFor="ad-account-list">Ad accounts</FieldLabel>
@@ -682,9 +760,8 @@ const AdsLaunchPage = () => {
                 </div>
               </div>
 
-              <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-1">
-                <div className="space-y-2">
-                  <FieldLabel htmlFor="page-id">Facebook page</FieldLabel>
+              <div className="grid auto-rows-fr gap-4 sm:grid-cols-2 xl:grid-cols-1">
+                <FormFieldCard htmlFor="page-id" label="Facebook page" helper="Loaded directly from the selected token page access.">
                   <select
                     id="page-id"
                     value={form.pageId}
@@ -700,10 +777,13 @@ const AdsLaunchPage = () => {
                       </option>
                     ))}
                   </select>
-                </div>
+                </FormFieldCard>
 
-                <div className="space-y-2">
-                  <FieldLabel htmlFor="pixel-id">Pixel</FieldLabel>
+                <FormFieldCard
+                  htmlFor="pixel-id"
+                  label="Pixel"
+                  helper="Shared pixels are only shown when they are available across the selected ad accounts."
+                >
                   <select
                     id="pixel-id"
                     value={form.pixelId}
@@ -719,10 +799,7 @@ const AdsLaunchPage = () => {
                       </option>
                     ))}
                   </select>
-                  <p className="text-xs font-semibold text-slate-400">
-                    Shared pixels are only shown when they are available across the selected ad accounts.
-                  </p>
-                </div>
+                </FormFieldCard>
               </div>
             </div>
 
@@ -943,15 +1020,212 @@ const AdsLaunchPage = () => {
             )}
           </DashboardPanel>
 
-          <DashboardPanel title="Static template defaults">
-            <div className="space-y-3">
-              {lockedDefaults.map((item) => (
-                <div key={item.label} className="flex items-start justify-between gap-3 rounded-xl bg-sky-50/70 px-4 py-3">
-                  <span className="text-sm font-semibold text-slate-500">{item.label}</span>
-                  <span className="text-right text-sm font-black text-slate-950">{item.value}</span>
+          <DashboardPanel
+            title="Static template defaults"
+            headerAction={
+              <button
+                type="button"
+                onClick={() => setEditingStaticDefaults((current) => !current)}
+                className="flex h-9 w-9 items-center justify-center rounded-lg border border-sky-100 bg-white text-slate-600 transition hover:bg-sky-50 hover:text-sky-700"
+                title={editingStaticDefaults ? 'Done editing defaults' : 'Edit defaults'}
+                aria-label={editingStaticDefaults ? 'Done editing defaults' : 'Edit defaults'}
+              >
+                {editingStaticDefaults ? <Check size={16} strokeWidth={2.2} /> : <Pencil size={16} strokeWidth={2.2} />}
+              </button>
+            }
+          >
+            {editingStaticDefaults ? (
+              <div className="grid gap-4 md:grid-cols-2">
+                <div className="space-y-2">
+                  <FieldLabel htmlFor="default-buying-type">Buying type</FieldLabel>
+                  <select
+                    id="default-buying-type"
+                    value={form.staticDefaults.buyingType}
+                    onChange={(event) => updateStaticDefault('buyingType', event.target.value)}
+                    className="h-12 w-full rounded-xl border border-sky-100 bg-white px-4 outline-none transition focus:border-sky-400 focus:ring-4 focus:ring-sky-100"
+                  >
+                    {staticDefaultOptions.buyingType.map((option) => (
+                      <option key={option.value} value={option.value}>
+                        {option.label}
+                      </option>
+                    ))}
+                  </select>
                 </div>
-              ))}
-            </div>
+
+                <div className="space-y-2">
+                  <FieldLabel htmlFor="default-campaign-status">Campaign status</FieldLabel>
+                  <select
+                    id="default-campaign-status"
+                    value={form.staticDefaults.campaignStatus}
+                    onChange={(event) => updateStaticDefault('campaignStatus', event.target.value)}
+                    className="h-12 w-full rounded-xl border border-sky-100 bg-white px-4 outline-none transition focus:border-sky-400 focus:ring-4 focus:ring-sky-100"
+                  >
+                    {staticDefaultOptions.campaignStatus.map((option) => (
+                      <option key={option.value} value={option.value}>
+                        {option.label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div className="space-y-2">
+                  <FieldLabel htmlFor="default-special-category">Special ad categories</FieldLabel>
+                  <select
+                    id="default-special-category"
+                    value={form.staticDefaults.specialAdCategories}
+                    onChange={(event) => updateStaticDefault('specialAdCategories', event.target.value)}
+                    className="h-12 w-full rounded-xl border border-sky-100 bg-white px-4 outline-none transition focus:border-sky-400 focus:ring-4 focus:ring-sky-100"
+                  >
+                    {staticDefaultOptions.specialAdCategories.map((option) => (
+                      <option key={option.value} value={option.value}>
+                        {option.label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div className="space-y-2">
+                  <FieldLabel htmlFor="default-placements">Placements</FieldLabel>
+                  <select
+                    id="default-placements"
+                    value={form.staticDefaults.placements}
+                    onChange={(event) => updateStaticDefault('placements', event.target.value)}
+                    className="h-12 w-full rounded-xl border border-sky-100 bg-white px-4 outline-none transition focus:border-sky-400 focus:ring-4 focus:ring-sky-100"
+                  >
+                    {staticDefaultOptions.placements.map((option) => (
+                      <option key={option.value} value={option.value}>
+                        {option.label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div className="space-y-2 md:col-span-2">
+                  <FieldLabel htmlFor="default-age-min">Audience age</FieldLabel>
+                  <div className="grid gap-3 sm:grid-cols-2">
+                    <input
+                      id="default-age-min"
+                      type="number"
+                      min="13"
+                      max="65"
+                      value={form.staticDefaults.audienceAgeMin}
+                      onChange={(event) => updateStaticDefault('audienceAgeMin', event.target.value)}
+                      className="h-12 w-full rounded-xl border border-sky-100 bg-white px-4 outline-none transition focus:border-sky-400 focus:ring-4 focus:ring-sky-100"
+                      placeholder="Min age"
+                    />
+                    <input
+                      id="default-age-max"
+                      type="number"
+                      min="13"
+                      max="65"
+                      value={form.staticDefaults.audienceAgeMax}
+                      onChange={(event) => updateStaticDefault('audienceAgeMax', event.target.value)}
+                      className="h-12 w-full rounded-xl border border-sky-100 bg-white px-4 outline-none transition focus:border-sky-400 focus:ring-4 focus:ring-sky-100"
+                      placeholder="Max age"
+                    />
+                  </div>
+                </div>
+
+                <div className="space-y-2">
+                  <FieldLabel htmlFor="default-gender">Gender targeting</FieldLabel>
+                  <select
+                    id="default-gender"
+                    value={form.staticDefaults.genderTargeting}
+                    onChange={(event) => updateStaticDefault('genderTargeting', event.target.value)}
+                    className="h-12 w-full rounded-xl border border-sky-100 bg-white px-4 outline-none transition focus:border-sky-400 focus:ring-4 focus:ring-sky-100"
+                  >
+                    {staticDefaultOptions.genderTargeting.map((option) => (
+                      <option key={option.value} value={option.value}>
+                        {option.label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div className="space-y-2">
+                  <FieldLabel htmlFor="default-billing-event">Billing event</FieldLabel>
+                  <select
+                    id="default-billing-event"
+                    value={form.staticDefaults.billingEvent}
+                    onChange={(event) => updateStaticDefault('billingEvent', event.target.value)}
+                    className="h-12 w-full rounded-xl border border-sky-100 bg-white px-4 outline-none transition focus:border-sky-400 focus:ring-4 focus:ring-sky-100"
+                  >
+                    {staticDefaultOptions.billingEvent.map((option) => (
+                      <option key={option.value} value={option.value}>
+                        {option.label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div className="space-y-2 md:col-span-2">
+                  <FieldLabel htmlFor="default-bid-strategy">Bid strategy</FieldLabel>
+                  <select
+                    id="default-bid-strategy"
+                    value={form.staticDefaults.bidStrategy}
+                    onChange={(event) => updateStaticDefault('bidStrategy', event.target.value)}
+                    className="h-12 w-full rounded-xl border border-sky-100 bg-white px-4 outline-none transition focus:border-sky-400 focus:ring-4 focus:ring-sky-100"
+                  >
+                    {staticDefaultOptions.bidStrategy.map((option) => (
+                      <option key={option.value} value={option.value}>
+                        {option.label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+            ) : (
+              <div className="space-y-3">
+                <div className="flex items-start justify-between gap-3 rounded-xl bg-sky-50/70 px-4 py-3">
+                  <span className="text-sm font-semibold text-slate-500">Buying type</span>
+                  <span className="text-right text-sm font-black text-slate-950">
+                    {getOptionLabel(staticDefaultOptions.buyingType, form.staticDefaults.buyingType)}
+                  </span>
+                </div>
+                <div className="flex items-start justify-between gap-3 rounded-xl bg-sky-50/70 px-4 py-3">
+                  <span className="text-sm font-semibold text-slate-500">Campaign status</span>
+                  <span className="text-right text-sm font-black text-slate-950">
+                    {getOptionLabel(staticDefaultOptions.campaignStatus, form.staticDefaults.campaignStatus)}
+                  </span>
+                </div>
+                <div className="flex items-start justify-between gap-3 rounded-xl bg-sky-50/70 px-4 py-3">
+                  <span className="text-sm font-semibold text-slate-500">Special ad categories</span>
+                  <span className="text-right text-sm font-black text-slate-950">
+                    {getOptionLabel(staticDefaultOptions.specialAdCategories, form.staticDefaults.specialAdCategories)}
+                  </span>
+                </div>
+                <div className="flex items-start justify-between gap-3 rounded-xl bg-sky-50/70 px-4 py-3">
+                  <span className="text-sm font-semibold text-slate-500">Placements</span>
+                  <span className="text-right text-sm font-black text-slate-950">
+                    {getOptionLabel(staticDefaultOptions.placements, form.staticDefaults.placements)}
+                  </span>
+                </div>
+                <div className="flex items-start justify-between gap-3 rounded-xl bg-sky-50/70 px-4 py-3">
+                  <span className="text-sm font-semibold text-slate-500">Audience age</span>
+                  <span className="text-right text-sm font-black text-slate-950">
+                    {form.staticDefaults.audienceAgeMin} to {form.staticDefaults.audienceAgeMax}+
+                  </span>
+                </div>
+                <div className="flex items-start justify-between gap-3 rounded-xl bg-sky-50/70 px-4 py-3">
+                  <span className="text-sm font-semibold text-slate-500">Gender targeting</span>
+                  <span className="text-right text-sm font-black text-slate-950">
+                    {getOptionLabel(staticDefaultOptions.genderTargeting, form.staticDefaults.genderTargeting)}
+                  </span>
+                </div>
+                <div className="flex items-start justify-between gap-3 rounded-xl bg-sky-50/70 px-4 py-3">
+                  <span className="text-sm font-semibold text-slate-500">Billing event</span>
+                  <span className="text-right text-sm font-black text-slate-950">
+                    {getOptionLabel(staticDefaultOptions.billingEvent, form.staticDefaults.billingEvent)}
+                  </span>
+                </div>
+                <div className="flex items-start justify-between gap-3 rounded-xl bg-sky-50/70 px-4 py-3">
+                  <span className="text-sm font-semibold text-slate-500">Bid strategy</span>
+                  <span className="text-right text-sm font-black text-slate-950">
+                    {getOptionLabel(staticDefaultOptions.bidStrategy, form.staticDefaults.bidStrategy)}
+                  </span>
+                </div>
+              </div>
+            )}
           </DashboardPanel>
         </div>
       </div>
