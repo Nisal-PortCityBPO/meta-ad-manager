@@ -149,9 +149,27 @@ async function getDecryptedAccessToken(tokenId) {
   return decryptSecret(token.encryptedAccessToken);
 }
 
+async function getActiveTokenWithSecret(tokenId) {
+  const token = await Token.findById(tokenId);
+  if (!token) {
+    throw new HttpError(404, 'Token not found');
+  }
+
+  if (token.status !== TOKEN_STATUSES.ACTIVE) {
+    throw new HttpError(400, 'Token is blocked');
+  }
+
+  return {
+    id: token._id.toString(),
+    label: token.label,
+    accessToken: decryptSecret(token.encryptedAccessToken),
+  };
+}
+
 module.exports = {
   createToken,
   deleteToken,
+  getActiveTokenWithSecret,
   getDecryptedAccessToken,
   listActiveTokensWithSecrets,
   listTokens,

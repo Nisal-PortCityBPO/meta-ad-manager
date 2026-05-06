@@ -2,8 +2,10 @@ import { useEffect, useMemo, useState } from 'react';
 import toast from 'react-hot-toast';
 import {
   AlertCircle,
+  Check,
   Globe2,
   ImageIcon,
+  KeyRound,
   Layers3,
   MousePointerClick,
   Rocket,
@@ -13,7 +15,8 @@ import {
 } from 'lucide-react';
 import DashboardHeader from '../../dashboard/components/DashboardHeader';
 import DashboardPanel from '../../dashboard/components/DashboardPanel';
-import { useBusinessData } from '../../dashboard/hooks/useBusinessData';
+import { useTokens } from '../../token-management/hooks/useTokens';
+import { useTokenMetaAssets } from '../hooks/useTokenMetaAssets';
 
 const countryOptions = [
   { value: 'LK', label: 'Sri Lanka' },
@@ -51,27 +54,19 @@ const lockedDefaults = [
 
 const emptyForm = {
   launchLabel: '',
-  businessProfileId: '',
+  tokenId: '',
   country: 'LK',
   objective: 'OUTCOME_TRAFFIC',
   dailyBudget: '15',
+  selectedAdAccountIds: [],
   pageId: '',
-  pageName: '',
-  adAccountIdsText: '',
+  pixelId: '',
   headline: '',
   primaryText: '',
   description: '',
   websiteUrl: '',
   callToAction: 'LEARN_MORE',
 };
-
-const parseLineItems = (value) =>
-  value
-    .split(/[\n,]+/)
-    .map((item) => item.trim())
-    .filter(Boolean);
-
-const buildName = (...parts) => parts.filter(Boolean).join(' | ');
 
 const FieldLabel = ({ htmlFor, children }) => (
   <label htmlFor={htmlFor} className="text-sm font-semibold text-slate-700">
@@ -99,24 +94,59 @@ const EmptyState = ({ children }) => (
   </div>
 );
 
+const formatTokenUsage = (value) => {
+  if (!value) {
+    return 'No API calls yet';
+  }
+
+  return new Intl.DateTimeFormat('en', {
+    dateStyle: 'medium',
+    timeStyle: 'short',
+  }).format(new Date(value));
+};
+
+const buildName = (...parts) => parts.filter(Boolean).join(' | ');
+
 const AdsLaunchPage = () => {
-  const { error, loading, profiles } = useBusinessData();
+  const { error: tokensError, loading: tokensLoading, tokens } = useTokens();
+  const {
+    adAccounts,
+    error: assetsError,
+    loadAssets,
+    loadPixels,
+    loadingAssets,
+    loadingPixels,
+    pages,
+    pixelError,
+    pixels,
+    warnings,
+  } = useTokenMetaAssets();
   const [form, setForm] = useState(emptyForm);
   const [mediaFile, setMediaFile] = useState(null);
   const [thumbnailFile, setThumbnailFile] = useState(null);
   const [mediaPreviewUrl, setMediaPreviewUrl] = useState('');
   const [thumbnailPreviewUrl, setThumbnailPreviewUrl] = useState('');
 
-  const selectedProfile = profiles.find((profile) => profile.id === form.businessProfileId) || null;
-  const adAccountIds = useMemo(() => parseLineItems(form.adAccountIdsText), [form.adAccountIdsText]);
+  const activeTokens = useMemo(() => tokens.filter((token) => token.status === 'ACTIVE'), [tokens]);
+  const selectedToken = activeTokens.find((token) => token.id === form.tokenId) || null;
+  const selectedPage = pages.find((page) => page.id === form.pageId) || null;
+  const selectedPixel = pixels.find((pixel) => pixel.id === form.pixelId) || null;
+  const selectedAdAccounts = useMemo(
+    () => adAccounts.filter((account) => form.selectedAdAccountIds.includes(account.id)),
+    [adAccounts, form.selectedAdAccountIds]
+  );
   const isVideoAsset = mediaFile?.type?.startsWith('video/') || false;
+  const requiresPixel = form.selectedAdAccountIds.length > 0;
   const canGenerate = Boolean(
-    form.launchLabel.trim() &&
+    form.tokenId &&
+      form.launchLabel.trim() &&
       form.country &&
+      form.selectedAdAccountIds.length &&
+      form.pageId &&
       form.headline.trim() &&
       form.primaryText.trim() &&
       form.websiteUrl.trim() &&
-      adAccountIds.length
+      (!requiresPixel || form.pixelId)
   );
 
   useEffect(() => {
@@ -143,21 +173,89 @@ const AdsLaunchPage = () => {
     return () => URL.revokeObjectURL(objectUrl);
   }, [thumbnailFile]);
 
+  useEffect(() => {
+    loadAssets(form.tokenId);
+  }, [form.tokenId, loadAssets]);
+
+  useEffect(() => {
+    setForm((current) => ({
+      ...current,
+      selectedAdAccountIds: [],
+      pageId: '',
+      pixelId: '',
+    }));
+  }, [form.tokenId]);
+
+  useEffect(() => {
+    if (pages.length === 1 && !form.pageId) {
+      setForm((current) => ({
+        ...current,
+        pageId: pages[0].id,
+      }));
+    }
+  }, [form.pageId, pages]);
+
+  useEffect(() => {
+    loadPixels(form.tokenId, form.selectedAdAccountIds);
+  }, [form.selectedAdAccountIds, form.tokenId, loadPixels]);
+
+  useEffect(() => {
+    if (pixels.length === 1 && !form.pixelId) {
+      setForm((current) => ({
+        ...current,
+        pixelId: pixels[0].id,
+      }));
+      return;
+    }
+
+    if (form.pixelId && !pixels.some((pixel) => pixel.id === form.pixelId)) {
+      setForm((current) => ({
+        ...current,
+        pixelId: '',
+      }));
+    }
+  }, [form.pixelId, pixels]);
+
   const previewItems = useMemo(
     () =>
-      adAccountIds.map((accountId, index) => ({
-        accountId,
-        campaignName: buildName(form.launchLabel.trim(), countryOptions.find((item) => item.value === form.country)?.label, `Campaign ${index + 1}`),
-        adSetName: buildName(form.launchLabel.trim(), form.country, 'Ad Set'),
-        adName: buildName(form.launchLabel.trim(), form.pageName || form.pageId || 'Ad', `Creative ${index + 1}`),
+      selectedAdAccounts.map((account, index) => ({
+        account,
+        campaignName: buildName(
+          form.launchLabel.trim(),
+          countryOptions.find((item) => item.value === form.country)?.label,
+          `Campaign ${index + 1}`
+        ),
+        adSetName: buildName(form.launchLabel.trim(), account.name, 'Ad Set'),
+        adName: buildName(form.launchLabel.trim(), selectedPage?.name || 'Ad', `Creative ${index + 1}`),
       })),
-    [adAccountIds, form.country, form.launchLabel, form.pageId, form.pageName]
+    [form.country, form.launchLabel, selectedAdAccounts, selectedPage]
   );
 
   const updateField = (field, value) => {
     setForm((current) => ({
       ...current,
       [field]: value,
+    }));
+  };
+
+  const toggleAdAccount = (accountId) => {
+    setForm((current) => {
+      const nextSelection = current.selectedAdAccountIds.includes(accountId)
+        ? current.selectedAdAccountIds.filter((id) => id !== accountId)
+        : [...current.selectedAdAccountIds, accountId];
+
+      return {
+        ...current,
+        selectedAdAccountIds: nextSelection,
+      };
+    });
+  };
+
+  const toggleSelectAllAccounts = () => {
+    setForm((current) => ({
+      ...current,
+      selectedAdAccountIds:
+        current.selectedAdAccountIds.length === adAccounts.length ? [] : adAccounts.map((account) => account.id),
     }));
   };
 
@@ -177,41 +275,53 @@ const AdsLaunchPage = () => {
 
   const handleGenerate = () => {
     if (!canGenerate) {
-      toast.error('Add the launch name, copy, URL, and at least one ad account id');
+      toast.error('Select the token, ad accounts, page, pixel, and required copy fields first');
       return;
     }
 
-    toast.success('Launch plan generated. Backend publish endpoints are the next step.');
+    toast.success('Launch plan generated from live token assets.');
   };
 
   const handlePublish = () => {
-    toast.error('Meta publish is not connected yet. We still need ad account, page, media, and campaign creation endpoints.');
+    toast.error('Live Meta publish is still the next backend step after this asset-loading phase.');
   };
 
   return (
     <div>
       <DashboardHeader
         title="Ads Launch"
-        description="Prepare a one-click campaign, ad set, and ad workflow on top of the current business-profile system."
+        description="Load ad accounts, pages, and pixels from the selected Meta token, then prepare one-click campaign batches."
         action={
           <InfoPill icon={Rocket} tone="amber">
-            Builder mode
+            Live asset loading
           </InfoPill>
         }
       />
 
-      {error ? <p className="mb-4 rounded-xl bg-red-50 px-4 py-3 text-sm font-semibold text-red-700">{error}</p> : null}
+      {tokensError ? <p className="mb-4 rounded-xl bg-red-50 px-4 py-3 text-sm font-semibold text-red-700">{tokensError}</p> : null}
+      {assetsError ? <p className="mb-4 rounded-xl bg-red-50 px-4 py-3 text-sm font-semibold text-red-700">{assetsError}</p> : null}
+      {pixelError ? <p className="mb-4 rounded-xl bg-amber-50 px-4 py-3 text-sm font-semibold text-amber-800">{pixelError}</p> : null}
+      {warnings.length ? (
+        <div className="mb-4 space-y-2">
+          {warnings.map((warning) => (
+            <p key={`${warning.scope}-${warning.message}`} className="rounded-xl bg-amber-50 px-4 py-3 text-sm font-semibold text-amber-800">
+              {warning.scope}: {warning.message}
+            </p>
+          ))}
+        </div>
+      ) : null}
 
       <div className="grid gap-4 xl:grid-cols-[minmax(0,1.45fr)_420px]">
         <DashboardPanel title="One-click launch builder">
           <div className="mb-5 flex flex-wrap gap-2">
-            <InfoPill icon={Layers3}>Campaign + ad set + ad naming</InfoPill>
-            <InfoPill icon={Globe2}>Country-based launch preset</InfoPill>
-            <InfoPill icon={MousePointerClick}>Manual fallback for unsynced assets</InfoPill>
+            <InfoPill icon={KeyRound}>Token-scoped assets</InfoPill>
+            <InfoPill icon={Layers3}>Multi-account batch</InfoPill>
+            <InfoPill icon={Globe2}>Country-based naming</InfoPill>
+            <InfoPill icon={MousePointerClick}>Page + pixel from API</InfoPill>
           </div>
 
           <form className="space-y-5" onSubmit={(event) => event.preventDefault()}>
-            <div className="grid gap-4 lg:grid-cols-2">
+            <div className="grid gap-4 lg:grid-cols-3">
               <div className="space-y-2">
                 <FieldLabel htmlFor="launch-label">Launch name</FieldLabel>
                 <input
@@ -222,6 +332,25 @@ const AdsLaunchPage = () => {
                   placeholder="May Promo 2026"
                   required
                 />
+              </div>
+
+              <div className="space-y-2">
+                <FieldLabel htmlFor="source-token">Source token</FieldLabel>
+                <select
+                  id="source-token"
+                  value={form.tokenId}
+                  onChange={(event) => updateField('tokenId', event.target.value)}
+                  className="h-12 w-full rounded-xl border border-sky-100 bg-white px-4 outline-none transition focus:border-sky-400 focus:ring-4 focus:ring-sky-100"
+                  disabled={tokensLoading}
+                  required
+                >
+                  <option value="">Select active Meta token</option>
+                  {activeTokens.map((token) => (
+                    <option key={token.id} value={token.id}>
+                      {token.label} ({token.accessToken})
+                    </option>
+                  ))}
+                </select>
               </div>
 
               <div className="space-y-2">
@@ -241,25 +370,76 @@ const AdsLaunchPage = () => {
               </div>
             </div>
 
-            <div className="grid gap-4 lg:grid-cols-3">
-              <div className="space-y-2 lg:col-span-2">
-                <FieldLabel htmlFor="business-profile">Business profile</FieldLabel>
-                <select
-                  id="business-profile"
-                  value={form.businessProfileId}
-                  onChange={(event) => updateField('businessProfileId', event.target.value)}
-                  className="h-12 w-full rounded-xl border border-sky-100 bg-white px-4 outline-none transition focus:border-sky-400 focus:ring-4 focus:ring-sky-100"
-                  disabled={loading}
+            <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_220px]">
+              <div className="space-y-2">
+                <div className="flex items-center justify-between gap-3">
+                  <FieldLabel htmlFor="ad-account-list">Ad accounts</FieldLabel>
+                  <button
+                    type="button"
+                    onClick={toggleSelectAllAccounts}
+                    disabled={!adAccounts.length}
+                    className="text-xs font-black uppercase tracking-[0.16em] text-sky-600 disabled:text-slate-300"
+                  >
+                    {form.selectedAdAccountIds.length === adAccounts.length && adAccounts.length ? 'Clear all' : 'Select all'}
+                  </button>
+                </div>
+                <div
+                  id="ad-account-list"
+                  className="max-h-72 overflow-y-auto rounded-2xl border border-sky-100 bg-white p-3"
                 >
-                  <option value="">Select saved Meta business profile</option>
-                  {profiles.map((profile) => (
-                    <option key={profile.id} value={profile.id}>
-                      {profile.name}
-                    </option>
-                  ))}
-                </select>
+                  {loadingAssets ? (
+                    <div className="h-40 animate-pulse rounded-xl bg-sky-50" />
+                  ) : adAccounts.length ? (
+                    <div className="space-y-2">
+                      {adAccounts.map((account) => {
+                        const checked = form.selectedAdAccountIds.includes(account.id);
+
+                        return (
+                          <label
+                            key={account.id}
+                            className={`flex cursor-pointer items-start gap-3 rounded-xl border px-3 py-3 transition ${
+                              checked ? 'border-sky-300 bg-sky-50' : 'border-sky-100 bg-white hover:bg-sky-50/60'
+                            }`}
+                          >
+                            <input
+                              type="checkbox"
+                              checked={checked}
+                              onChange={() => toggleAdAccount(account.id)}
+                              className="mt-1 h-4 w-4 rounded border-sky-200 text-sky-600 focus:ring-sky-500"
+                            />
+                            <div className="min-w-0">
+                              <p className="truncate text-sm font-black text-slate-950">{account.name}</p>
+                              <p className="mt-1 text-xs font-semibold text-slate-400">
+                                {account.accountId} {account.currency ? `• ${account.currency}` : ''}
+                              </p>
+                            </div>
+                          </label>
+                        );
+                      })}
+                    </div>
+                  ) : (
+                    <EmptyState>Select a token with `ads_management` access to load ad accounts.</EmptyState>
+                  )}
+                </div>
               </div>
 
+              <div className="space-y-2">
+                <FieldLabel htmlFor="daily-budget">Daily budget</FieldLabel>
+                <input
+                  id="daily-budget"
+                  type="number"
+                  min="1"
+                  step="1"
+                  value={form.dailyBudget}
+                  onChange={(event) => updateField('dailyBudget', event.target.value)}
+                  className="h-12 w-full rounded-xl border border-sky-100 bg-white px-4 outline-none transition focus:border-sky-400 focus:ring-4 focus:ring-sky-100"
+                  placeholder="15"
+                />
+                <p className="text-xs font-semibold text-slate-400">Applies as the default budget for each selected ad account.</p>
+              </div>
+            </div>
+
+            <div className="grid gap-4 lg:grid-cols-3">
               <div className="space-y-2">
                 <FieldLabel htmlFor="objective">Objective</FieldLabel>
                 <select
@@ -275,61 +455,47 @@ const AdsLaunchPage = () => {
                   ))}
                 </select>
               </div>
-            </div>
-
-            <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_220px]">
-              <div className="space-y-2">
-                <FieldLabel htmlFor="ad-account-ids">Ad accounts</FieldLabel>
-                <textarea
-                  id="ad-account-ids"
-                  value={form.adAccountIdsText}
-                  onChange={(event) => updateField('adAccountIdsText', event.target.value)}
-                  className="min-h-28 w-full rounded-xl border border-sky-100 bg-white px-4 py-3 outline-none transition focus:border-sky-400 focus:ring-4 focus:ring-sky-100"
-                  placeholder="Paste one or many ad account ids, separated by comma or new line"
-                  required
-                />
-                <p className="text-xs font-semibold text-slate-400">
-                  This is the practical fallback until we add synced multi-select ad accounts from Meta.
-                </p>
-              </div>
 
               <div className="space-y-2">
-                <FieldLabel htmlFor="daily-budget">Daily budget</FieldLabel>
-                <input
-                  id="daily-budget"
-                  type="number"
-                  min="1"
-                  step="1"
-                  value={form.dailyBudget}
-                  onChange={(event) => updateField('dailyBudget', event.target.value)}
-                  className="h-12 w-full rounded-xl border border-sky-100 bg-white px-4 outline-none transition focus:border-sky-400 focus:ring-4 focus:ring-sky-100"
-                  placeholder="15"
-                />
-                <p className="text-xs font-semibold text-slate-400">Use this as the default ad set budget per account.</p>
-              </div>
-            </div>
-
-            <div className="grid gap-4 lg:grid-cols-2">
-              <div className="space-y-2">
-                <FieldLabel htmlFor="page-id">Facebook page id</FieldLabel>
-                <input
+                <FieldLabel htmlFor="page-id">Facebook page</FieldLabel>
+                <select
                   id="page-id"
                   value={form.pageId}
                   onChange={(event) => updateField('pageId', event.target.value)}
                   className="h-12 w-full rounded-xl border border-sky-100 bg-white px-4 outline-none transition focus:border-sky-400 focus:ring-4 focus:ring-sky-100"
-                  placeholder="123456789012345"
-                />
+                  disabled={loadingAssets || !pages.length}
+                  required
+                >
+                  <option value="">Select accessible page</option>
+                  {pages.map((page) => (
+                    <option key={page.id} value={page.id}>
+                      {page.name}
+                    </option>
+                  ))}
+                </select>
+                <p className="text-xs font-semibold text-slate-400">Loaded from `me/accounts` for the selected token.</p>
               </div>
 
               <div className="space-y-2">
-                <FieldLabel htmlFor="page-name">Page name</FieldLabel>
-                <input
-                  id="page-name"
-                  value={form.pageName}
-                  onChange={(event) => updateField('pageName', event.target.value)}
+                <FieldLabel htmlFor="pixel-id">Pixel</FieldLabel>
+                <select
+                  id="pixel-id"
+                  value={form.pixelId}
+                  onChange={(event) => updateField('pixelId', event.target.value)}
                   className="h-12 w-full rounded-xl border border-sky-100 bg-white px-4 outline-none transition focus:border-sky-400 focus:ring-4 focus:ring-sky-100"
-                  placeholder="Brand Facebook Page"
-                />
+                  disabled={loadingPixels || !pixels.length}
+                  required={requiresPixel}
+                >
+                  <option value="">{loadingPixels ? 'Loading shared pixels...' : 'Select shared pixel'}</option>
+                  {pixels.map((pixel) => (
+                    <option key={pixel.id} value={pixel.id}>
+                      {pixel.name}
+                    </option>
+                  ))}
+                </select>
+                <p className="text-xs font-semibold text-slate-400">
+                  Pixel options are the common pixels shared across the selected ad accounts.
+                </p>
               </div>
             </div>
 
@@ -408,7 +574,7 @@ const AdsLaunchPage = () => {
                 >
                   <Upload size={26} strokeWidth={2.1} className="text-sky-600" />
                   <p className="mt-3 text-sm font-black text-slate-950">Upload image or video</p>
-                  <p className="mt-1 text-xs font-semibold text-slate-500">This should become Meta image or video upload in the backend.</p>
+                  <p className="mt-1 text-xs font-semibold text-slate-500">This will later map to Meta image or video upload endpoints.</p>
                 </label>
                 <input id="media-upload" type="file" accept="image/*,video/*" onChange={handleMediaChange} className="hidden" />
 
@@ -507,15 +673,15 @@ const AdsLaunchPage = () => {
           <DashboardPanel title="Current system fit">
             <div className="space-y-3 text-sm leading-6 text-slate-600">
               <p>
-                The current app already stores Meta tokens and business profiles. That is the right foundation for a launch tool, but
-                we still need synced ad accounts, Facebook pages, media upload, and final Meta publish endpoints.
+                This launch flow now starts from the saved Meta token, because that token decides which ad accounts, pages, and pixels
+                can actually be used.
               </p>
               <div className="rounded-2xl bg-amber-50 px-4 py-4 text-amber-800">
                 <div className="flex items-start gap-3">
                   <AlertCircle size={18} strokeWidth={2.2} className="mt-0.5 shrink-0" />
                   <p className="text-sm font-semibold">
-                    Best next backend step: sync `owned_ad_accounts`, `client_ad_accounts`, and business-owned pages for each saved Meta
-                    business profile.
+                    The backend now loads ad accounts and pages from the selected token, and pixels from the selected ad accounts. The
+                    remaining gap is final campaign/ad set/ad creation.
                   </p>
                 </div>
               </div>
@@ -528,34 +694,47 @@ const AdsLaunchPage = () => {
         <DashboardPanel title="Dynamic data status">
           <div className="space-y-4">
             <div className="rounded-2xl bg-sky-50/70 p-4">
-              <p className="text-xs font-bold uppercase tracking-[0.18em] text-sky-600">Saved business profiles</p>
-              <p className="mt-2 text-2xl font-black text-slate-950">{profiles.length}</p>
+              <p className="text-xs font-bold uppercase tracking-[0.18em] text-sky-600">Active launch tokens</p>
+              <p className="mt-2 text-2xl font-black text-slate-950">{activeTokens.length}</p>
               <p className="mt-2 text-sm leading-6 text-slate-500">
-                These are already available from the current sync flow and should become the source for ad-account and page syncing.
+                Pick one token to load accessible ad accounts, pages, and pixels directly from Meta.
               </p>
             </div>
 
-            {selectedProfile ? (
+            {selectedToken ? (
               <div className="rounded-2xl border border-sky-100 bg-white px-4 py-4">
-                <p className="font-black text-slate-950">{selectedProfile.name}</p>
-                <p className="mt-1 text-xs font-semibold text-slate-400">Meta ID: {selectedProfile.metaBusinessId}</p>
+                <p className="font-black text-slate-950">{selectedToken.label}</p>
+                <p className="mt-1 text-xs font-semibold text-slate-400">{selectedToken.accessToken}</p>
                 <div className="mt-3 flex flex-wrap gap-2">
-                  {selectedProfile.brand ? <InfoPill icon={Layers3}>{selectedProfile.brand.name}</InfoPill> : null}
-                  {selectedProfile.agency ? (
-                    <InfoPill icon={MousePointerClick} tone="amber">
-                      {selectedProfile.agency.name}
-                    </InfoPill>
-                  ) : null}
+                  <InfoPill icon={KeyRound}>Status: {selectedToken.status}</InfoPill>
+                  <InfoPill icon={Layers3}>API calls: {selectedToken.apiCallCount}</InfoPill>
+                  <InfoPill icon={MousePointerClick} tone="amber">
+                    {formatTokenUsage(selectedToken.lastApiCallAt)}
+                  </InfoPill>
                 </div>
               </div>
             ) : (
-              <EmptyState>Select a saved business profile to anchor the launch workflow.</EmptyState>
+              <EmptyState>Select an active token to load API-backed asset options.</EmptyState>
             )}
 
-            <EmptyState>
-              No synced ad accounts or pages exist yet in this system. For now, this page uses manual account and page fields as a safe
-              bridge.
-            </EmptyState>
+            <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-1">
+              <div className="rounded-2xl border border-sky-100 bg-white px-4 py-4">
+                <p className="text-xs font-bold uppercase tracking-[0.18em] text-sky-600">Loaded ad accounts</p>
+                <p className="mt-2 text-2xl font-black text-slate-950">{adAccounts.length}</p>
+              </div>
+              <div className="rounded-2xl border border-sky-100 bg-white px-4 py-4">
+                <p className="text-xs font-bold uppercase tracking-[0.18em] text-sky-600">Loaded pages</p>
+                <p className="mt-2 text-2xl font-black text-slate-950">{pages.length}</p>
+              </div>
+              <div className="rounded-2xl border border-sky-100 bg-white px-4 py-4">
+                <p className="text-xs font-bold uppercase tracking-[0.18em] text-sky-600">Shared pixels</p>
+                <p className="mt-2 text-2xl font-black text-slate-950">{pixels.length}</p>
+              </div>
+            </div>
+
+            {!loadingPixels && form.selectedAdAccountIds.length > 1 && !pixels.length ? (
+              <EmptyState>No common pixel was found across the selected ad accounts for this token.</EmptyState>
+            ) : null}
           </div>
         </DashboardPanel>
 
@@ -564,7 +743,11 @@ const AdsLaunchPage = () => {
             <div className="space-y-4">
               <div className="grid gap-3 sm:grid-cols-3">
                 <div className="rounded-2xl bg-sky-50/70 p-4">
-                  <p className="text-xs font-bold uppercase tracking-[0.18em] text-sky-600">Ad accounts</p>
+                  <p className="text-xs font-bold uppercase tracking-[0.18em] text-sky-600">Source token</p>
+                  <p className="mt-2 text-lg font-black text-slate-950">{selectedToken?.label || 'Not selected'}</p>
+                </div>
+                <div className="rounded-2xl bg-sky-50/70 p-4">
+                  <p className="text-xs font-bold uppercase tracking-[0.18em] text-sky-600">Selected accounts</p>
                   <p className="mt-2 text-2xl font-black text-slate-950">{previewItems.length}</p>
                 </div>
                 <div className="rounded-2xl bg-sky-50/70 p-4">
@@ -572,6 +755,19 @@ const AdsLaunchPage = () => {
                   <p className="mt-2 text-lg font-black text-slate-950">
                     {objectiveOptions.find((item) => item.value === form.objective)?.label || 'Not selected'}
                   </p>
+                </div>
+              </div>
+
+              <div className="grid gap-3 sm:grid-cols-3">
+                <div className="rounded-2xl bg-sky-50/70 p-4">
+                  <p className="text-xs font-bold uppercase tracking-[0.18em] text-sky-600">Page</p>
+                  <p className="mt-2 text-lg font-black text-slate-950">{selectedPage?.name || 'Not selected'}</p>
+                  <p className="mt-1 text-xs font-semibold text-slate-400">{selectedPage?.id || 'Missing page'}</p>
+                </div>
+                <div className="rounded-2xl bg-sky-50/70 p-4">
+                  <p className="text-xs font-bold uppercase tracking-[0.18em] text-sky-600">Pixel</p>
+                  <p className="mt-2 text-lg font-black text-slate-950">{selectedPixel?.name || 'Not selected'}</p>
+                  <p className="mt-1 text-xs font-semibold text-slate-400">{selectedPixel?.id || 'Missing pixel'}</p>
                 </div>
                 <div className="rounded-2xl bg-sky-50/70 p-4">
                   <p className="text-xs font-bold uppercase tracking-[0.18em] text-sky-600">Creative</p>
@@ -581,8 +777,20 @@ const AdsLaunchPage = () => {
 
               <div className="space-y-3">
                 {previewItems.map((item) => (
-                  <div key={item.accountId} className="rounded-2xl border border-sky-100 bg-white px-4 py-4">
-                    <p className="text-xs font-bold uppercase tracking-[0.18em] text-sky-600">Ad Account {item.accountId}</p>
+                  <div key={item.account.id} className="rounded-2xl border border-sky-100 bg-white px-4 py-4">
+                    <div className="flex flex-wrap items-center justify-between gap-3">
+                      <div>
+                        <p className="text-xs font-bold uppercase tracking-[0.18em] text-sky-600">Ad Account</p>
+                        <p className="mt-1 text-sm font-black text-slate-950">
+                          {item.account.name} ({item.account.accountId})
+                        </p>
+                      </div>
+                      <span className="inline-flex items-center gap-2 rounded-full bg-emerald-50 px-3 py-1 text-xs font-black text-emerald-700">
+                        <Check size={13} strokeWidth={2.4} />
+                        Ready for batch
+                      </span>
+                    </div>
+
                     <div className="mt-3 grid gap-3 lg:grid-cols-3">
                       <div className="rounded-xl bg-sky-50/70 p-3">
                         <p className="text-xs font-bold uppercase tracking-[0.16em] text-sky-600">Campaign</p>
@@ -602,9 +810,7 @@ const AdsLaunchPage = () => {
               </div>
             </div>
           ) : (
-            <EmptyState>
-              Add at least one ad account id to generate the launch structure that should later be sent to Meta with one action.
-            </EmptyState>
+            <EmptyState>Select the token and one or more ad accounts to generate the launch structure.</EmptyState>
           )}
         </DashboardPanel>
       </div>
