@@ -102,7 +102,7 @@ async function listSocialAccounts(filters = {}) {
   const accounts = await SocialAccount.find(query)
     .populate('brand', 'name color')
     .populate('agency', 'name')
-    .populate('sourceToken', 'label connectionStatus connectionMessage lastConnectionCheckedAt')
+    .populate('sourceToken', 'label adsPowerProfile connectionStatus connectionMessage lastConnectionCheckedAt')
     .sort({ name: 1 })
     .skip(skip)
     .limit(limit);
@@ -180,7 +180,7 @@ async function assignSocialAccount({ accountId, brandId, agencyId, actor, req })
   const populated = await SocialAccount.findById(account._id)
     .populate('brand', 'name color')
     .populate('agency', 'name')
-    .populate('sourceToken', 'label connectionStatus connectionMessage lastConnectionCheckedAt');
+    .populate('sourceToken', 'label adsPowerProfile connectionStatus connectionMessage lastConnectionCheckedAt');
   const profileCounts = await getProfileCounts([account._id]);
 
   return populated.toSafeObject({

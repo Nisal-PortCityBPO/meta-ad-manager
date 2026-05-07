@@ -1,4 +1,5 @@
 const asyncHandler = require('../../app/utils/asyncHandler');
+const businessProfileService = require('../business-profiles/businessProfile.service');
 const socialAccountService = require('./socialAccount.service');
 
 const getSocialAccounts = asyncHandler(async (req, res) => {
@@ -21,7 +22,21 @@ const assignSocialAccount = asyncHandler(async (req, res) => {
   });
 });
 
+const syncSocialAccount = asyncHandler(async (req, res) => {
+  const result = await businessProfileService.syncBusinessProfiles({
+    actor: req.user,
+    req,
+    socialAccountId: req.params.id,
+  });
+
+  res.json({
+    message: 'Social account data fetch completed',
+    ...result,
+  });
+});
+
 module.exports = {
   assignSocialAccount,
   getSocialAccounts,
+  syncSocialAccount,
 };

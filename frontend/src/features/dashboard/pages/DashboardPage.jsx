@@ -1,10 +1,11 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import toast from 'react-hot-toast';
 import {
   BriefcaseBusiness,
   Building2,
   ChevronLeft,
   ChevronRight,
+  DownloadCloud,
   Edit3,
   Filter,
   Handshake,
@@ -17,6 +18,7 @@ import {
 import DashboardHeader from '../components/DashboardHeader';
 import DashboardPanel from '../components/DashboardPanel';
 import { businessDataApi } from '../api/businessDataApi';
+import { useMetaSync } from '../context/MetaSyncContext';
 import { useBusinessData } from '../hooks/useBusinessData';
 import { useDashboard } from '../hooks/useDashboard';
 
@@ -236,7 +238,9 @@ const SocialAccountsTable = ({
   onLimitChange,
   onPageChange,
   saving,
+  syncingAccountId,
   onAssign,
+  onSync,
 }) => {
   const [editingAccount, setEditingAccount] = useState(null);
   const [assignment, setAssignment] = useState({
@@ -398,7 +402,7 @@ const SocialAccountsTable = ({
             <table className="min-w-full divide-y divide-sky-50">
               <thead className="bg-sky-50/70">
                 <tr>
-                  {['Social account', 'API token', 'Business profiles', 'Brand', 'Agency', 'Last synced', 'Actions'].map((heading) => (
+                  {['Social account', 'API token', 'AdsPower Profile', 'Business profiles', 'Brand', 'Agency', 'Last synced', 'Actions'].map((heading) => (
                     <th key={heading} className="px-5 py-4 text-left text-xs font-black uppercase tracking-[0.16em] text-sky-700">
                       {heading}
                     </th>
@@ -408,6 +412,7 @@ const SocialAccountsTable = ({
               <tbody className="divide-y divide-sky-50">
                 {socialAccounts.map((account) => {
                   const isEditing = editingAccount?.id === account.id;
+                  const isSyncing = syncingAccountId === account.id;
 
                   return (
                     <tr key={account.id} className="align-middle">
@@ -431,6 +436,9 @@ const SocialAccountsTable = ({
                         ) : (
                           <span className="text-sm font-semibold text-slate-400">Not tracked</span>
                         )}
+                      </td>
+                      <td className="px-5 py-4 text-sm font-bold text-slate-700">
+                        {account.adsPowerProfile || <span className="font-semibold text-slate-400">Not set</span>}
                       </td>
                       <td className="px-5 py-4">
                         <span className="inline-flex items-center gap-2 rounded-full bg-amber-50 px-3 py-1 text-xs font-black text-amber-700">
@@ -510,6 +518,16 @@ const SocialAccountsTable = ({
                           <div className="flex gap-2">
                             <button
                               type="button"
+                              onClick={() => onSync(account)}
+                              disabled={saving || isSyncing || !account.sourceTokenId}
+                              className="flex h-10 items-center gap-2 rounded-xl bg-sky-600 px-3 text-sm font-bold text-white transition hover:bg-sky-700 disabled:cursor-not-allowed disabled:opacity-60"
+                              title={account.sourceTokenId ? 'Fetch latest Meta data for this social account' : 'No saved token for this social account'}
+                            >
+                              <DownloadCloud size={16} strokeWidth={2.2} />
+                              {isSyncing ? 'Fetching' : 'Fetch'}
+                            </button>
+                            <button
+                              type="button"
                               onClick={() => startEdit(account)}
                               className="flex h-10 items-center gap-2 rounded-xl border border-sky-100 bg-white px-3 text-sm font-bold text-slate-700 transition hover:bg-sky-50"
                             >
@@ -560,6 +578,8 @@ const DashboardPage = () => {
     ...socialAccountFilters,
   });
   const [savingBusinessData, setSavingBusinessData] = useState(false);
+  const { startSocialAccountSync, syncingAccountId } = useMetaSync();
+  const refreshAllRef = useRef(null);
   const metrics = dashboard?.metrics || {};
 
   const metricCards = [
@@ -592,6 +612,19 @@ const DashboardPage = () => {
   const refreshAll = async () => {
     await Promise.all([reload(), loadBusinessData({ showLoading: false })]);
   };
+
+  useEffect(() => {
+    refreshAllRef.current = refreshAll;
+  });
+
+  useEffect(() => {
+    const refreshAfterSync = () => {
+      refreshAllRef.current?.();
+    };
+
+    window.addEventListener('meta-sync-completed', refreshAfterSync);
+    return () => window.removeEventListener('meta-sync-completed', refreshAfterSync);
+  }, []);
 
   const updateSocialAccountFilter = (field, value) => {
     setSocialAccountFilters((current) => ({
@@ -703,6 +736,10 @@ const DashboardPage = () => {
     }
   };
 
+  const syncSocialAccount = async (account) => {
+    startSocialAccountSync(account);
+  };
+
   return (
     <div>
       <DashboardHeader
@@ -743,12 +780,14 @@ const DashboardPage = () => {
         loading={businessDataLoading}
         pagination={socialAccountPagination}
         saving={savingBusinessData}
+        syncingAccountId={syncingAccountId}
         socialAccounts={socialAccounts}
         onClearFilters={clearSocialAccountFilters}
         onFilterChange={updateSocialAccountFilter}
         onLimitChange={updateSocialAccountLimit}
         onPageChange={setSocialAccountPage}
         onAssign={assignSocialAccount}
+        onSync={syncSocialAccount}
       />
 
       <div className="mt-4 grid gap-4 xl:grid-cols-2">
