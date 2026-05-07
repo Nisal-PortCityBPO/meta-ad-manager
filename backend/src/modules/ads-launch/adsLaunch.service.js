@@ -6,6 +6,8 @@ const { writeActivityLog } = require('../activity-logs/activityLog.service');
 const { USER_ROLES } = require('../users/user.model');
 const LaunchTemplate = require('./adsLaunch.model');
 const { LAUNCH_TEMPLATE_TYPES } = require('./adsLaunch.model');
+const AdsLaunchMedia = require('./adsLaunchMedia.model');
+const { ADS_MEDIA_TYPES } = require('./adsLaunchMedia.model');
 const adsManageService = require('../ads-manage/adsManage.service');
 const tokenService = require('../token-management/token.service');
 
@@ -13,10 +15,19 @@ const META_GRAPH_VERSION = process.env.META_GRAPH_VERSION || 'v24.0';
 const GRAPH_API_BASE = `https://graph.facebook.com/${META_GRAPH_VERSION}`;
 const GRAPH_VIDEO_API_BASE = `https://graph-video.facebook.com/${META_GRAPH_VERSION}`;
 const TEMPLATE_ASSET_DIR = path.resolve(__dirname, '../../../storage/ads-launch-template-assets');
+const MEDIA_LIBRARY_ASSET_DIR = path.resolve(__dirname, '../../../storage/ads-launch-media-assets');
 const DEFAULT_VIDEO_READY_TIMEOUT_MS = 180000;
 const DEFAULT_VIDEO_READY_POLL_MS = 5000;
 const MAX_VIDEO_READY_TIMEOUT_MS = 600000;
 const MIN_VIDEO_READY_POLL_MS = 2500;
+const MEDIA_LIBRARY_MIN_DIMENSION = 600;
+const MEDIA_LIBRARY_MIN_ASPECT_RATIO = 0.56;
+const MEDIA_LIBRARY_MAX_ASPECT_RATIO = 1.92;
+const MEDIA_LIBRARY_MAX_IMAGE_BYTES = 30 * 1024 * 1024;
+const MEDIA_LIBRARY_MAX_VIDEO_BYTES = 95 * 1024 * 1024;
+const MEDIA_LIBRARY_MAX_THUMBNAIL_BYTES = 10 * 1024 * 1024;
+const MEDIA_LIBRARY_IMAGE_MIME_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp']);
+const MEDIA_LIBRARY_VIDEO_MIME_TYPES = new Set(['video/mp4', 'video/quicktime']);
 
 const SUPPORTED_WEBSITE_EVENTS = new Set([
   'LEAD',
@@ -575,13 +586,175 @@ function getStoredTemplateAssetPath(asset) {
   return fs.existsSync(filePath) ? filePath : null;
 }
 
+function ensureMediaLibraryAssetDir() {
+  fs.mkdirSync(MEDIA_LIBRARY_ASSET_DIR, { recursive: true });
+}
+
+function sanitizeMediaLibraryAssetInput(asset) {
+  const sanitized = sanitizeTemplateAssetInput(asset);
+
+  if (!sanitized) {
+    return null;
+  }
+
+  return {
+    ...sanitized,
+    width: Math.max(Math.round(Number(asset.width) || 0), 0),
+    height: Math.max(Math.round(Number(asset.height) || 0), 0),
+    duration: Math.max(Number(asset.duration) || 0, 0),
+  };
+}
+
+function assertMediaLibraryMimeType(mimeType, mediaType) {
+  const normalizedMimeType = normalizeText(mimeType).toLowerCase();
+  const allowedTypes =
+    mediaType === ADS_MEDIA_TYPES.VIDEO ? MEDIA_LIBRARY_VIDEO_MIME_TYPES : MEDIA_LIBRARY_IMAGE_MIME_TYPES;
+
+  if (!allowedTypes.has(normalizedMimeType)) {
+    throw new HttpError(
+      400,
+      mediaType === ADS_MEDIA_TYPES.VIDEO
+        ? 'Video media must be MP4 or MOV for reliable Meta publishing'
+        : 'Image media must be JPG, PNG, or WEBP for reliable Meta publishing'
+    );
+  }
+}
+
+function validateMediaLibraryDimensions(asset, label) {
+  const width = Number(asset?.width) || 0;
+  const height = Number(asset?.height) || 0;
+
+  if (!width || !height) {
+    throw new HttpError(400, `${label} dimensions could not be read. Please choose a valid image or video file.`);
+  }
+
+  if (width < MEDIA_LIBRARY_MIN_DIMENSION || height < MEDIA_LIBRARY_MIN_DIMENSION) {
+    throw new HttpError(400, `${label} must be at least ${MEDIA_LIBRARY_MIN_DIMENSION}x${MEDIA_LIBRARY_MIN_DIMENSION}px`);
+  }
+
+  const aspectRatio = width / height;
+  if (aspectRatio < MEDIA_LIBRARY_MIN_ASPECT_RATIO || aspectRatio > MEDIA_LIBRARY_MAX_ASPECT_RATIO) {
+    throw new HttpError(400, `${label} aspect ratio should stay between 9:16 and 1.91:1 for Meta placements`);
+  }
+}
+
+function parseMediaLibraryAsset(asset, label, mediaType) {
+  const parsed = parseDataUrlFile(asset, label, {
+    allowedMimeTypePrefixes: mediaType === ADS_MEDIA_TYPES.VIDEO ? ['video/'] : ['image/'],
+  });
+  const normalizedMimeType = normalizeText(parsed.mimeType).toLowerCase();
+
+  assertMediaLibraryMimeType(normalizedMimeType, mediaType);
+
+  return {
+    ...parsed,
+    mimeType: normalizedMimeType,
+    width: Math.max(Math.round(Number(asset.width) || 0), 0),
+    height: Math.max(Math.round(Number(asset.height) || 0), 0),
+    duration: Math.max(Number(asset.duration) || 0, 0),
+  };
+}
+
+function validateMediaLibraryParsedAsset(parsed, mediaType) {
+  const isVideo = mediaType === ADS_MEDIA_TYPES.VIDEO;
+  const maxBytes = isVideo ? MEDIA_LIBRARY_MAX_VIDEO_BYTES : MEDIA_LIBRARY_MAX_IMAGE_BYTES;
+
+  if (parsed.buffer.length > maxBytes) {
+    throw new HttpError(
+      400,
+      `${isVideo ? 'Video' : 'Image'} is too large. Maximum is ${Math.round(maxBytes / 1024 / 1024)}MB.`
+    );
+  }
+
+  validateMediaLibraryDimensions(parsed, isVideo ? 'Video media' : 'Image media');
+
+  if (isVideo && parsed.duration <= 0) {
+    throw new HttpError(400, 'Video duration could not be read. Please choose a valid video file.');
+  }
+}
+
+function persistMediaLibraryAsset({ mediaId, asset, assetKind, mediaType }) {
+  const parsed = parseMediaLibraryAsset(asset, assetKind === 'thumbnail' ? 'Video thumbnail' : 'Media', mediaType);
+
+  if (assetKind === 'thumbnail') {
+    if (parsed.buffer.length > MEDIA_LIBRARY_MAX_THUMBNAIL_BYTES) {
+      throw new HttpError(400, 'Video thumbnail is too large. Maximum is 10MB.');
+    }
+    validateMediaLibraryDimensions(parsed, 'Video thumbnail');
+  } else {
+    validateMediaLibraryParsedAsset(parsed, mediaType);
+  }
+
+  const extension = getAssetFileExtension(parsed.name, parsed.mimeType);
+  const storageKey = `${mediaId}-${assetKind}-${Date.now()}${extension}`;
+  const filePath = path.join(MEDIA_LIBRARY_ASSET_DIR, storageKey);
+
+  ensureMediaLibraryAssetDir();
+  fs.writeFileSync(filePath, parsed.buffer);
+
+  return {
+    name: parsed.name,
+    type: parsed.mimeType,
+    size: parsed.buffer.length,
+    storageKey,
+    width: parsed.width,
+    height: parsed.height,
+    duration: parsed.duration,
+  };
+}
+
+function deleteStoredMediaLibraryAsset(asset) {
+  if (!asset?.storageKey) {
+    return;
+  }
+
+  const filePath = path.join(MEDIA_LIBRARY_ASSET_DIR, asset.storageKey);
+
+  try {
+    fs.rmSync(filePath, { force: true });
+  } catch (error) {
+    // Ignore cleanup failures so media library operations still complete.
+  }
+}
+
+function getStoredMediaLibraryAssetPath(asset) {
+  if (!asset?.storageKey) {
+    return null;
+  }
+
+  const filePath = path.join(MEDIA_LIBRARY_ASSET_DIR, asset.storageKey);
+  return fs.existsSync(filePath) ? filePath : null;
+}
+
+function readStoredMediaLibraryAsset(asset) {
+  const filePath = getStoredMediaLibraryAssetPath(asset);
+
+  if (!filePath || !asset?.type) {
+    return null;
+  }
+
+  const buffer = fs.readFileSync(filePath);
+
+  return {
+    name: asset.name,
+    type: asset.type,
+    dataUrl: `data:${asset.type};base64,${buffer.toString('base64')}`,
+  };
+}
+
 async function applyTemplateAssets({ template, snapshotInput, existingSnapshot = null }) {
   const nextMediaInput = sanitizeTemplateAssetInput(snapshotInput?.media);
   const nextThumbnailInput = sanitizeTemplateAssetInput(snapshotInput?.thumbnail);
+  const shouldClearAssets = snapshotInput?.clearMedia === true;
   let mediaAsset = existingSnapshot?.media || template.snapshot?.media || null;
   let thumbnailAsset = existingSnapshot?.thumbnail || template.snapshot?.thumbnail || null;
 
-  if (nextMediaInput) {
+  if (shouldClearAssets) {
+    deleteStoredTemplateAsset(mediaAsset);
+    deleteStoredTemplateAsset(thumbnailAsset);
+    mediaAsset = null;
+    thumbnailAsset = null;
+  } else if (nextMediaInput) {
     const previousMedia = mediaAsset;
     mediaAsset = persistTemplateAsset({
       templateId: template._id.toString(),
@@ -620,6 +793,10 @@ function templateAccessFilter(actor) {
   return isSuperAdmin(actor) ? {} : { createdBy: actor._id };
 }
 
+function mediaLibraryAccessFilter(actor) {
+  return isSuperAdmin(actor) ? {} : { createdBy: actor._id };
+}
+
 async function getTemplateForActor(templateId, actor) {
   const template = await LaunchTemplate.findOne({
     _id: templateId,
@@ -648,6 +825,115 @@ async function listTemplates({ actor, templateType = '' }) {
     .sort({ updatedAt: -1 });
 
   return templates.map((template) => template.toSafeObject());
+}
+
+async function getMediaAssetDocForActor(mediaId, actor) {
+  const mediaAsset = await AdsLaunchMedia.findOne({
+    _id: mediaId,
+    ...mediaLibraryAccessFilter(actor),
+  }).populate('createdBy', 'name email');
+
+  if (!mediaAsset) {
+    throw new HttpError(404, 'Media library asset not found');
+  }
+
+  return mediaAsset;
+}
+
+async function listMediaAssets({ actor }) {
+  const mediaAssets = await AdsLaunchMedia.find({
+    ...mediaLibraryAccessFilter(actor),
+  })
+    .populate('createdBy', 'name email')
+    .sort({ updatedAt: -1 });
+
+  return mediaAssets.map((mediaAsset) => mediaAsset.toSafeObject());
+}
+
+async function createMediaAsset({ name, media, thumbnail, actor, req }) {
+  const normalizedName = normalizeText(name);
+  const mediaInput = sanitizeMediaLibraryAssetInput(media);
+  const thumbnailInput = sanitizeMediaLibraryAssetInput(thumbnail);
+
+  if (!normalizedName) {
+    throw new HttpError(400, 'Media name is required');
+  }
+
+  if (!mediaInput) {
+    throw new HttpError(400, 'Select an image or video to save in the media library');
+  }
+
+  const mediaType = mediaInput.type.startsWith('video/') ? ADS_MEDIA_TYPES.VIDEO : ADS_MEDIA_TYPES.IMAGE;
+
+  if (mediaType === ADS_MEDIA_TYPES.VIDEO && !thumbnailInput) {
+    throw new HttpError(400, 'Video media requires a thumbnail before it can be used in Meta ads');
+  }
+
+  const mediaAsset = new AdsLaunchMedia({
+    name: normalizedName,
+    mediaType,
+    createdBy: actor._id,
+    updatedBy: actor._id,
+  });
+
+  try {
+    mediaAsset.media = persistMediaLibraryAsset({
+      mediaId: mediaAsset._id.toString(),
+      asset: mediaInput,
+      assetKind: 'media',
+      mediaType,
+    });
+    mediaAsset.thumbnail = thumbnailInput
+      ? persistMediaLibraryAsset({
+          mediaId: mediaAsset._id.toString(),
+          asset: thumbnailInput,
+          assetKind: 'thumbnail',
+          mediaType: ADS_MEDIA_TYPES.IMAGE,
+        })
+      : null;
+    await mediaAsset.save();
+  } catch (error) {
+    deleteStoredMediaLibraryAsset(mediaAsset.media);
+    deleteStoredMediaLibraryAsset(mediaAsset.thumbnail);
+    throw error;
+  }
+
+  await writeActivityLog({
+    user: actor,
+    action: 'ADS_MEDIA_LIBRARY_CREATED',
+    entity: 'AdsLaunchMedia',
+    entityId: mediaAsset._id.toString(),
+    metadata: {
+      name: mediaAsset.name,
+      mediaType: mediaAsset.mediaType,
+      width: mediaAsset.media?.width || 0,
+      height: mediaAsset.media?.height || 0,
+    },
+    req,
+  });
+
+  const populated = await AdsLaunchMedia.findById(mediaAsset._id).populate('createdBy', 'name email');
+  return populated.toSafeObject();
+}
+
+async function deleteMediaAsset({ mediaId, actor, req }) {
+  const mediaAsset = await getMediaAssetDocForActor(mediaId, actor);
+
+  deleteStoredMediaLibraryAsset(mediaAsset.media);
+  deleteStoredMediaLibraryAsset(mediaAsset.thumbnail);
+  await mediaAsset.deleteOne();
+
+  await writeActivityLog({
+    user: actor,
+    action: 'ADS_MEDIA_LIBRARY_DELETED',
+    entity: 'AdsLaunchMedia',
+    entityId: mediaAsset._id.toString(),
+    metadata: {
+      name: mediaAsset.name,
+      mediaType: mediaAsset.mediaType,
+    },
+    req,
+  });
 }
 
 async function createTemplate({ name, templateType, config, snapshot, actor, req }) {
@@ -1759,6 +2045,26 @@ async function getTemplateAssetForActor({ templateId, assetKind, actor }) {
   };
 }
 
+async function getMediaAssetForActor({ mediaId, assetKind, actor }) {
+  if (!['file', 'thumbnail'].includes(assetKind)) {
+    throw new HttpError(404, 'Media library asset not found');
+  }
+
+  const mediaAsset = await getMediaAssetDocForActor(mediaId, actor);
+  const asset = assetKind === 'thumbnail' ? mediaAsset.thumbnail : mediaAsset.media;
+  const filePath = getStoredMediaLibraryAssetPath(asset);
+
+  if (!filePath || !asset?.type) {
+    throw new HttpError(404, 'Media library asset not found');
+  }
+
+  return {
+    filePath,
+    filename: asset.name || `${assetKind}`,
+    mimeType: asset.type,
+  };
+}
+
 async function resolvePublishCreativeAssets({ launch, actor }) {
   if (launch.media) {
     return {
@@ -1785,6 +2091,44 @@ async function resolvePublishCreativeAssets({ launch, actor }) {
   };
 }
 
+function readCreativeAssetsFromMediaAsset(mediaAsset) {
+  const media = readStoredMediaLibraryAsset(mediaAsset?.media);
+  const thumbnail = readStoredMediaLibraryAsset(mediaAsset?.thumbnail);
+
+  if (!media) {
+    throw new HttpError(400, `Media library asset "${mediaAsset?.name || 'selected'}" is missing its saved file`);
+  }
+
+  if (String(media.type || '').startsWith('video/') && !thumbnail) {
+    throw new HttpError(400, `Video media "${mediaAsset?.name || 'selected'}" needs a thumbnail before publishing`);
+  }
+
+  return {
+    media,
+    thumbnail,
+  };
+}
+
+function readThumbnailFromMediaLibraryAsset(mediaAsset) {
+  if (mediaAsset?.mediaType !== ADS_MEDIA_TYPES.IMAGE) {
+    throw new HttpError(400, `Thumbnail asset "${mediaAsset?.name || 'selected'}" must be an image from the media library`);
+  }
+
+  const thumbnail = readStoredMediaLibraryAsset(mediaAsset.media);
+
+  if (!thumbnail) {
+    throw new HttpError(400, `Thumbnail asset "${mediaAsset?.name || 'selected'}" is missing its saved file`);
+  }
+
+  validateAssetMimeType({
+    mimeType: thumbnail.type,
+    label: 'Thumbnail',
+    allowedPrefixes: ['image/'],
+  });
+
+  return thumbnail;
+}
+
 function sanitizeAccountLaunches(input = []) {
   if (!Array.isArray(input)) {
     return [];
@@ -1795,12 +2139,14 @@ function sanitizeAccountLaunches(input = []) {
       adAccountId: normalizeText(item?.adAccountId),
       campaignTemplateId: normalizeText(item?.campaignTemplateId),
       mediaTemplateId: normalizeText(item?.mediaTemplateId),
+      mediaAssetId: normalizeText(item?.mediaAssetId),
+      thumbnailAssetId: normalizeText(item?.thumbnailAssetId),
       pageId: normalizeText(item?.pageId),
       pageName: normalizeText(item?.pageName),
       pixelId: normalizeText(item?.pixelId),
       pixelName: normalizeText(item?.pixelName),
     }))
-    .filter((item) => item.adAccountId && (item.campaignTemplateId || item.mediaTemplateId));
+    .filter((item) => item.adAccountId && (item.campaignTemplateId || item.mediaTemplateId || item.mediaAssetId));
 }
 
 function mergeTemplateConfig(baseLaunch, campaignConfig = {}, mediaConfig = {}, templateNames = {}) {
@@ -1871,6 +2217,8 @@ function readCreativeAssetsFromTemplate(template) {
 async function resolveAccountLaunchFromTemplates({ baseLaunch, accountLaunch, selectedAccount, actor }) {
   let campaignTemplate = null;
   let mediaTemplate = null;
+  let mediaAsset = null;
+  let thumbnailAsset = null;
 
   if (accountLaunch?.campaignTemplateId) {
     campaignTemplate = await getTemplateForActor(accountLaunch.campaignTemplateId, actor);
@@ -1878,6 +2226,14 @@ async function resolveAccountLaunchFromTemplates({ baseLaunch, accountLaunch, se
 
   if (accountLaunch?.mediaTemplateId) {
     mediaTemplate = await getTemplateForActor(accountLaunch.mediaTemplateId, actor);
+  }
+
+  if (accountLaunch?.mediaAssetId) {
+    mediaAsset = await getMediaAssetDocForActor(accountLaunch.mediaAssetId, actor);
+  }
+
+  if (accountLaunch?.thumbnailAssetId) {
+    thumbnailAsset = await getMediaAssetDocForActor(accountLaunch.thumbnailAssetId, actor);
   }
 
   const templateLaunch = mergeTemplateConfig(
@@ -1907,16 +2263,30 @@ async function resolveAccountLaunchFromTemplates({ baseLaunch, accountLaunch, se
     countries: effectiveLaunch.countries,
   };
 
-  const creativeAssets = mediaTemplate ? readCreativeAssetsFromTemplate(mediaTemplate) : await resolvePublishCreativeAssets({
-    launch: effectiveLaunch,
-    actor,
-  });
+  const creativeAssets = mediaAsset
+    ? readCreativeAssetsFromMediaAsset(mediaAsset)
+    : mediaTemplate
+      ? readCreativeAssetsFromTemplate(mediaTemplate)
+      : await resolvePublishCreativeAssets({
+          launch: effectiveLaunch,
+          actor,
+        });
+
+  if (mediaAsset && String(creativeAssets.media?.type || '').startsWith('video/')) {
+    if (!thumbnailAsset) {
+      throw new HttpError(400, `Select a thumbnail image for video media "${mediaAsset.name}"`);
+    }
+
+    creativeAssets.thumbnail = readThumbnailFromMediaLibraryAsset(thumbnailAsset);
+  }
 
   return {
     campaignTemplate,
     creativeAssets,
     effectiveLaunch,
+    mediaAsset,
     mediaTemplate,
+    thumbnailAsset,
   };
 }
 
@@ -2123,6 +2493,8 @@ async function publishLaunch({ payload, actor, req, onProgress = null }) {
         status: resolveCampaignStatus(effectiveLaunch.staticDefaults.campaignStatus),
         campaignTemplateId: accountResolved.campaignTemplate?._id?.toString?.() || null,
         mediaTemplateId: accountResolved.mediaTemplate?._id?.toString?.() || null,
+        mediaAssetId: accountResolved.mediaAsset?._id?.toString?.() || null,
+        thumbnailAssetId: accountResolved.thumbnailAsset?._id?.toString?.() || null,
         historyRecordId: historyRecord?.recordId || null,
         historySaved: Boolean(historyRecord),
         historyError,
@@ -2192,9 +2564,13 @@ async function publishLaunch({ payload, actor, req, onProgress = null }) {
 }
 
 module.exports = {
+  createMediaAsset,
   createTemplate,
+  deleteMediaAsset,
   deleteTemplate,
+  getMediaAssetForActor,
   getTemplateAssetForActor,
+  listMediaAssets,
   listTemplates,
   publishLaunch,
   updateTemplate,

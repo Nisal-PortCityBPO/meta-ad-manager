@@ -1,6 +1,6 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useMemo, useState } from 'react';
 import toast from 'react-hot-toast';
-import { ImageIcon, LoaderCircle, Pencil, Plus, Save, Settings2, Trash2, Upload, Video, X } from 'lucide-react';
+import { LoaderCircle, Pencil, Plus, Save, Settings2, Trash2, X } from 'lucide-react';
 import DashboardHeader from '../../dashboard/components/DashboardHeader';
 import DashboardPanel from '../../dashboard/components/DashboardPanel';
 import { adsLaunchApi } from '../api/adsLaunchApi';
@@ -50,11 +50,6 @@ const websiteEventOptions = [
   { value: 'SUBSCRIBE', label: 'Subscribe' },
 ];
 
-const defaultWebsiteEventByObjective = {
-  OUTCOME_LEADS: 'LEAD',
-  OUTCOME_SALES: 'PURCHASE',
-};
-
 const campaignStatusOptions = [
   { value: 'PAUSED', label: 'Paused on create' },
   { value: 'ACTIVE', label: 'Active on create' },
@@ -71,8 +66,10 @@ const mediaDefaults = {
   callToAction: 'LEARN_MORE',
 };
 
+const TRAFFIC_OBJECTIVE = 'OUTCOME_TRAFFIC';
+
 const objectiveOptions = [
-  { value: 'OUTCOME_TRAFFIC', label: 'Traffic' },
+  { value: TRAFFIC_OBJECTIVE, label: 'Traffic' },
   { value: 'OUTCOME_ENGAGEMENT', label: 'Engagement' },
   { value: 'OUTCOME_LEADS', label: 'Leads' },
   { value: 'OUTCOME_SALES', label: 'Sales' },
@@ -216,14 +213,6 @@ const normalizeCampaignStatus = (value) => (String(value || '').trim().toUpperCa
 const getCampaignStatusBadgeClass = (status) =>
   status === 'ACTIVE' ? 'bg-emerald-50 text-emerald-700' : 'bg-amber-50 text-amber-700';
 
-const readFileAsDataUrl = (file) =>
-  new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(reader.result);
-    reader.onerror = () => reject(new Error(`Failed to read ${file.name}`));
-    reader.readAsDataURL(file);
-  });
-
 const FieldLabel = ({ htmlFor, children }) => (
   <label htmlFor={htmlFor} className="text-sm font-semibold text-slate-700">
     {children}
@@ -267,21 +256,11 @@ const TemplateCard = ({ template, onDelete, onEdit }) => {
           </button>
         </div>
       </div>
-      {template.snapshot?.media?.url ? (
-        <div className="mt-3 overflow-hidden rounded-xl border border-sky-100 bg-sky-50">
-          {template.snapshot.media.type?.startsWith('video/') ? (
-            <video src={template.snapshot.media.url} className="h-28 w-full bg-slate-950 object-contain" />
-          ) : (
-            <img src={template.snapshot.media.url} alt={template.name} className="h-28 w-full object-cover" />
-          )}
-        </div>
-      ) : (
-        <p className="mt-3 rounded-xl bg-sky-50 px-3 py-2 text-xs font-semibold text-slate-500">
-          {template.config?.objective || template.config?.dailyBudget
-            ? `${template.config.objective || 'Campaign'} | ${campaignStatus} | Budget ${template.config.dailyBudget || 'not set'}`
-            : 'No media preview'}
-        </p>
-      )}
+      <p className="mt-3 rounded-xl bg-sky-50 px-3 py-2 text-xs font-semibold text-slate-500">
+        {isCampaignTemplate
+          ? `${template.config?.objective || 'Campaign'} | ${campaignStatus} | Budget ${template.config?.dailyBudget || 'not set'}`
+          : `${template.config?.headline || 'Copy template'} | ${template.config?.callToAction || 'CTA'} | ${template.config?.websiteUrl || 'No URL'}`}
+      </p>
     </div>
   );
 };
@@ -292,12 +271,6 @@ const AdsTemplateBuilderPage = () => {
   const [mediaForm, setMediaForm] = useState(createMediaDefaults);
   const [editingCampaignTemplateId, setEditingCampaignTemplateId] = useState('');
   const [editingMediaTemplateId, setEditingMediaTemplateId] = useState('');
-  const [mediaFile, setMediaFile] = useState(null);
-  const [thumbnailFile, setThumbnailFile] = useState(null);
-  const [savedMediaAsset, setSavedMediaAsset] = useState(null);
-  const [savedThumbnailAsset, setSavedThumbnailAsset] = useState(null);
-  const [mediaPreviewUrl, setMediaPreviewUrl] = useState('');
-  const [thumbnailPreviewUrl, setThumbnailPreviewUrl] = useState('');
   const [urlParameterDraft, setUrlParameterDraft] = useState({ key: '', value: '' });
   const [savingType, setSavingType] = useState('');
 
@@ -310,49 +283,8 @@ const AdsTemplateBuilderPage = () => {
   );
   const mediaUrlParameterEntries = useMemo(() => parseUrlParameterEntries(mediaForm.urlParameters), [mediaForm.urlParameters]);
   const campaignPixelRequired = campaignForm.objective === 'OUTCOME_LEADS' || campaignForm.objective === 'OUTCOME_SALES';
-  const activeMediaAsset = mediaFile
-    ? {
-        name: mediaFile.name,
-        type: mediaFile.type,
-        url: mediaPreviewUrl,
-      }
-    : savedMediaAsset;
-  const activeThumbnailAsset = thumbnailFile
-    ? {
-        name: thumbnailFile.name,
-        type: thumbnailFile.type,
-        url: thumbnailPreviewUrl,
-      }
-    : mediaFile
-      ? null
-      : savedThumbnailAsset;
-  const isVideoMediaFile = activeMediaAsset?.type?.startsWith('video/') || false;
   const mediaEditMode = Boolean(editingMediaTemplateId);
   const campaignEditMode = Boolean(editingCampaignTemplateId);
-
-  useEffect(() => {
-    if (!mediaFile) {
-      setMediaPreviewUrl('');
-      return undefined;
-    }
-
-    const previewUrl = URL.createObjectURL(mediaFile);
-    setMediaPreviewUrl(previewUrl);
-
-    return () => URL.revokeObjectURL(previewUrl);
-  }, [mediaFile]);
-
-  useEffect(() => {
-    if (!thumbnailFile) {
-      setThumbnailPreviewUrl('');
-      return undefined;
-    }
-
-    const previewUrl = URL.createObjectURL(thumbnailFile);
-    setThumbnailPreviewUrl(previewUrl);
-
-    return () => URL.revokeObjectURL(previewUrl);
-  }, [thumbnailFile]);
 
   const updateCampaignField = (field, value) => {
     setCampaignForm((current) => ({
@@ -362,15 +294,15 @@ const AdsTemplateBuilderPage = () => {
   };
 
   const handleCampaignObjectiveChange = (objective) => {
-    setCampaignForm((current) => {
-      const currentDefaultEvent = defaultWebsiteEventByObjective[current.objective] || current.websiteEvent;
-      const nextDefaultEvent = defaultWebsiteEventByObjective[objective] || current.websiteEvent || 'LEAD';
-      const shouldUseNextDefault = !current.websiteEvent || current.websiteEvent === currentDefaultEvent;
+    if (objective !== TRAFFIC_OBJECTIVE) {
+      toast.error('Only Traffic objective is enabled for now');
+    }
 
+    setCampaignForm((current) => {
       return {
         ...current,
-        objective,
-        websiteEvent: shouldUseNextDefault ? nextDefaultEvent : current.websiteEvent,
+        objective: TRAFFIC_OBJECTIVE,
+        websiteEvent: '',
       };
     });
   };
@@ -455,31 +387,6 @@ const AdsTemplateBuilderPage = () => {
     setUrlParameterDraft({ key: '', value: '' });
   };
 
-  const handleMediaFileChange = (event) => {
-    const file = event.target.files?.[0] || null;
-    setMediaFile(file);
-
-    if (!file?.type?.startsWith('video/')) {
-      setThumbnailFile(null);
-    }
-  };
-
-  const handleThumbnailFileChange = (event) => {
-    setThumbnailFile(event.target.files?.[0] || null);
-  };
-
-  const serializeAsset = async (file) => {
-    if (!file) {
-      return null;
-    }
-
-    return {
-      name: file.name,
-      type: file.type,
-      dataUrl: await readFileAsDataUrl(file),
-    };
-  };
-
   const resetCampaignEditor = () => {
     setCampaignForm(createCampaignDefaults());
     setEditingCampaignTemplateId('');
@@ -488,10 +395,6 @@ const AdsTemplateBuilderPage = () => {
   const resetMediaEditor = () => {
     setMediaForm(createMediaDefaults());
     setEditingMediaTemplateId('');
-    setMediaFile(null);
-    setThumbnailFile(null);
-    setSavedMediaAsset(null);
-    setSavedThumbnailAsset(null);
     setUrlParameterDraft({ key: '', value: '' });
   };
 
@@ -508,8 +411,8 @@ const AdsTemplateBuilderPage = () => {
       name: template.name || '',
       launchLabel: config.launchLabel || '',
       countries,
-      objective: config.objective || 'OUTCOME_TRAFFIC',
-      websiteEvent: config.websiteEvent || defaultWebsiteEventByObjective[config.objective] || 'LEAD',
+      objective: TRAFFIC_OBJECTIVE,
+      websiteEvent: '',
       dailyBudget: config.dailyBudget || '15',
       scheduleStart: config.scheduleStart || '',
       scheduleEnd: config.scheduleEnd || '',
@@ -537,10 +440,6 @@ const AdsTemplateBuilderPage = () => {
       callToAction: config.callToAction || 'LEARN_MORE',
     });
     setEditingMediaTemplateId(template.id);
-    setMediaFile(null);
-    setThumbnailFile(null);
-    setSavedMediaAsset(template.snapshot?.media || null);
-    setSavedThumbnailAsset(template.snapshot?.thumbnail || null);
     setUrlParameterDraft({ key: '', value: '' });
     toast.success(`Editing media template "${template.name}"`);
   };
@@ -563,7 +462,7 @@ const AdsTemplateBuilderPage = () => {
           launchLabel: campaignForm.launchLabel.trim(),
           country: countries[0] || 'ID',
           countries: countries.length ? countries : ['ID'],
-          objective: campaignForm.objective,
+          objective: TRAFFIC_OBJECTIVE,
           websiteEvent: campaignPixelRequired ? campaignForm.websiteEvent : '',
           dailyBudget: campaignForm.dailyBudget,
           scheduleStart: campaignForm.scheduleStart,
@@ -597,26 +496,8 @@ const AdsTemplateBuilderPage = () => {
       return;
     }
 
-    if (!mediaFile && !savedMediaAsset?.url) {
-      toast.error('Upload an image or video for the media template');
-      return;
-    }
-
     setSavingType(TEMPLATE_TYPES.MEDIA);
     try {
-      const media = await serializeAsset(mediaFile);
-      const thumbnail = isVideoMediaFile ? await serializeAsset(thumbnailFile) : null;
-
-      if (isVideoMediaFile && !thumbnail && !savedThumbnailAsset?.url) {
-        toast.error('Video media templates require a thumbnail');
-        return;
-      }
-
-      if (mediaFile?.type?.startsWith('video/') && !thumbnail) {
-        toast.error('Upload a fresh thumbnail when replacing media with a new video');
-        return;
-      }
-
       const payload = {
         name: mediaForm.name.trim(),
         templateType: TEMPLATE_TYPES.MEDIA,
@@ -630,8 +511,7 @@ const AdsTemplateBuilderPage = () => {
           callToAction: mediaForm.callToAction,
         },
         snapshot: {
-          media,
-          thumbnail,
+          clearMedia: true,
         },
       };
       const data = mediaEditMode
@@ -737,9 +617,12 @@ const AdsTemplateBuilderPage = () => {
                 <FieldLabel htmlFor="campaign-objective">Objective</FieldLabel>
                 <select id="campaign-objective" value={campaignForm.objective} onChange={(event) => handleCampaignObjectiveChange(event.target.value)} className="h-12 w-full rounded-xl border border-sky-100 px-4 outline-none focus:border-sky-400 focus:ring-4 focus:ring-sky-100">
                   {objectiveOptions.map((option) => (
-                    <option key={option.value} value={option.value}>{option.label}</option>
+                    <option key={option.value} value={option.value} disabled={option.value !== TRAFFIC_OBJECTIVE}>
+                      {option.value === TRAFFIC_OBJECTIVE ? option.label : `${option.label} (disabled)`}
+                    </option>
                   ))}
                 </select>
+                <p className="text-xs font-semibold text-slate-400">Only Traffic is enabled in the frontend for now.</p>
               </div>
               <div className="space-y-2">
                 <FieldLabel htmlFor="campaign-website-event">Website event</FieldLabel>
@@ -885,81 +768,8 @@ const AdsTemplateBuilderPage = () => {
                   {mediaForm.urlParameters ? `?${mediaForm.urlParameters}` : 'No URL parameters added'}
                 </div>
               </div>
-              <div className="space-y-3">
-                <FieldLabel htmlFor="media-template-upload">Image or video</FieldLabel>
-                <label htmlFor="media-template-upload" className="flex min-h-52 cursor-pointer flex-col items-center justify-center rounded-2xl border border-dashed border-sky-200 bg-sky-50/70 px-5 py-6 text-center transition hover:border-sky-400 hover:bg-sky-50">
-                  <Upload size={26} strokeWidth={2.1} className="text-sky-600" />
-                  <p className="mt-3 text-sm font-black text-slate-950">{activeMediaAsset ? 'Replace image or video' : 'Select image or video'}</p>
-                  <p className="mt-1 text-xs font-semibold text-slate-500">This media is stored locally with the media template.</p>
-                </label>
-                <input id="media-template-upload" type="file" accept="image/*,video/*" onChange={handleMediaFileChange} className="hidden" />
-
-                {activeMediaAsset?.url ? (
-                  <div className="overflow-hidden rounded-2xl border border-sky-100 bg-white">
-                    {isVideoMediaFile ? (
-                      <video src={activeMediaAsset.url} controls className="h-56 w-full bg-slate-950 object-contain" />
-                    ) : (
-                      <img src={activeMediaAsset.url} alt="Media template preview" className="h-56 w-full object-cover" />
-                    )}
-                    <div className="flex items-center justify-between gap-3 px-4 py-3">
-                      <div className="min-w-0">
-                        <p className="truncate text-sm font-black text-slate-950">{activeMediaAsset.name}</p>
-                        <p className="mt-1 text-xs font-semibold text-slate-400">{activeMediaAsset.type || 'Unknown file type'}</p>
-                      </div>
-                      <span className={`inline-flex items-center gap-2 rounded-full px-3 py-1 text-xs font-black ${isVideoMediaFile ? 'bg-amber-50 text-amber-700' : 'bg-sky-50 text-sky-700'}`}>
-                        {isVideoMediaFile ? <Video size={13} strokeWidth={2.4} /> : <ImageIcon size={13} strokeWidth={2.4} />}
-                        {isVideoMediaFile ? 'Video' : 'Image'}
-                      </span>
-                    </div>
-                    {mediaFile ? (
-                      <button type="button" onClick={() => { setMediaFile(null); setThumbnailFile(null); }} className="mx-4 mb-4 inline-flex h-9 items-center gap-2 rounded-lg border border-red-100 bg-white px-3 text-xs font-black uppercase tracking-[0.14em] text-red-600 transition hover:bg-red-50">
-                        <X size={14} strokeWidth={2.4} />
-                        Clear new media
-                      </button>
-                    ) : mediaEditMode ? (
-                      <p className="mx-4 mb-4 rounded-xl bg-sky-50 px-3 py-2 text-xs font-semibold text-sky-700">
-                        Saved media will be kept unless you select a replacement file.
-                      </p>
-                    ) : null}
-                  </div>
-                ) : null}
-              </div>
-
-              <div className="space-y-3">
-                <FieldLabel htmlFor="media-template-thumbnail">Thumbnail for video</FieldLabel>
-                <label
-                  htmlFor="media-template-thumbnail"
-                  className={`flex min-h-52 flex-col items-center justify-center rounded-2xl border border-dashed px-5 py-6 text-center transition ${
-                    isVideoMediaFile
-                      ? 'cursor-pointer border-sky-200 bg-sky-50/70 hover:border-sky-400 hover:bg-sky-50'
-                      : 'cursor-not-allowed border-slate-200 bg-slate-50 text-slate-400'
-                  }`}
-                >
-                  <Upload size={26} strokeWidth={2.1} className={isVideoMediaFile ? 'text-sky-600' : 'text-slate-300'} />
-                  <p className="mt-3 text-sm font-black text-slate-950">Select thumbnail</p>
-                  <p className="mt-1 text-xs font-semibold text-slate-500">
-                    {isVideoMediaFile ? 'Required for video media templates.' : 'Only needed after selecting a video.'}
-                  </p>
-                </label>
-                <input id="media-template-thumbnail" type="file" accept="image/*" onChange={handleThumbnailFileChange} disabled={!isVideoMediaFile} className="hidden" />
-
-                {activeThumbnailAsset?.url ? (
-                  <div className="overflow-hidden rounded-2xl border border-sky-100 bg-white">
-                    <img src={activeThumbnailAsset.url} alt="Media template thumbnail preview" className="h-56 w-full object-cover" />
-                    <div className="flex items-center justify-between gap-3 px-4 py-3">
-                      <div className="min-w-0">
-                        <p className="truncate text-sm font-black text-slate-950">{activeThumbnailAsset.name}</p>
-                        <p className="mt-1 text-xs font-semibold text-slate-400">{activeThumbnailAsset.type || 'Unknown file type'}</p>
-                      </div>
-                      {thumbnailFile ? (
-                        <button type="button" onClick={() => setThumbnailFile(null)} className="inline-flex h-9 items-center gap-2 rounded-lg border border-red-100 bg-white px-3 text-xs font-black uppercase tracking-[0.14em] text-red-600 transition hover:bg-red-50">
-                          <X size={14} strokeWidth={2.4} />
-                          Clear
-                        </button>
-                      ) : null}
-                    </div>
-                  </div>
-                ) : null}
+              <div className="rounded-2xl border border-dashed border-sky-200 bg-sky-50/70 px-4 py-4 text-sm font-semibold text-slate-600 xl:col-span-2">
+                Media files are now managed in the Ads Media Library. This template only saves copy, destination URL, CTA, and tracking parameters.
               </div>
             </div>
             <button type="button" onClick={saveMediaTemplate} disabled={Boolean(savingType)} className="mt-5 flex h-11 items-center gap-2 rounded-xl bg-slate-950 px-5 text-sm font-bold text-white transition hover:bg-slate-800 disabled:opacity-70">

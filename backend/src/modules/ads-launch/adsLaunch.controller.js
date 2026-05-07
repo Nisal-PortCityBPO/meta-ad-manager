@@ -22,6 +22,53 @@ const getTemplateAsset = asyncHandler(async (req, res) => {
   res.sendFile(asset.filePath);
 });
 
+const getMediaAssets = asyncHandler(async (req, res) => {
+  const mediaAssets = await adsLaunchService.listMediaAssets({
+    actor: req.user,
+  });
+
+  res.json({ mediaAssets });
+});
+
+const getMediaAsset = asyncHandler(async (req, res) => {
+  const asset = await adsLaunchService.getMediaAssetForActor({
+    mediaId: req.params.id,
+    assetKind: req.params.assetKind,
+    actor: req.user,
+  });
+
+  res.setHeader('Content-Type', asset.mimeType);
+  res.setHeader('Content-Disposition', `inline; filename="${encodeURIComponent(asset.filename)}"`);
+  res.sendFile(asset.filePath);
+});
+
+const createMediaAsset = asyncHandler(async (req, res) => {
+  const mediaAsset = await adsLaunchService.createMediaAsset({
+    name: req.body.name,
+    media: req.body.media,
+    thumbnail: req.body.thumbnail,
+    actor: req.user,
+    req,
+  });
+
+  res.status(201).json({
+    message: 'Media saved successfully',
+    mediaAsset,
+  });
+});
+
+const deleteMediaAsset = asyncHandler(async (req, res) => {
+  await adsLaunchService.deleteMediaAsset({
+    mediaId: req.params.id,
+    actor: req.user,
+    req,
+  });
+
+  res.json({
+    message: 'Media deleted successfully',
+  });
+});
+
 const createTemplate = asyncHandler(async (req, res) => {
   const template = await adsLaunchService.createTemplate({
     name: req.body.name,
@@ -116,8 +163,12 @@ const publishLaunchStream = async (req, res, next) => {
 };
 
 module.exports = {
+  createMediaAsset,
   createTemplate,
+  deleteMediaAsset,
   deleteTemplate,
+  getMediaAsset,
+  getMediaAssets,
   getTemplates,
   getTemplateAsset,
   publishLaunch,

@@ -88,6 +88,16 @@ export const adsLaunchApi = {
     apiRequest(`/ads-launch/templates/${id}`, {
       method: 'DELETE',
     }),
+  getMediaAssets: () => apiRequest('/ads-launch/media'),
+  createMediaAsset: (payload) =>
+    apiRequest('/ads-launch/media', {
+      method: 'POST',
+      body: payload,
+    }),
+  deleteMediaAsset: (id) =>
+    apiRequest(`/ads-launch/media/${id}`, {
+      method: 'DELETE',
+    }),
   publishLaunch: (payload) =>
     apiRequest('/ads-launch/publish', {
       method: 'POST',
