@@ -1,4 +1,4 @@
-import { useEffect } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { NavLink, Outlet, useNavigate } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import {
@@ -18,6 +18,7 @@ import {
 } from 'lucide-react';
 import { USER_ROLES, useAuth } from '../../features/auth/hooks/useAuth';
 import { PublishProgressProvider, usePublishProgress } from '../../features/notifications/PublishProgressContext';
+import PublishProgressPanel, { formatDuration } from '../../features/notifications/components/PublishProgressPanel';
 import brandLogo from '../../assets/200m-logo.png';
 
 const navItemsConfig = [
@@ -32,11 +33,16 @@ const navItemsConfig = [
   { to: '/profile', label: 'Profile', icon: UserCircle },
 ];
 
-const PublishStatusControl = ({ onOpen }) => {
-  const { dismissStartPopup, isPublishing, latestError, latestResult, progress, showStartPopup } = usePublishProgress();
+const PublishStatusControl = () => {
+  const { dismissStartPopup, events, isPublishing, latestError, latestResult, progress, showStartPopup } = usePublishProgress();
+  const [panelOpen, setPanelOpen] = useState(false);
+  const [previewOpen, setPreviewOpen] = useState(false);
+  const controlRef = useRef(null);
   const percent = progress?.progress?.percent || 0;
   const hasPublishState = Boolean(isPublishing || progress || latestResult || latestError);
   const statusLabel = isPublishing ? 'Publishing ads' : latestError ? 'Publish failed' : latestResult ? 'Publish complete' : 'Publish status';
+  const statusMessage = progress?.message || latestResult?.message || latestError || 'No active publish';
+  const progressData = progress?.progress || {};
   const ringStyle = {
     background: `conic-gradient(#84cc16 ${percent * 3.6}deg, #e2e8f0 0deg)`,
   };
@@ -50,12 +56,43 @@ const PublishStatusControl = ({ onOpen }) => {
     return () => window.clearTimeout(timeoutId);
   }, [dismissStartPopup, showStartPopup]);
 
+  useEffect(() => {
+    if (!panelOpen) {
+      return undefined;
+    }
+
+    const handlePointerDown = (event) => {
+      if (!controlRef.current?.contains(event.target)) {
+        setPanelOpen(false);
+      }
+    };
+
+    window.addEventListener('pointerdown', handlePointerDown);
+    return () => window.removeEventListener('pointerdown', handlePointerDown);
+  }, [panelOpen]);
+
+  useEffect(() => {
+    if (!hasPublishState) {
+      setPanelOpen(false);
+      setPreviewOpen(false);
+    }
+  }, [hasPublishState]);
+
   return (
-    <div className="relative">
+    <div
+      className="relative"
+      ref={controlRef}
+      onMouseEnter={() => setPreviewOpen(true)}
+      onMouseLeave={() => setPreviewOpen(false)}
+    >
       {hasPublishState ? (
         <button
           type="button"
-          onClick={onOpen}
+          onClick={() => {
+            dismissStartPopup();
+            setPreviewOpen(false);
+            setPanelOpen((current) => !current);
+          }}
           className="relative flex h-11 w-11 items-center justify-center rounded-full border border-sky-100 bg-white shadow-sm transition hover:bg-sky-50"
           aria-label={statusLabel}
           title={statusLabel}
@@ -73,12 +110,45 @@ const PublishStatusControl = ({ onOpen }) => {
         </button>
       ) : null}
 
+      {hasPublishState && previewOpen && !panelOpen && !showStartPopup ? (
+        <div className="absolute right-0 top-14 z-40 w-72 rounded-2xl border border-sky-100 bg-white p-4 text-left shadow-xl shadow-sky-200/70">
+          <div className="flex items-center gap-3">
+            <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-lime-50 text-lime-700">
+              {isPublishing ? (
+                <LoaderCircle size={18} strokeWidth={2.4} className="animate-spin" />
+              ) : latestError ? (
+                <XCircle size={18} strokeWidth={2.4} className="text-red-600" />
+              ) : (
+                <CheckCircle2 size={18} strokeWidth={2.4} className="text-emerald-600" />
+              )}
+            </span>
+            <div className="min-w-0">
+              <p className="text-sm font-black text-slate-950">{statusLabel}</p>
+              <p className="mt-1 line-clamp-2 text-xs font-semibold text-slate-500">{statusMessage}</p>
+            </div>
+          </div>
+          <div className="mt-3 h-2 overflow-hidden rounded-full bg-sky-50">
+            <div className="h-full rounded-full bg-lime-500 transition-all duration-300" style={{ width: `${percent}%` }} />
+          </div>
+          <div className="mt-2 flex items-center justify-between text-[11px] font-black uppercase tracking-[0.14em] text-slate-400">
+            <span>{percent}%</span>
+            <span>ETA {formatDuration(progressData.etaSeconds)}</span>
+          </div>
+        </div>
+      ) : null}
+
+      {hasPublishState && panelOpen ? (
+        <div className="absolute right-0 top-14 z-50 w-[min(92vw,460px)]">
+          <PublishProgressPanel events={events} latestError={latestError} latestResult={latestResult} progress={progress} compact />
+        </div>
+      ) : null}
+
       {showStartPopup ? (
         <button
           type="button"
           onClick={() => {
             dismissStartPopup();
-            onOpen();
+            setPanelOpen(true);
           }}
           className="absolute right-0 top-14 z-30 w-72 rounded-2xl border border-sky-100 bg-white p-4 text-left shadow-xl shadow-sky-200/70"
         >
@@ -164,7 +234,7 @@ const DashboardShell = () => {
               <h1 className="text-xl font-black text-slate-950">{user?.name}</h1>
             </div>
             <div className="flex items-center gap-2">
-              <PublishStatusControl onOpen={() => navigate('/notifications')} />
+              <PublishStatusControl />
               <button
                 type="button"
                 onClick={() => navigate('/notifications')}

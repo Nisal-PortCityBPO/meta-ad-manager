@@ -1,6 +1,7 @@
-import { createContext, useContext, useMemo, useState } from 'react';
+import { createContext, useContext, useEffect, useMemo, useState } from 'react';
 
 const PublishProgressContext = createContext(null);
+const SUCCESS_CLEAR_DELAY_MS = 12000;
 
 export const PublishProgressProvider = ({ children }) => {
   const [isPublishing, setIsPublishing] = useState(false);
@@ -39,6 +40,7 @@ export const PublishProgressProvider = ({ children }) => {
   const completePublish = (result) => {
     setLatestResult(result);
     setIsPublishing(false);
+    setShowStartPopup(false);
     setProgress((current) => ({
       ...(current || {}),
       type: 'progress',
@@ -57,6 +59,7 @@ export const PublishProgressProvider = ({ children }) => {
   const failPublish = (message) => {
     setLatestError(message);
     setIsPublishing(false);
+    setShowStartPopup(false);
     setProgress((current) => ({
       ...(current || {}),
       type: 'progress',
@@ -70,9 +73,28 @@ export const PublishProgressProvider = ({ children }) => {
     setShowStartPopup(false);
   };
 
+  const clearPublishState = () => {
+    setIsPublishing(false);
+    setProgress(null);
+    setEvents([]);
+    setLatestResult(null);
+    setLatestError('');
+    setShowStartPopup(false);
+  };
+
+  useEffect(() => {
+    if (!latestResult || isPublishing) {
+      return undefined;
+    }
+
+    const timeoutId = window.setTimeout(clearPublishState, SUCCESS_CLEAR_DELAY_MS);
+    return () => window.clearTimeout(timeoutId);
+  }, [isPublishing, latestResult]);
+
   const value = useMemo(
     () => ({
       beginPublish,
+      clearPublishState,
       completePublish,
       dismissStartPopup,
       events,
