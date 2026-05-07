@@ -1,5 +1,16 @@
 const mongoose = require('mongoose');
 
+const BUSINESS_PROFILE_META_STATUSES = Object.freeze({
+  CONNECTED: 'CONNECTED',
+  DISABLED: 'DISABLED',
+  UNKNOWN: 'UNKNOWN',
+});
+
+const LEGACY_META_STATUSES = Object.freeze({
+  ACTIVE: BUSINESS_PROFILE_META_STATUSES.CONNECTED,
+  BLOCKED: BUSINESS_PROFILE_META_STATUSES.DISABLED,
+});
+
 const businessProfileSchema = new mongoose.Schema(
   {
     metaBusinessId: {
@@ -15,6 +26,23 @@ const businessProfileSchema = new mongoose.Schema(
     },
     verificationStatus: {
       type: String,
+      default: null,
+    },
+    metaStatus: {
+      type: String,
+      enum: Object.values(BUSINESS_PROFILE_META_STATUSES),
+      default: BUSINESS_PROFILE_META_STATUSES.UNKNOWN,
+    },
+    metaStatusReason: {
+      type: String,
+      default: null,
+    },
+    isDisabledForIntegrityReasons: {
+      type: Boolean,
+      default: null,
+    },
+    lastStatusCheckedAt: {
+      type: Date,
       default: null,
     },
     sourceToken: {
@@ -50,6 +78,17 @@ const businessProfileSchema = new mongoose.Schema(
   }
 );
 
+businessProfileSchema.index({ name: 1 });
+businessProfileSchema.index({ sourceTokenLabel: 1 });
+businessProfileSchema.index({ brand: 1, name: 1 });
+businessProfileSchema.index({ agency: 1, name: 1 });
+
+businessProfileSchema.pre('validate', function normalizeLegacyMetaStatus() {
+  if (LEGACY_META_STATUSES[this.metaStatus]) {
+    this.metaStatus = LEGACY_META_STATUSES[this.metaStatus];
+  }
+});
+
 function getColor(doc) {
   return doc?.color || null;
 }
@@ -60,6 +99,10 @@ businessProfileSchema.methods.toSafeObject = function toSafeObject() {
     metaBusinessId: this.metaBusinessId,
     name: this.name,
     verificationStatus: this.verificationStatus,
+    metaStatus: LEGACY_META_STATUSES[this.metaStatus] || this.metaStatus,
+    metaStatusReason: this.metaStatusReason,
+    isDisabledForIntegrityReasons: this.isDisabledForIntegrityReasons,
+    lastStatusCheckedAt: this.lastStatusCheckedAt,
     sourceTokenLabel: this.sourceTokenLabel,
     brand: this.brand
       ? {
@@ -83,4 +126,7 @@ businessProfileSchema.methods.toSafeObject = function toSafeObject() {
 const BusinessProfile =
   mongoose.models.BusinessProfile || mongoose.model('BusinessProfile', businessProfileSchema);
 
-module.exports = BusinessProfile;
+module.exports = {
+  BusinessProfile,
+  BUSINESS_PROFILE_META_STATUSES,
+};

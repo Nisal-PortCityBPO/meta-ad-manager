@@ -1,24 +1,29 @@
 const asyncHandler = require('../../app/utils/asyncHandler');
-const { listActivityLogs } = require('./activityLog.service');
+const { deleteOldestActivityLogs, listActivityLogs } = require('./activityLog.service');
 
 const getActivityLogs = asyncHandler(async (req, res) => {
-  const logs = await listActivityLogs({ limit: 100 });
+  const result = await listActivityLogs(req.query);
 
   res.json({
-    logs: logs.map((log) => ({
-      id: log._id.toString(),
-      actorName: log.actor?.name || 'System',
-      actorEmail: log.actorEmail,
-      actorRole: log.actor?.role || null,
-      action: log.action,
-      entity: log.entity,
-      entityId: log.entityId,
-      metadata: log.metadata,
-      createdAt: log.createdAt,
-    })),
+    logs: result.logs,
+    pagination: result.pagination,
+    filterOptions: result.filterOptions,
+  });
+});
+
+const deleteOldestLogs = asyncHandler(async (req, res) => {
+  const result = await deleteOldestActivityLogs({
+    actor: req.user,
+    req,
+  });
+
+  res.json({
+    message: `${result.deletedCount} oldest activity logs deleted permanently`,
+    deletedCount: result.deletedCount,
   });
 });
 
 module.exports = {
+  deleteOldestLogs,
   getActivityLogs,
 };

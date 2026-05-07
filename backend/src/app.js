@@ -69,7 +69,7 @@ function registerApiRoutes(app) {
   });
 }
 
-async function registerFrontend(app) {
+async function registerFrontend(app, hmrServer) {
   if (process.env.NODE_ENV === 'production') {
     app.use(express.static(frontendDist));
     app.use((req, res) => {
@@ -85,6 +85,11 @@ async function registerFrontend(app) {
     root: frontendRoot,
     server: {
       middlewareMode: true,
+      hmr: hmrServer
+        ? {
+            server: hmrServer,
+          }
+        : undefined,
     },
     appType: 'spa',
   });
@@ -114,7 +119,7 @@ function handleErrors(err, req, res, next) {
   });
 }
 
-async function createApp() {
+function createApiApp() {
   const app = express();
 
   app.use(cors(corsOptions()));
@@ -122,10 +127,22 @@ async function createApp() {
   app.use(cookieParser());
 
   registerApiRoutes(app);
-  await registerFrontend(app);
+
+  return app;
+}
+
+async function attachFrontend(app, { hmrServer } = {}) {
+  await registerFrontend(app, hmrServer);
   app.use(handleErrors);
 
   return app;
 }
 
+async function createApp(options = {}) {
+  const app = createApiApp();
+  return attachFrontend(app, options);
+}
+
 module.exports = createApp;
+module.exports.attachFrontend = attachFrontend;
+module.exports.createApiApp = createApiApp;

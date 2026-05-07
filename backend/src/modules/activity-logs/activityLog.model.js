@@ -37,5 +37,9 @@ const activityLogSchema = new mongoose.Schema(
   }
 );
 
+activityLogSchema.index({ createdAt: -1 });
+activityLogSchema.index({ actorEmail: 1, createdAt: -1 });
+activityLogSchema.index({ entity: 1, createdAt: -1 });
+
 module.exports =
   mongoose.models.ActivityLog || mongoose.model('ActivityLog', activityLogSchema);

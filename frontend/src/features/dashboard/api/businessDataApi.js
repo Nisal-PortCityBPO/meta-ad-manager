@@ -1,5 +1,18 @@
 import { apiRequest } from '../../auth/api/authApi';
 
+const toQueryString = (params = {}) => {
+  const searchParams = new URLSearchParams();
+
+  Object.entries(params).forEach(([key, value]) => {
+    if (value !== undefined && value !== null && value !== '') {
+      searchParams.set(key, value);
+    }
+  });
+
+  const queryString = searchParams.toString();
+  return queryString ? `?${queryString}` : '';
+};
+
 export const businessDataApi = {
   getBrands: () => apiRequest('/brands'),
   createBrand: (payload) =>
@@ -31,7 +44,7 @@ export const businessDataApi = {
     apiRequest(`/agencies/${id}`, {
       method: 'DELETE',
     }),
-  getBusinessProfiles: () => apiRequest('/business-profiles'),
+  getBusinessProfiles: (params) => apiRequest(`/business-profiles${toQueryString(params)}`),
   syncBusinessProfiles: () =>
     apiRequest('/business-profiles/sync', {
       method: 'POST',
