@@ -2,17 +2,18 @@
 FROM node:20-alpine AS frontend-build
 WORKDIR /app/frontend
 COPY frontend/package*.json ./
-RUN npm ci
+RUN npm install
 COPY frontend/ ./
 RUN npm run build
 
-# Build backend (and combine)
+# Backend runtime
 FROM node:20-alpine
-WORKDIR /app
+ENV NODE_ENV=production
+WORKDIR /app/backend
 COPY backend/package*.json ./
-RUN npm ci --omit=dev
+RUN npm install --omit=dev
 COPY backend/ ./
-# Copy the built frontend into the spot Express expects
-COPY --from=frontend-build /app/frontend/dist ./../frontend/dist
+COPY --from=frontend-build /app/frontend/dist /app/frontend/dist
+WORKDIR /app/backend
 EXPOSE 4000
-CMD ["node", "server.js"]
+CMD ["node", "src/server.js"]
