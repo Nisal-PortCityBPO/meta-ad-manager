@@ -45,6 +45,10 @@ const launchTemplateConfigSchema = new mongoose.Schema(
       default: '',
       trim: true,
     },
+    countries: {
+      type: [String],
+      default: [],
+    },
     objective: {
       type: String,
       default: '',

@@ -3,6 +3,7 @@ import toast from 'react-hot-toast';
 import {
   AlertCircle,
   Check,
+  X,
   FolderOpen,
   Globe2,
   ImageIcon,
@@ -11,6 +12,7 @@ import {
   LoaderCircle,
   MousePointerClick,
   Pencil,
+  Plus,
   Rocket,
   Save,
   Trash2,
@@ -21,15 +23,16 @@ import {
 import DashboardHeader from '../../dashboard/components/DashboardHeader';
 import DashboardPanel from '../../dashboard/components/DashboardPanel';
 import { useTokens } from '../../token-management/hooks/useTokens';
+import { usePublishProgress } from '../../notifications/PublishProgressContext';
 import { adsLaunchApi } from '../api/adsLaunchApi';
 import { useLaunchTemplates } from '../hooks/useLaunchTemplates';
 import { useTokenMetaAssets } from '../hooks/useTokenMetaAssets';
 
 const countryOptions = [
-  { value: 'LK', label: 'Sri Lanka' },
-  { value: 'IN', label: 'India' },
   { value: 'ID', label: 'Indonesia' },
+  { value: 'IN', label: 'India' },
   { value: 'CN', label: 'China' },
+  { value: 'LK', label: 'Sri Lanka' },
   { value: 'AE', label: 'United Arab Emirates' },
   { value: 'GB', label: 'United Kingdom' },
   { value: 'US', label: 'United States' },
@@ -99,7 +102,8 @@ const defaultStaticDefaults = {
 const emptyForm = {
   launchLabel: '',
   tokenId: '',
-  country: 'LK',
+  country: 'ID',
+  countries: ['ID'],
   objective: 'OUTCOME_TRAFFIC',
   dailyBudget: '15',
   selectedAdAccountIds: [],
@@ -115,6 +119,7 @@ const emptyForm = {
 
 const createEmptyForm = () => ({
   ...emptyForm,
+  countries: [...emptyForm.countries],
   selectedAdAccountIds: [],
   staticDefaults: {
     ...defaultStaticDefaults,
@@ -186,6 +191,11 @@ const normalizeStoredAsset = (asset) => {
 
 const buildName = (...parts) => parts.filter(Boolean).join(' | ');
 
+const normalizeTemplateCountries = (config = {}) => {
+  const countries = Array.isArray(config.countries) ? config.countries.filter(Boolean) : [];
+  return countries.length ? countries : config.country ? [config.country] : ['ID'];
+};
+
 const MetricCard = ({ label, value, detail }) => (
   <div className="rounded-2xl border border-sky-100 bg-white px-4 py-4 shadow-sm shadow-sky-100/70">
     <p className="text-xs font-bold uppercase tracking-[0.18em] text-sky-600">{label}</p>
@@ -219,6 +229,13 @@ const AdsLaunchPage = () => {
     warnings,
   } = useTokenMetaAssets();
   const { error: templatesError, loadTemplates, loading: templatesLoading, templates } = useLaunchTemplates();
+  const {
+    beginPublish,
+    completePublish,
+    failPublish,
+    isPublishing: publishInProgress,
+    pushPublishEvent,
+  } = usePublishProgress();
 
   const [form, setForm] = useState(createEmptyForm);
   const [activeTemplateId, setActiveTemplateId] = useState('');
@@ -235,6 +252,10 @@ const AdsLaunchPage = () => {
   const [thumbnailPreviewUrl, setThumbnailPreviewUrl] = useState('');
 
   const activeTokens = useMemo(() => tokens.filter((token) => token.status === 'ACTIVE'), [tokens]);
+  const activeTemplate = useMemo(
+    () => templates.find((template) => template.id === activeTemplateId) || null,
+    [activeTemplateId, templates]
+  );
   const selectedToken = activeTokens.find((token) => token.id === form.tokenId) || null;
   const selectedPage = pages.find((page) => page.id === form.pageId) || null;
   const selectedPixel = pixels.find((pixel) => pixel.id === form.pixelId) || null;
@@ -242,7 +263,24 @@ const AdsLaunchPage = () => {
     () => adAccounts.filter((account) => form.selectedAdAccountIds.includes(account.id)),
     [adAccounts, form.selectedAdAccountIds]
   );
-  const selectedCountry = countryOptions.find((country) => country.value === form.country) || null;
+  const selectedCountryLabel = useMemo(
+    () =>
+      (form.countries || [])
+        .map((countryCode) => countryOptions.find((country) => country.value === countryCode)?.label || countryCode)
+        .join(', '),
+    [form.countries]
+  );
+  const selectedCountryOptions = useMemo(
+    () =>
+      (form.countries || []).map(
+        (countryCode) => countryOptions.find((country) => country.value === countryCode) || { value: countryCode, label: countryCode }
+      ),
+    [form.countries]
+  );
+  const availableCountryOptions = useMemo(
+    () => countryOptions.filter((country) => !(form.countries || []).includes(country.value)),
+    [form.countries]
+  );
   const activeMediaAsset = mediaFile
     ? {
         name: mediaFile.name,
@@ -264,6 +302,7 @@ const AdsLaunchPage = () => {
   const canGenerate = Boolean(
     form.tokenId &&
       form.launchLabel.trim() &&
+      (form.countries || []).length &&
       form.selectedAdAccountIds.length &&
       form.pageId &&
       (!pixelRequired || form.pixelId) &&
@@ -272,6 +311,7 @@ const AdsLaunchPage = () => {
       form.websiteUrl.trim()
   );
   const canPublish = Boolean(canGenerate && activeMediaAsset && (!isVideoAsset || activeThumbnailAsset));
+  const publishBusy = publishing || publishInProgress;
 
   useEffect(() => {
     if (!mediaFile) {
@@ -322,7 +362,7 @@ const AdsLaunchPage = () => {
   }, [form.pageId, pages]);
 
   useEffect(() => {
-    if (pixels.length === 1 && !form.pixelId) {
+    if (pixelRequired && pixels.length === 1 && !form.pixelId) {
       setForm((current) => ({
         ...current,
         pixelId: pixels[0].id,
@@ -336,7 +376,7 @@ const AdsLaunchPage = () => {
         pixelId: '',
       }));
     }
-  }, [form.pixelId, pixels]);
+  }, [form.pixelId, pixelRequired, pixels]);
 
   useEffect(() => {
     if (!adAccounts.length || !form.selectedAdAccountIds.length) {
@@ -357,11 +397,11 @@ const AdsLaunchPage = () => {
     () =>
       selectedAdAccounts.map((account, index) => ({
         account,
-        campaignName: buildName(form.launchLabel.trim(), selectedCountry?.label, `Campaign ${index + 1}`),
+        campaignName: buildName(form.launchLabel.trim(), selectedCountryLabel, `Campaign ${index + 1}`),
         adSetName: buildName(form.launchLabel.trim(), account.name, 'Ad Set'),
         adName: buildName(form.launchLabel.trim(), selectedPage?.name || 'Ad', `Creative ${index + 1}`),
       })),
-    [form.launchLabel, selectedAdAccounts, selectedCountry, selectedPage]
+    [form.launchLabel, selectedAdAccounts, selectedCountryLabel, selectedPage]
   );
 
   const updateField = (field, value) => {
@@ -369,6 +409,44 @@ const AdsLaunchPage = () => {
       ...current,
       [field]: value,
     }));
+  };
+
+  const addCountry = (countryCode) => {
+    if (!countryCode) {
+      return;
+    }
+
+    setForm((current) => {
+      if ((current.countries || []).includes(countryCode)) {
+        return current;
+      }
+
+      const countries = [...(current.countries || []), countryCode];
+
+      return {
+        ...current,
+        country: countries[0] || '',
+        countries,
+      };
+    });
+  };
+
+  const removeCountry = (countryCode) => {
+    setForm((current) => {
+      const currentCountries = current.countries || [];
+
+      if (currentCountries.length <= 1) {
+        return current;
+      }
+
+      const countries = currentCountries.filter((code) => code !== countryCode);
+
+      return {
+        ...current,
+        country: countries[0] || '',
+        countries,
+      };
+    });
   };
 
   const updateStaticDefault = (field, value) => {
@@ -461,9 +539,41 @@ const AdsLaunchPage = () => {
     };
   };
 
-  const buildTemplatePayload = async () => {
-    const media = await serializeAssetForTemplate(mediaFile);
-    const thumbnail = isVideoAsset ? await serializeAssetForTemplate(thumbnailFile) : null;
+  const serializeStoredAssetForTemplate = async (asset) => {
+    if (!asset?.url) {
+      return null;
+    }
+
+    const response = await fetch(asset.url, {
+      credentials: 'include',
+    });
+
+    if (!response.ok) {
+      throw new Error(`Failed to load saved asset "${asset.name}"`);
+    }
+
+    const blob = await response.blob();
+
+    return {
+      name: asset.name,
+      type: asset.type || blob.type,
+      dataUrl: await readFileAsDataUrl(blob),
+    };
+  };
+
+  const buildTemplatePayload = async ({ includeStoredAssets = false } = {}) => {
+    const media = mediaFile
+      ? await serializeAssetForTemplate(mediaFile)
+      : includeStoredAssets
+        ? await serializeStoredAssetForTemplate(savedMediaAsset)
+        : null;
+    const thumbnail = isVideoAsset
+      ? thumbnailFile
+        ? await serializeAssetForTemplate(thumbnailFile)
+        : includeStoredAssets
+          ? await serializeStoredAssetForTemplate(savedThumbnailAsset)
+          : null
+      : null;
 
     return {
       name: (templateName || form.launchLabel).trim(),
@@ -507,7 +617,9 @@ const AdsLaunchPage = () => {
       templateId: activeTemplateId || undefined,
       launchLabel: form.launchLabel.trim(),
       tokenId: form.tokenId,
-      country: form.country,
+      country: (form.countries || [])[0] || form.country,
+      countries: form.countries || [],
+      countryLabel: selectedCountryLabel,
       objective: form.objective,
       dailyBudget: form.dailyBudget,
       selectedAdAccountIds: form.selectedAdAccountIds,
@@ -534,18 +646,38 @@ const AdsLaunchPage = () => {
     };
   };
 
-  const handleSaveTemplate = async () => {
+  const getTemplateNameConflict = (name) => {
+    const normalizedName = name.trim().toLowerCase();
+    return templates.find((template) => template.name.trim().toLowerCase() === normalizedName) || null;
+  };
+
+  const saveTemplate = async ({ createNew = false } = {}) => {
     const nextTemplateName = (templateName || form.launchLabel).trim();
     if (!nextTemplateName) {
       toast.error('Add a template name or launch name before saving');
       return;
     }
 
+    if (createNew) {
+      if (activeTemplate && nextTemplateName.trim().toLowerCase() === activeTemplate.name.trim().toLowerCase()) {
+        toast.error('Use a different template name before creating a new template');
+        return;
+      }
+
+      const existingTemplate = getTemplateNameConflict(nextTemplateName);
+      if (existingTemplate) {
+        toast.error(`Template name already exists: "${existingTemplate.name}"`);
+        return;
+      }
+    }
+
     setSavingTemplate(true);
 
     try {
-      const payload = await buildTemplatePayload();
-      const data = activeTemplateId
+      const payload = await buildTemplatePayload({
+        includeStoredAssets: createNew,
+      });
+      const data = activeTemplateId && !createNew
         ? await adsLaunchApi.updateTemplate(activeTemplateId, payload)
         : await adsLaunchApi.createTemplate(payload);
 
@@ -562,6 +694,10 @@ const AdsLaunchPage = () => {
       setSavingTemplate(false);
     }
   };
+
+  const handleSaveTemplate = () => saveTemplate();
+
+  const handleCreateTemplate = () => saveTemplate({ createNew: true });
 
   const handleDeleteTemplate = async (template) => {
     if (!window.confirm(`Delete template "${template.name}"?`)) {
@@ -588,9 +724,13 @@ const AdsLaunchPage = () => {
   };
 
   const handleLoadTemplate = (template) => {
+    const countries = normalizeTemplateCountries(template.config);
+
     setForm({
       ...createEmptyForm(),
       ...template.config,
+      country: countries[0] || '',
+      countries,
       selectedAdAccountIds: Array.isArray(template.config.selectedAdAccountIds) ? template.config.selectedAdAccountIds : [],
       staticDefaults: {
         ...defaultStaticDefaults,
@@ -611,8 +751,8 @@ const AdsLaunchPage = () => {
     if (!canGenerate) {
       toast.error(
         pixelRequired
-          ? 'Select the token, ad accounts, page, shared pixel, and required copy fields first'
-          : 'Select the token, ad accounts, page, and required copy fields first'
+          ? 'Select countries, token, ad accounts, page, shared pixel, and required copy fields first'
+          : 'Select countries, token, ad accounts, page, and required copy fields first'
       );
       return;
     }
@@ -621,26 +761,37 @@ const AdsLaunchPage = () => {
   };
 
   const handlePublish = async () => {
+    if (publishBusy) {
+      toast.error('A publish is already processing. Open Notifications to watch the live process.');
+      return;
+    }
+
     if (!canPublish) {
       toast.error(
         canGenerate
           ? 'Add the creative file, and for video also upload a thumbnail before publishing'
           : pixelRequired
-            ? 'Complete the token, ad account, page, shared pixel, and copy fields before publishing'
-            : 'Complete the token, ad account, page, and copy fields before publishing'
+            ? 'Complete countries, token, ad account, page, shared pixel, and copy fields before publishing'
+            : 'Complete countries, token, ad account, page, and copy fields before publishing'
       );
       return;
     }
 
     setPublishing(true);
+    setLatestPublish(null);
+    beginPublish();
 
     try {
       const payload = await buildPublishPayload();
-      const data = await adsLaunchApi.publishLaunch(payload);
+      const data = await adsLaunchApi.publishLaunchStream(payload, {
+        onProgress: pushPublishEvent,
+      });
       setLatestPublish(data);
+      completePublish(data);
       await loadTemplates();
       toast.success(data.message);
     } catch (requestError) {
+      failPublish(requestError.message);
       toast.error(requestError.message);
     } finally {
       setPublishing(false);
@@ -670,6 +821,17 @@ const AdsLaunchPage = () => {
               <Save size={16} strokeWidth={2.2} />
               {activeTemplateId ? 'Update template' : 'Save template'}
             </button>
+            {activeTemplateId ? (
+              <button
+                type="button"
+                onClick={handleCreateTemplate}
+                disabled={savingTemplate}
+                className="flex h-11 items-center gap-2 rounded-xl bg-sky-600 px-4 text-sm font-bold text-white transition hover:bg-sky-700 disabled:opacity-70"
+              >
+                <Plus size={16} strokeWidth={2.2} />
+                Create new template
+              </button>
+            ) : null}
           </div>
         }
       />
@@ -726,19 +888,45 @@ const AdsLaunchPage = () => {
               </div>
 
               <div className="space-y-2">
-                <FieldLabel htmlFor="country">Country</FieldLabel>
-                <select
-                  id="country"
-                  value={form.country}
-                  onChange={(event) => updateField('country', event.target.value)}
-                  className="h-12 w-full rounded-xl border border-sky-100 bg-white px-4 outline-none transition focus:border-sky-400 focus:ring-4 focus:ring-sky-100"
-                >
-                  {countryOptions.map((country) => (
-                    <option key={country.value} value={country.value}>
-                      {country.label}
-                    </option>
-                  ))}
-                </select>
+                <FieldLabel htmlFor="country-add">Countries</FieldLabel>
+                <div className="min-h-12 rounded-xl border border-sky-100 bg-white px-3 py-2">
+                  <div className="flex flex-wrap gap-2">
+                    {selectedCountryOptions.map((country) => (
+                      <span
+                        key={country.value}
+                        className="inline-flex max-w-full items-center gap-2 rounded-full bg-sky-50 px-3 py-1.5 text-sm font-black text-sky-800"
+                      >
+                        <span className="truncate">{country.label}</span>
+                        <span className="text-xs text-sky-500">{country.value}</span>
+                        <button
+                          type="button"
+                          onClick={() => removeCountry(country.value)}
+                          disabled={selectedCountryOptions.length <= 1}
+                          className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-white text-sky-600 transition hover:text-red-600 disabled:cursor-not-allowed disabled:text-slate-300"
+                          aria-label={`Remove ${country.label}`}
+                          title={selectedCountryOptions.length <= 1 ? 'At least one country is required' : `Remove ${country.label}`}
+                        >
+                          <X size={12} strokeWidth={2.6} />
+                        </button>
+                      </span>
+                    ))}
+                  </div>
+
+                  <select
+                    id="country-add"
+                    value=""
+                    onChange={(event) => addCountry(event.target.value)}
+                    disabled={!availableCountryOptions.length}
+                    className="mt-3 h-10 w-full rounded-lg border border-sky-100 bg-sky-50/60 px-3 text-sm font-bold text-slate-700 outline-none transition focus:border-sky-400 focus:ring-4 focus:ring-sky-100 disabled:text-slate-300"
+                  >
+                    <option value="">{availableCountryOptions.length ? 'Add country' : 'All countries selected'}</option>
+                    {availableCountryOptions.map((country) => (
+                      <option key={country.value} value={country.value}>
+                        {country.label} ({country.value})
+                      </option>
+                    ))}
+                  </select>
+                </div>
               </div>
             </div>
 
@@ -869,7 +1057,7 @@ const AdsLaunchPage = () => {
                   helper={
                     pixelRequired
                       ? 'Shared pixels are required for leads and sales. Only common pixels across the selected accounts are shown.'
-                      : 'Shared pixels are optional for traffic and engagement. When available, you can still attach one here.'
+                      : 'Shared pixels are optional for traffic and engagement. A shared pixel can be kept in the template, but publish does not depend on it for those objectives.'
                   }
                 >
                   <select
@@ -1052,14 +1240,25 @@ const AdsLaunchPage = () => {
                 {savingTemplate ? <LoaderCircle size={17} strokeWidth={2.2} className="animate-spin" /> : <Save size={17} strokeWidth={2.2} />}
                 {activeTemplateId ? 'Update template' : 'Save template'}
               </button>
+              {activeTemplateId ? (
+                <button
+                  type="button"
+                  onClick={handleCreateTemplate}
+                  disabled={savingTemplate}
+                  className="flex h-11 w-full items-center justify-center gap-2 rounded-xl border border-sky-100 bg-white px-5 text-sm font-bold text-slate-700 transition hover:bg-sky-50 disabled:opacity-70 sm:w-auto"
+                >
+                  <Plus size={17} strokeWidth={2.2} />
+                  Create new template
+                </button>
+              ) : null}
               <button
                 type="button"
                 onClick={handlePublish}
-                disabled={publishing}
+                disabled={publishBusy}
                 className="flex h-11 w-full items-center justify-center gap-2 rounded-xl bg-slate-950 px-5 text-sm font-bold text-white transition hover:bg-slate-800 disabled:opacity-70 sm:w-auto"
               >
-                {publishing ? <LoaderCircle size={17} strokeWidth={2.2} className="animate-spin" /> : <Rocket size={17} strokeWidth={2.2} />}
-                Publish to Meta
+                {publishBusy ? <LoaderCircle size={17} strokeWidth={2.2} className="animate-spin" /> : <Rocket size={17} strokeWidth={2.2} />}
+                {publishBusy ? 'Publishing...' : 'Publish to Meta'}
               </button>
             </div>
           </form>

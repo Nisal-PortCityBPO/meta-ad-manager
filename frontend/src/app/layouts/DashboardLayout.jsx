@@ -1,13 +1,30 @@
+import { useEffect } from 'react';
 import { NavLink, Outlet, useNavigate } from 'react-router-dom';
 import toast from 'react-hot-toast';
-import { BarChart3, Bell, ClipboardList, KeyRound, LayoutDashboard, LogOut, UserCircle, Users, Megaphone  } from 'lucide-react';
+import {
+  BarChart3,
+  Bell,
+  CheckCircle2,
+  ClipboardList,
+  FolderKanban,
+  KeyRound,
+  LayoutDashboard,
+  LoaderCircle,
+  LogOut,
+  Megaphone,
+  UserCircle,
+  Users,
+  XCircle,
+} from 'lucide-react';
 import { USER_ROLES, useAuth } from '../../features/auth/hooks/useAuth';
+import { PublishProgressProvider, usePublishProgress } from '../../features/notifications/PublishProgressContext';
 import brandLogo from '../../assets/200m-logo.png';
 
 const navItemsConfig = [
   { to: '/dashboard', label: 'Dashboard', icon: LayoutDashboard },
   { to: '/overview', label: 'Overview', icon: BarChart3 },
   { to: '/ads-launch', label: 'Ads Launch', icon: Megaphone, roles: [USER_ROLES.SUPER_ADMIN, USER_ROLES.ADMIN] },
+  { to: '/ads-manage', label: 'Ads Manage', icon: FolderKanban, roles: [USER_ROLES.SUPER_ADMIN, USER_ROLES.ADMIN] },
   { to: '/tokens', label: 'Token Management', icon: KeyRound, roles: [USER_ROLES.SUPER_ADMIN, USER_ROLES.ADMIN] },
   { to: '/users', label: 'Users', icon: Users, roles: [USER_ROLES.SUPER_ADMIN] },
   { to: '/activity-logs', label: 'Activity Logs', icon: ClipboardList, roles: [USER_ROLES.SUPER_ADMIN] },
@@ -15,7 +32,72 @@ const navItemsConfig = [
   { to: '/profile', label: 'Profile', icon: UserCircle },
 ];
 
-const DashboardLayout = () => {
+const PublishStatusControl = ({ onOpen }) => {
+  const { dismissStartPopup, isPublishing, latestError, latestResult, progress, showStartPopup } = usePublishProgress();
+  const percent = progress?.progress?.percent || 0;
+  const hasPublishState = Boolean(isPublishing || progress || latestResult || latestError);
+  const statusLabel = isPublishing ? 'Publishing ads' : latestError ? 'Publish failed' : latestResult ? 'Publish complete' : 'Publish status';
+  const ringStyle = {
+    background: `conic-gradient(#84cc16 ${percent * 3.6}deg, #e2e8f0 0deg)`,
+  };
+
+  useEffect(() => {
+    if (!showStartPopup) {
+      return undefined;
+    }
+
+    const timeoutId = window.setTimeout(dismissStartPopup, 6000);
+    return () => window.clearTimeout(timeoutId);
+  }, [dismissStartPopup, showStartPopup]);
+
+  return (
+    <div className="relative">
+      {hasPublishState ? (
+        <button
+          type="button"
+          onClick={onOpen}
+          className="relative flex h-11 w-11 items-center justify-center rounded-full border border-sky-100 bg-white shadow-sm transition hover:bg-sky-50"
+          aria-label={statusLabel}
+          title={statusLabel}
+        >
+          <span className="absolute inset-1 rounded-full" style={ringStyle} />
+          <span className="relative flex h-8 w-8 items-center justify-center rounded-full bg-white text-slate-900 shadow-inner">
+            {isPublishing ? (
+              <LoaderCircle size={17} strokeWidth={2.4} className="animate-spin text-lime-600" />
+            ) : latestError ? (
+              <XCircle size={17} strokeWidth={2.4} className="text-red-600" />
+            ) : (
+              <CheckCircle2 size={17} strokeWidth={2.4} className="text-emerald-600" />
+            )}
+          </span>
+        </button>
+      ) : null}
+
+      {showStartPopup ? (
+        <button
+          type="button"
+          onClick={() => {
+            dismissStartPopup();
+            onOpen();
+          }}
+          className="absolute right-0 top-14 z-30 w-72 rounded-2xl border border-sky-100 bg-white p-4 text-left shadow-xl shadow-sky-200/70"
+        >
+          <div className="flex items-center gap-3">
+            <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-lime-50 text-lime-700">
+              <LoaderCircle size={18} strokeWidth={2.4} className="animate-spin" />
+            </span>
+            <div className="min-w-0">
+              <p className="text-sm font-black text-slate-950">Ad publish started</p>
+              <p className="mt-1 truncate text-xs font-semibold text-slate-500">{progress?.message || 'Preparing Meta publish process'}</p>
+            </div>
+          </div>
+        </button>
+      ) : null}
+    </div>
+  );
+};
+
+const DashboardShell = () => {
   const navigate = useNavigate();
   const { user, logout, hasRole } = useAuth();
   const navItems = navItemsConfig.filter((item) => !item.roles || hasRole(item.roles));
@@ -82,6 +164,7 @@ const DashboardLayout = () => {
               <h1 className="text-xl font-black text-slate-950">{user?.name}</h1>
             </div>
             <div className="flex items-center gap-2">
+              <PublishStatusControl onOpen={() => navigate('/notifications')} />
               <button
                 type="button"
                 onClick={() => navigate('/notifications')}
@@ -117,5 +200,11 @@ const DashboardLayout = () => {
     </div>
   );
 };
+
+const DashboardLayout = () => (
+  <PublishProgressProvider>
+    <DashboardShell />
+  </PublishProgressProvider>
+);
 
 export default DashboardLayout;

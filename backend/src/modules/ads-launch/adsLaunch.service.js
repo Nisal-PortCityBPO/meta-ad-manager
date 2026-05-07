@@ -16,13 +16,7 @@ const SUPPORTED_OBJECTIVES = Object.freeze({
     requiresPixel: false,
     optimizationGoal: 'LINK_CLICKS',
     destinationType: 'WEBSITE',
-    buildPromotedObject: ({ pixelId }) =>
-      pixelId
-        ? {
-            pixel_id: pixelId,
-            custom_event_type: 'PAGE_VIEW',
-          }
-        : null,
+    buildPromotedObject: () => null,
   },
   OUTCOME_ENGAGEMENT: {
     requiresPixel: false,
@@ -83,6 +77,7 @@ const DEFAULT_STATIC_DEFAULTS = Object.freeze({
   billingEvent: 'IMPRESSIONS',
   bidStrategy: 'LOWEST_COST_WITHOUT_CAP',
 });
+const SPECIAL_AD_CATEGORY_NONE = 'NONE';
 
 function isSuperAdmin(user) {
   return user?.role === USER_ROLES.SUPER_ADMIN;
@@ -106,11 +101,15 @@ function dedupeStrings(values) {
 
 function sanitizeTemplateConfig(input = {}) {
   const staticDefaults = input.staticDefaults || {};
+  const countries = dedupeStrings(input.countries);
+  const fallbackCountry = normalizeText(input.country);
+  const normalizedCountries = countries.length ? countries : fallbackCountry ? [fallbackCountry] : [];
 
   return {
     launchLabel: normalizeText(input.launchLabel),
     tokenId: normalizeText(input.tokenId),
-    country: normalizeText(input.country),
+    country: normalizedCountries[0] || '',
+    countries: normalizedCountries,
     objective: normalizeText(input.objective),
     dailyBudget: normalizeText(input.dailyBudget),
     selectedAdAccountIds: dedupeStrings(input.selectedAdAccountIds),
@@ -172,6 +171,102 @@ function sanitizeTemplateAssetInput(asset) {
     type: mimeType,
     dataUrl,
   };
+}
+
+function sanitizeCountries({ countries, country }) {
+  const normalizedCountries = dedupeStrings(countries);
+  const fallbackCountry = normalizeText(country);
+  return normalizedCountries.length ? normalizedCountries : fallbackCountry ? [fallbackCountry] : [];
+}
+
+function parseMetaErrorData(errorData) {
+  if (!errorData) {
+    return null;
+  }
+
+  if (typeof errorData === 'object') {
+    return errorData;
+  }
+
+  try {
+    return JSON.parse(errorData);
+  } catch (error) {
+    return null;
+  }
+}
+
+function buildMetaErrorMessage(path, payload) {
+  const error = payload?.error;
+
+  if (!error) {
+    return `Meta API request failed for ${path}`;
+  }
+
+  const message = normalizeText(error.message) || `Meta API request failed for ${path}`;
+  const userTitle = normalizeText(error.error_user_title);
+  const userMessage = normalizeText(error.error_user_msg);
+  const errorData = parseMetaErrorData(error.error_data);
+  const blameField = normalizeText(errorData?.blame_field);
+  const details = [];
+
+  if (userTitle && userTitle !== message) {
+    details.push(userTitle);
+  }
+
+  if (userMessage && userMessage !== message) {
+    details.push(userMessage);
+  }
+
+  if (blameField) {
+    details.push(`Field: ${blameField}`);
+  }
+
+  return details.length ? `${message}. ${details.join('. ')}` : message;
+}
+
+function getSpecialAdCategoriesValue(value) {
+  const normalizedValue = normalizeText(value) || SPECIAL_AD_CATEGORY_NONE;
+  return normalizedValue === SPECIAL_AD_CATEGORY_NONE ? [] : [normalizedValue];
+}
+
+function isSpecialAdCategoryCampaign(value) {
+  return getSpecialAdCategoriesValue(value).length > 0;
+}
+
+function resolveBuyingType(value) {
+  const buyingType = normalizeText(value) || DEFAULT_STATIC_DEFAULTS.buyingType;
+
+  if (buyingType !== 'AUCTION') {
+    throw new HttpError(400, 'Only auction buying type is supported by this launcher');
+  }
+
+  return buyingType;
+}
+
+function resolveBillingEvent({ objective, billingEvent }) {
+  const normalizedBillingEvent = normalizeText(billingEvent) || DEFAULT_STATIC_DEFAULTS.billingEvent;
+
+  if (objective === 'OUTCOME_TRAFFIC' && normalizedBillingEvent === 'LINK_CLICKS') {
+    return 'LINK_CLICKS';
+  }
+
+  return 'IMPRESSIONS';
+}
+
+function resolveBidStrategy(value) {
+  const bidStrategy = normalizeText(value) || DEFAULT_STATIC_DEFAULTS.bidStrategy;
+
+  if (bidStrategy === 'COST_CAP') {
+    throw new HttpError(400, 'Cost cap is not supported by this launcher because no bid amount is configured');
+  }
+
+  return DEFAULT_STATIC_DEFAULTS.bidStrategy;
+}
+
+function validateAssetMimeType({ mimeType, label, allowedPrefixes }) {
+  if (!allowedPrefixes.some((prefix) => String(mimeType || '').startsWith(prefix))) {
+    throw new HttpError(400, `${label} must be ${allowedPrefixes.map((prefix) => prefix.replace('/', '')).join(' or ')}`);
+  }
 }
 
 function ensureTemplateAssetDir() {
@@ -237,7 +332,9 @@ function deleteTemplateStoredAssets(template) {
 }
 
 function persistTemplateAsset({ templateId, asset, assetKind }) {
-  const parsed = parseDataUrlFile(asset, assetKind === 'thumbnail' ? 'Thumbnail' : 'Creative');
+  const parsed = parseDataUrlFile(asset, assetKind === 'thumbnail' ? 'Thumbnail' : 'Creative', {
+    allowedMimeTypePrefixes: assetKind === 'thumbnail' ? ['image/'] : ['image/', 'video/'],
+  });
   const extension = getAssetFileExtension(parsed.name, parsed.mimeType);
   const storageKey = `${templateId}-${assetKind}-${Date.now()}${extension}`;
   const filePath = path.join(TEMPLATE_ASSET_DIR, storageKey);
@@ -435,7 +532,7 @@ async function deleteTemplate({ templateId, actor, req }) {
   });
 }
 
-function parseDataUrlFile(file, label) {
+function parseDataUrlFile(file, label, options = {}) {
   if (!file?.dataUrl || !file?.name) {
     throw new HttpError(400, `${label} is required`);
   }
@@ -445,11 +542,21 @@ function parseDataUrlFile(file, label) {
     throw new HttpError(400, `${label} must be a valid uploaded file`);
   }
 
-  return {
+  const parsed = {
     name: normalizeText(file.name) || label,
     mimeType: normalizeText(file.type) || match[1],
     buffer: Buffer.from(match[2], 'base64'),
   };
+
+  if (Array.isArray(options.allowedMimeTypePrefixes) && options.allowedMimeTypePrefixes.length) {
+    validateAssetMimeType({
+      mimeType: parsed.mimeType,
+      label,
+      allowedPrefixes: options.allowedMimeTypePrefixes,
+    });
+  }
+
+  return parsed;
 }
 
 function buildGraphUrl(path, { videoHost = false } = {}) {
@@ -481,17 +588,19 @@ async function postToMeta({ token, path, params = {}, formData = null, videoHost
   });
 
   await tokenService.recordTokenApiCall(token.id);
-  const payload = await response.json();
+  const payload = await response.json().catch(() => ({}));
 
   if (!response.ok || payload.error) {
-    throw new HttpError(400, payload.error?.message || `Meta API request failed for ${path}`);
+    throw new HttpError(400, buildMetaErrorMessage(path, payload));
   }
 
   return payload;
 }
 
 async function uploadImage({ token, adAccountId, file }) {
-  const parsed = parseDataUrlFile(file, 'Image');
+  const parsed = parseDataUrlFile(file, 'Image', {
+    allowedMimeTypePrefixes: ['image/'],
+  });
   const formData = new FormData();
   formData.set('filename', new Blob([parsed.buffer], { type: parsed.mimeType }), parsed.name);
 
@@ -513,7 +622,9 @@ async function uploadImage({ token, adAccountId, file }) {
 }
 
 async function uploadVideo({ token, adAccountId, file }) {
-  const parsed = parseDataUrlFile(file, 'Video');
+  const parsed = parseDataUrlFile(file, 'Video', {
+    allowedMimeTypePrefixes: ['video/'],
+  });
   const formData = new FormData();
   formData.set('source', new Blob([parsed.buffer], { type: parsed.mimeType }), parsed.name);
 
@@ -548,11 +659,17 @@ function toMetaBudget(value, currency) {
 
 function ensurePublishPayload(payload) {
   const staticDefaults = payload.staticDefaults || {};
+  const countries = sanitizeCountries({
+    countries: payload.countries,
+    country: payload.country,
+  });
   const cleaned = {
     templateId: normalizeText(payload.templateId),
     launchLabel: normalizeText(payload.launchLabel),
     tokenId: normalizeText(payload.tokenId),
-    country: normalizeText(payload.country),
+    country: countries[0] || '',
+    countries,
+    countryLabel: normalizeText(payload.countryLabel),
     objective: normalizeText(payload.objective),
     dailyBudget: normalizeText(payload.dailyBudget),
     selectedAdAccountIds: dedupeStrings(payload.selectedAdAccountIds),
@@ -603,8 +720,8 @@ function ensurePublishPayload(payload) {
     throw new HttpError(400, 'Unsupported campaign objective');
   }
 
-  if (!cleaned.country) {
-    throw new HttpError(400, 'Country is required');
+  if (!cleaned.countries.length) {
+    throw new HttpError(400, 'Select at least one country');
   }
 
   if (!cleaned.selectedAdAccountIds.length) {
@@ -646,7 +763,64 @@ function buildNames({ launchLabel, countryLabel, adAccountName, pageName, index 
   };
 }
 
+function createPublishProgressReporter({ onProgress, totalSteps }) {
+  let completedSteps = 0;
+  const startedAt = Date.now();
+
+  const getProgress = () => {
+    const elapsedSeconds = Math.max(Math.round((Date.now() - startedAt) / 1000), 0);
+    const averageStepSeconds = completedSteps > 0 ? elapsedSeconds / completedSteps : null;
+    const remainingSteps = Math.max(totalSteps - completedSteps, 0);
+
+    return {
+      completed: completedSteps,
+      total: totalSteps,
+      percent: totalSteps ? Math.round((completedSteps / totalSteps) * 100) : 0,
+      elapsedSeconds,
+      etaSeconds: averageStepSeconds === null ? null : Math.max(Math.round(remainingSteps * averageStepSeconds), 0),
+    };
+  };
+
+  const emit = (event) => {
+    if (typeof onProgress !== 'function') {
+      return;
+    }
+
+    onProgress({
+      type: 'progress',
+      timestamp: new Date().toISOString(),
+      progress: getProgress(),
+      ...event,
+    });
+  };
+
+  return {
+    complete(event) {
+      completedSteps += 1;
+      emit({
+        status: 'completed',
+        ...event,
+      });
+    },
+    fail(event) {
+      emit({
+        status: 'failed',
+        ...event,
+      });
+    },
+    info(event) {
+      emit(event);
+    },
+  };
+}
+
+function getPublishStepCountPerAccount(media) {
+  return String(media?.type || '').startsWith('video/') ? 6 : 5;
+}
+
 async function createCampaign({ token, adAccountId, name, objective, staticDefaults }) {
+  const specialAdCategories = getSpecialAdCategoriesValue(staticDefaults.specialAdCategories);
+
   return postToMeta({
     token,
     path: `${adAccountId}/campaigns`,
@@ -654,11 +828,10 @@ async function createCampaign({ token, adAccountId, name, objective, staticDefau
       name,
       objective,
       status: staticDefaults.campaignStatus || DEFAULT_STATIC_DEFAULTS.campaignStatus,
-      buying_type: staticDefaults.buyingType || DEFAULT_STATIC_DEFAULTS.buyingType,
-      special_ad_categories:
-        staticDefaults.specialAdCategories && staticDefaults.specialAdCategories !== 'NONE'
-          ? [staticDefaults.specialAdCategories]
-          : [],
+      buying_type: resolveBuyingType(staticDefaults.buyingType),
+      special_ad_categories: specialAdCategories,
+      special_ad_category_country: specialAdCategories.length ? staticDefaults.countries : undefined,
+      is_adset_budget_sharing_enabled: false,
     },
   });
 }
@@ -671,7 +844,7 @@ async function createAdSet({
   objective,
   dailyBudget,
   currency,
-  country,
+  countries,
   pageId,
   pixelId,
   staticDefaults,
@@ -679,29 +852,36 @@ async function createAdSet({
   const settings = SUPPORTED_OBJECTIVES[objective];
   const ageMin = Number.parseInt(staticDefaults.audienceAgeMin, 10);
   const ageMax = Number.parseInt(staticDefaults.audienceAgeMax, 10);
+  const isSpecialAdCategory = isSpecialAdCategoryCampaign(staticDefaults.specialAdCategories);
   const targeting = {
     geo_locations: {
-      countries: [country],
+      countries,
     },
-    age_min: Number.isFinite(ageMin) ? ageMin : 18,
-    age_max: Number.isFinite(ageMax) ? ageMax : 65,
   };
 
-  if ((staticDefaults.genderTargeting || DEFAULT_STATIC_DEFAULTS.genderTargeting) === 'MALE') {
-    targeting.genders = [1];
-  }
+  if (!isSpecialAdCategory) {
+    targeting.age_min = Number.isFinite(ageMin) ? ageMin : 18;
+    targeting.age_max = Number.isFinite(ageMax) ? ageMax : 65;
 
-  if ((staticDefaults.genderTargeting || DEFAULT_STATIC_DEFAULTS.genderTargeting) === 'FEMALE') {
-    targeting.genders = [2];
+    if ((staticDefaults.genderTargeting || DEFAULT_STATIC_DEFAULTS.genderTargeting) === 'MALE') {
+      targeting.genders = [1];
+    }
+
+    if ((staticDefaults.genderTargeting || DEFAULT_STATIC_DEFAULTS.genderTargeting) === 'FEMALE') {
+      targeting.genders = [2];
+    }
   }
 
   const params = {
     name,
     campaign_id: campaignId,
     daily_budget: toMetaBudget(dailyBudget, currency),
-    billing_event: staticDefaults.billingEvent || DEFAULT_STATIC_DEFAULTS.billingEvent,
+    billing_event: resolveBillingEvent({
+      objective,
+      billingEvent: staticDefaults.billingEvent,
+    }),
     optimization_goal: settings.optimizationGoal,
-    bid_strategy: staticDefaults.bidStrategy || DEFAULT_STATIC_DEFAULTS.bidStrategy,
+    bid_strategy: resolveBidStrategy(staticDefaults.bidStrategy),
     status: staticDefaults.campaignStatus || DEFAULT_STATIC_DEFAULTS.campaignStatus,
     targeting,
   };
@@ -734,76 +914,113 @@ async function createAdCreative({
   callToAction,
   media,
   thumbnail,
+  progress,
+  progressContext,
 }) {
   if (String(media.type || '').startsWith('video/')) {
-    const uploadedVideo = await uploadVideo({
-      token,
-      adAccountId,
-      file: media,
-    });
-
-    const uploadedThumbnail = thumbnail
-      ? await uploadImage({
+    const uploadedVideo = await runPublishStep(
+      'Video upload',
+      () =>
+        uploadVideo({
           token,
           adAccountId,
-          file: thumbnail,
-        })
+          file: media,
+        }),
+      progress,
+      progressContext,
+      'video-upload'
+    );
+
+    const uploadedThumbnail = thumbnail
+      ? await runPublishStep(
+          'Thumbnail upload',
+          () =>
+            uploadImage({
+              token,
+              adAccountId,
+              file: thumbnail,
+            }),
+          progress,
+          progressContext,
+          'thumbnail-upload'
+        )
       : null;
 
-    return postToMeta({
-      token,
-      path: `${adAccountId}/adcreatives`,
-      params: {
-        name,
-        object_story_spec: {
-          page_id: pageId,
-          video_data: {
-            video_id: uploadedVideo.id,
-            title: headline,
-            message: primaryText,
-            link_description: description || undefined,
-            image_hash: uploadedThumbnail?.hash,
-            call_to_action: {
-              type: callToAction,
-              value: {
-                link: websiteUrl,
+    return runPublishStep(
+      'Creative creation',
+      () =>
+        postToMeta({
+          token,
+          path: `${adAccountId}/adcreatives`,
+          params: {
+            name,
+            object_story_spec: {
+              page_id: pageId,
+              video_data: {
+                video_id: uploadedVideo.id,
+                title: headline,
+                message: primaryText,
+                link_description: description || undefined,
+                image_hash: uploadedThumbnail?.hash,
+                call_to_action: {
+                  type: callToAction,
+                  value: {
+                    link: websiteUrl,
+                  },
+                },
+              },
+            },
+          },
+        }),
+      progress,
+      progressContext,
+      'creative'
+    );
+  }
+
+  const uploadedImage = await runPublishStep(
+    'Image upload',
+    () =>
+      uploadImage({
+        token,
+        adAccountId,
+        file: media,
+      }),
+    progress,
+    progressContext,
+    'image-upload'
+  );
+
+  return runPublishStep(
+    'Creative creation',
+    () =>
+      postToMeta({
+        token,
+        path: `${adAccountId}/adcreatives`,
+        params: {
+          name,
+          object_story_spec: {
+            page_id: pageId,
+            link_data: {
+              link: websiteUrl,
+              message: primaryText,
+              name: headline,
+              description: description || undefined,
+              image_hash: uploadedImage.hash,
+              call_to_action: {
+                type: callToAction,
+                value: {
+                  link: websiteUrl,
+                },
               },
             },
           },
         },
-      },
-    });
-  }
-
-  const uploadedImage = await uploadImage({
-    token,
-    adAccountId,
-    file: media,
-  });
-
-  return postToMeta({
-    token,
-    path: `${adAccountId}/adcreatives`,
-    params: {
-      name,
-      object_story_spec: {
-        page_id: pageId,
-        link_data: {
-          link: websiteUrl,
-          message: primaryText,
-          name: headline,
-          description: description || undefined,
-          image_hash: uploadedImage.hash,
-          call_to_action: {
-            type: callToAction,
-            value: {
-              link: websiteUrl,
-            },
-          },
-        },
-      },
-    },
-  });
+      }),
+    progress,
+    progressContext,
+    'creative'
+  );
 }
 
 async function createAd({ token, adAccountId, adSetId, creativeId, name, staticDefaults }) {
@@ -837,6 +1054,49 @@ async function markTemplatePublished(templateId, actor) {
 
   template.lastPublishedAt = new Date();
   await template.save();
+}
+
+function ensureCreativeAssetsArePublishable({ media, thumbnail }) {
+  validateAssetMimeType({
+    mimeType: media?.type,
+    label: 'Creative',
+    allowedPrefixes: ['image/', 'video/'],
+  });
+
+  if (thumbnail) {
+    validateAssetMimeType({
+      mimeType: thumbnail.type,
+      label: 'Thumbnail',
+      allowedPrefixes: ['image/'],
+    });
+  }
+}
+
+async function runPublishStep(stepLabel, operation, progress = null, progressContext = {}, step = '') {
+  progress?.info({
+    ...progressContext,
+    step,
+    status: 'active',
+    message: `${progressContext.accountLabel || 'Account'}: ${stepLabel}`,
+  });
+
+  try {
+    const result = await operation();
+    progress?.complete({
+      ...progressContext,
+      step,
+      message: `${progressContext.accountLabel || 'Account'}: ${stepLabel} complete`,
+    });
+    return result;
+  } catch (error) {
+    progress?.fail({
+      ...progressContext,
+      step,
+      error: error.message,
+      message: `${progressContext.accountLabel || 'Account'}: ${stepLabel} failed`,
+    });
+    throw new HttpError(error.statusCode || 400, `${stepLabel} failed. ${error.message}`);
+  }
 }
 
 async function getTemplateAssetForActor({ templateId, assetKind, actor }) {
@@ -885,12 +1145,18 @@ async function resolvePublishCreativeAssets({ launch, actor }) {
   };
 }
 
-async function publishLaunch({ payload, actor, req }) {
+async function publishLaunch({ payload, actor, req, onProgress = null }) {
   const launch = ensurePublishPayload(payload);
+  launch.staticDefaults = {
+    ...launch.staticDefaults,
+    country: launch.country,
+    countries: launch.countries,
+  };
   const creativeAssets = await resolvePublishCreativeAssets({
     launch,
     actor,
   });
+  ensureCreativeAssetsArePublishable(creativeAssets);
 
   if (String(creativeAssets.media.type || '').startsWith('video/') && !creativeAssets.thumbnail) {
     throw new HttpError(400, 'Video publishing requires a thumbnail image');
@@ -900,6 +1166,17 @@ async function publishLaunch({ payload, actor, req }) {
   const accountMap = new Map(launch.selectedAdAccounts.map((account) => [account.id, account]));
   const results = [];
   const failed = [];
+  const progress = createPublishProgressReporter({
+    onProgress,
+    totalSteps: launch.selectedAdAccountIds.length * getPublishStepCountPerAccount(creativeAssets.media),
+  });
+
+  progress.info({
+    step: 'prepare',
+    status: 'active',
+    message: `Preparing ${launch.selectedAdAccountIds.length} ad account publish`,
+    totalAccounts: launch.selectedAdAccountIds.length,
+  });
 
   for (const [index, adAccountId] of launch.selectedAdAccountIds.entries()) {
     const selectedAccount = accountMap.get(adAccountId) || {
@@ -907,36 +1184,61 @@ async function publishLaunch({ payload, actor, req }) {
       name: adAccountId,
       currency: '',
     };
+    const accountLabel = `Ad account ${index + 1}/${launch.selectedAdAccountIds.length} (${selectedAccount.name})`;
+    const progressContext = {
+      accountIndex: index + 1,
+      totalAccounts: launch.selectedAdAccountIds.length,
+      adAccountId,
+      adAccountName: selectedAccount.name,
+      accountLabel,
+    };
     const names = buildNames({
       launchLabel: launch.launchLabel,
-      countryLabel: launch.country,
+      countryLabel: launch.countryLabel || launch.countries.join(', '),
       adAccountName: selectedAccount.name,
       pageName: launch.pageName || launch.pageId,
       index,
     });
 
     try {
-      const campaign = await createCampaign({
-        token,
-        adAccountId,
-        name: names.campaignName,
-        objective: launch.objective,
-        staticDefaults: launch.staticDefaults,
+      progress.info({
+        ...progressContext,
+        step: 'account',
+        status: 'active',
+        message: `${accountLabel}: starting`,
       });
 
-      const adSet = await createAdSet({
-        token,
-        adAccountId,
-        campaignId: campaign.id,
-        name: names.adSetName,
-        objective: launch.objective,
-        dailyBudget: launch.dailyBudget,
-        currency: selectedAccount.currency,
-        country: launch.country,
-        pageId: launch.pageId,
-        pixelId: launch.pixelId,
-        staticDefaults: launch.staticDefaults,
-      });
+      const campaign = await runPublishStep('Campaign creation', () =>
+        createCampaign({
+          token,
+          adAccountId,
+          name: names.campaignName,
+          objective: launch.objective,
+          staticDefaults: launch.staticDefaults,
+        }),
+        progress,
+        progressContext,
+        'campaign'
+      );
+
+      const adSet = await runPublishStep('Ad set creation', () =>
+        createAdSet({
+          token,
+          adAccountId,
+          campaignId: campaign.id,
+          name: names.adSetName,
+          objective: launch.objective,
+          dailyBudget: launch.dailyBudget,
+          currency: selectedAccount.currency,
+          countries: launch.countries,
+          pageId: launch.pageId,
+          pixelId: launch.pixelId,
+          staticDefaults: launch.staticDefaults,
+        }),
+        progress,
+        progressContext,
+        'ad-set'
+      );
 
       const creative = await createAdCreative({
         token,
@@ -950,16 +1252,23 @@ async function publishLaunch({ payload, actor, req }) {
         callToAction: launch.callToAction,
         media: creativeAssets.media,
         thumbnail: creativeAssets.thumbnail,
+        progress,
+        progressContext,
       });
 
-      const ad = await createAd({
-        token,
-        adAccountId,
-        adSetId: adSet.id,
-        creativeId: creative.id,
-        name: names.adName,
-        staticDefaults: launch.staticDefaults,
-      });
+      const ad = await runPublishStep('Ad creation', () =>
+        createAd({
+          token,
+          adAccountId,
+          adSetId: adSet.id,
+          creativeId: creative.id,
+          name: names.adName,
+          staticDefaults: launch.staticDefaults,
+        }),
+        progress,
+        progressContext,
+        'ad'
+      );
 
       results.push({
         adAccountId,
@@ -968,12 +1277,26 @@ async function publishLaunch({ payload, actor, req }) {
         adSetId: adSet.id,
         creativeId: creative.id,
         adId: ad.id,
-        status: 'PAUSED',
+        status: launch.staticDefaults.campaignStatus || DEFAULT_STATIC_DEFAULTS.campaignStatus,
+      });
+      progress.info({
+        ...progressContext,
+        step: 'account',
+        status: 'completed',
+        message: `${accountLabel}: publish complete`,
       });
     } catch (error) {
       failed.push({
         adAccountId,
+        adAccountName: selectedAccount.name,
         message: error.message,
+      });
+      progress.info({
+        ...progressContext,
+        step: 'account',
+        status: 'failed',
+        error: error.message,
+        message: `${accountLabel}: publish failed`,
       });
     }
   }
@@ -994,7 +1317,7 @@ async function publishLaunch({ payload, actor, req }) {
       published: results.length,
       failed: failed.length,
       objective: launch.objective,
-      country: launch.country,
+      countries: launch.countries,
     },
     req,
   });

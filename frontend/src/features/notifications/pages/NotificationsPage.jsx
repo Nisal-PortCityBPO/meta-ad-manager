@@ -1,5 +1,7 @@
 import DashboardHeader from '../../dashboard/components/DashboardHeader';
 import DashboardPanel from '../../dashboard/components/DashboardPanel';
+import PublishProgressPanel from '../components/PublishProgressPanel';
+import { usePublishProgress } from '../PublishProgressContext';
 
 const notifications = [
   {
@@ -17,9 +19,18 @@ const notifications = [
 ];
 
 const NotificationsPage = () => {
+  const { events, latestError, latestResult, progress } = usePublishProgress();
+  const hasPublishNotice = Boolean(progress || events.length || latestResult || latestError);
+
   return (
     <div>
       <DashboardHeader title="Notifications" description="Account updates and dashboard messages." />
+
+      {hasPublishNotice ? (
+        <div className="mb-4">
+          <PublishProgressPanel events={events} latestError={latestError} latestResult={latestResult} progress={progress} />
+        </div>
+      ) : null}
 
       <DashboardPanel>
         <div className="divide-y divide-sky-50">
