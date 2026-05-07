@@ -10,6 +10,7 @@ import {
   Handshake,
   KeyRound,
   Save,
+  Search,
   Trash2,
   X,
 } from 'lucide-react';
@@ -28,7 +29,7 @@ const defaultAgencyForm = {
   name: '',
 };
 
-const businessProfilePageSizes = [5, 10, 20];
+const socialAccountPageSizes = [5, 10, 20];
 
 const formatDate = (value) => {
   if (!value) {
@@ -39,22 +40,6 @@ const formatDate = (value) => {
     dateStyle: 'medium',
     timeStyle: 'short',
   }).format(new Date(value));
-};
-
-const metaStatusStyles = {
-  ACTIVE: 'bg-emerald-50 text-emerald-700',
-  BLOCKED: 'bg-red-50 text-red-700',
-  CONNECTED: 'bg-emerald-50 text-emerald-700',
-  DISABLED: 'bg-red-50 text-red-700',
-  UNKNOWN: 'bg-slate-100 text-slate-600',
-};
-
-const metaStatusLabels = {
-  ACTIVE: 'Connected',
-  BLOCKED: 'Disabled',
-  CONNECTED: 'Connected',
-  DISABLED: 'Disabled',
-  UNKNOWN: 'Unknown',
 };
 
 const StatCard = ({ icon: Icon, label, value, tone }) => (
@@ -80,6 +65,10 @@ const EmptyState = ({ children }) => (
 const EntityManager = ({ title, emptyText, items, defaultForm, saving, onSubmit, onDelete, showColor = false }) => {
   const [form, setForm] = useState(defaultForm);
   const [editingItem, setEditingItem] = useState(null);
+  const [search, setSearch] = useState('');
+  const filteredItems = items.filter((item) =>
+    item.name.toLowerCase().includes(search.trim().toLowerCase())
+  );
 
   const updateField = (field, value) => {
     setForm((current) => ({
@@ -153,10 +142,23 @@ const EntityManager = ({ title, emptyText, items, defaultForm, saving, onSubmit,
         </div>
       </form>
 
-      <div className="mt-4 space-y-2">
-        {items.length ? (
-          items.map((item) => (
-            <div key={item.id} className="flex items-center justify-between gap-3 rounded-xl border border-sky-50 bg-white px-3 py-2">
+      <label className="mt-4 block">
+        <span className="sr-only">Search {title}</span>
+        <div className="flex h-11 items-center gap-2 rounded-xl border border-sky-100 bg-white px-3 transition focus-within:border-sky-400 focus-within:ring-4 focus-within:ring-sky-100">
+          <Search size={17} strokeWidth={2.3} className="shrink-0 text-sky-600" />
+          <input
+            value={search}
+            onChange={(event) => setSearch(event.target.value)}
+            className="h-full min-w-0 flex-1 bg-transparent text-sm font-semibold text-slate-700 outline-none"
+            placeholder={`Search ${title.toLowerCase()}`}
+          />
+        </div>
+      </label>
+
+      <div className="mt-4 max-h-[35rem] space-y-2 overflow-y-auto pr-1">
+        {filteredItems.length ? (
+          filteredItems.map((item) => (
+            <div key={item.id} className="flex min-h-12 items-center justify-between gap-3 rounded-xl border border-sky-50 bg-white px-3 py-2">
               <div className="flex min-w-0 items-center gap-3">
                 {showColor ? (
                   <span className="h-4 w-4 shrink-0 rounded-full" style={{ backgroundColor: item.color }} />
@@ -186,6 +188,8 @@ const EntityManager = ({ title, emptyText, items, defaultForm, saving, onSubmit,
               </div>
             </div>
           ))
+        ) : search.trim() ? (
+          <EmptyState>No matching {title.toLowerCase()} found.</EmptyState>
         ) : (
           <EmptyState>{emptyText}</EmptyState>
         )}
@@ -194,7 +198,31 @@ const EntityManager = ({ title, emptyText, items, defaultForm, saving, onSubmit,
   );
 };
 
-const BusinessProfilesTable = ({
+const SocialAccountAvatar = ({ account }) => {
+  const [imageFailed, setImageFailed] = useState(false);
+  const showImage = account.profileImageUrl && !imageFailed;
+  const initial = account.name?.trim()?.charAt(0)?.toUpperCase() || 'S';
+
+  if (showImage) {
+    return (
+      <img
+        src={account.profileImageUrl}
+        alt=""
+        referrerPolicy="no-referrer"
+        onError={() => setImageFailed(true)}
+        className="h-11 w-11 shrink-0 rounded-full border border-sky-100 object-cover"
+      />
+    );
+  }
+
+  return (
+    <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full border border-sky-100 bg-sky-50 text-sm font-black text-sky-700">
+      {initial}
+    </span>
+  );
+};
+
+const SocialAccountsTable = ({
   agencies,
   brands,
   filters,
@@ -202,36 +230,35 @@ const BusinessProfilesTable = ({
   loading,
   limit,
   onClearFilters,
-  profiles,
   pagination,
+  socialAccounts,
   onFilterChange,
   onLimitChange,
   onPageChange,
   saving,
   onAssign,
-  onDelete,
 }) => {
-  const [editingProfile, setEditingProfile] = useState(null);
+  const [editingAccount, setEditingAccount] = useState(null);
   const [assignment, setAssignment] = useState({
     brandId: '',
     agencyId: '',
   });
 
-  const startEdit = (profile) => {
-    setEditingProfile(profile);
+  const startEdit = (account) => {
+    setEditingAccount(account);
     setAssignment({
-      brandId: profile.brand?.id || '',
-      agencyId: profile.agency?.id || '',
+      brandId: account.brand?.id || '',
+      agencyId: account.agency?.id || '',
     });
   };
 
   const cancelEdit = () => {
-    setEditingProfile(null);
+    setEditingAccount(null);
     setAssignment({ brandId: '', agencyId: '' });
   };
 
-  const saveAssignment = async (profile) => {
-    const saved = await onAssign(profile, assignment);
+  const saveAssignment = async (account) => {
+    const saved = await onAssign(account, assignment);
     if (saved) {
       cancelEdit();
     }
@@ -239,23 +266,23 @@ const BusinessProfilesTable = ({
 
   return (
     <DashboardPanel
-      title="Business profiles"
+      title="Social accounts"
       className="mt-4"
     >
       <div className="mb-4 flex flex-col justify-between gap-3 sm:flex-row sm:items-center">
         <p className="text-sm leading-6 text-slate-500">
-          Saved profiles are loaded from the database. Fetch Meta data from Token Management to control API call usage.
+          Assign each Meta social account to one brand and one agency. Business profiles fetched under that account inherit the same assignment automatically.
         </p>
       </div>
 
       <div className="mb-4 grid gap-3 rounded-2xl border border-sky-50 bg-sky-50/50 p-4 md:grid-cols-2 xl:grid-cols-[minmax(0,1.1fr)_minmax(0,1fr)_minmax(0,1fr)_minmax(0,1fr)_120px_auto]">
         <label className="grid gap-1">
-          <span className="text-xs font-black uppercase tracking-[0.14em] text-sky-700">Profile name</span>
+          <span className="text-xs font-black uppercase tracking-[0.14em] text-sky-700">Social account</span>
           <input
             value={filters.search}
             onChange={(event) => onFilterChange('search', event.target.value)}
             className="h-11 rounded-xl border border-sky-100 bg-white px-3 text-sm font-semibold text-slate-700 outline-none transition focus:border-sky-400 focus:ring-4 focus:ring-sky-100"
-            placeholder="Search profiles"
+            placeholder="Search accounts"
           />
         </label>
 
@@ -314,7 +341,7 @@ const BusinessProfilesTable = ({
             onChange={(event) => onLimitChange(Number(event.target.value))}
             className="h-11 rounded-xl border border-sky-100 bg-white px-3 text-sm font-semibold text-slate-700 outline-none transition focus:border-sky-400 focus:ring-4 focus:ring-sky-100"
           >
-            {businessProfilePageSizes.map((size) => (
+            {socialAccountPageSizes.map((size) => (
               <option key={size} value={size}>
                 {size}
               </option>
@@ -336,7 +363,7 @@ const BusinessProfilesTable = ({
       <div className="mb-4 flex flex-col justify-between gap-3 sm:flex-row sm:items-center">
         <div className="flex items-center gap-2 text-sm font-bold text-slate-500">
           <Filter size={17} strokeWidth={2.2} className="text-sky-600" />
-          Showing {pagination.total ? (pagination.page - 1) * pagination.limit + 1 : 0}-{Math.min(pagination.page * pagination.limit, pagination.total)} of {pagination.total} profiles
+          Showing {pagination.total ? (pagination.page - 1) * pagination.limit + 1 : 0}-{Math.min(pagination.page * pagination.limit, pagination.total)} of {pagination.total} accounts
         </div>
         <div className="flex items-center gap-2">
           <button
@@ -365,13 +392,13 @@ const BusinessProfilesTable = ({
 
       {loading ? (
         <div className="h-72 animate-pulse rounded-2xl bg-sky-50" />
-      ) : profiles.length ? (
+      ) : socialAccounts.length ? (
         <div className="overflow-hidden rounded-2xl border border-sky-100 bg-white">
           <div className="overflow-x-auto">
             <table className="min-w-full divide-y divide-sky-50">
               <thead className="bg-sky-50/70">
                 <tr>
-                  {['Business profile', 'Meta status', 'API token', 'Brand', 'Agency', 'Last synced', 'Actions'].map((heading) => (
+                  {['Social account', 'API token', 'Business profiles', 'Brand', 'Agency', 'Last synced', 'Actions'].map((heading) => (
                     <th key={heading} className="px-5 py-4 text-left text-xs font-black uppercase tracking-[0.16em] text-sky-700">
                       {heading}
                     </th>
@@ -379,39 +406,37 @@ const BusinessProfilesTable = ({
                 </tr>
               </thead>
               <tbody className="divide-y divide-sky-50">
-                {profiles.map((profile) => {
-                  const isEditing = editingProfile?.id === profile.id;
+                {socialAccounts.map((account) => {
+                  const isEditing = editingAccount?.id === account.id;
 
                   return (
-                    <tr key={profile.id} className="align-middle">
+                    <tr key={account.id} className="align-middle">
                       <td className="px-5 py-4">
-                        <p className="font-black text-slate-950">{profile.name}</p>
-                        <p className="mt-1 text-xs font-semibold text-slate-400">
-                          Meta ID: {profile.metaBusinessId}
-                        </p>
+                        <div className="flex min-w-0 items-center gap-3">
+                          <SocialAccountAvatar account={account} />
+                          <div className="min-w-0">
+                            <p className="truncate font-black text-slate-950">{account.name}</p>
+                            <p className="mt-1 text-xs font-semibold text-slate-400">
+                              Meta account ID: {account.metaAccountId}
+                            </p>
+                          </div>
+                        </div>
                       </td>
                       <td className="px-5 py-4">
-                        <span className={`inline-flex rounded-full px-3 py-1 text-xs font-black ${metaStatusStyles[profile.metaStatus] || metaStatusStyles.UNKNOWN}`}>
-                          {metaStatusLabels[profile.metaStatus] || metaStatusLabels.UNKNOWN}
-                        </span>
-                        <p className="mt-1 text-xs font-semibold text-slate-400">
-                          {profile.lastStatusCheckedAt ? `Checked ${formatDate(profile.lastStatusCheckedAt)}` : 'Not checked yet'}
-                        </p>
-                        {profile.metaStatusReason ? (
-                          <p className="mt-1 max-w-52 text-xs font-semibold text-slate-400">
-                            {profile.metaStatusReason}
-                          </p>
-                        ) : null}
-                      </td>
-                      <td className="px-5 py-4">
-                        {profile.sourceTokenLabel ? (
+                        {account.sourceTokenLabel ? (
                           <span className="inline-flex items-center gap-2 rounded-full bg-indigo-50 px-3 py-1 text-xs font-black text-indigo-700">
                             <KeyRound size={13} strokeWidth={2.4} />
-                            {profile.sourceTokenLabel}
+                            {account.sourceTokenLabel}
                           </span>
                         ) : (
                           <span className="text-sm font-semibold text-slate-400">Not tracked</span>
                         )}
+                      </td>
+                      <td className="px-5 py-4">
+                        <span className="inline-flex items-center gap-2 rounded-full bg-amber-50 px-3 py-1 text-xs font-black text-amber-700">
+                          <BriefcaseBusiness size={13} strokeWidth={2.4} />
+                          {account.profileCount} profiles
+                        </span>
                       </td>
                       <td className="px-5 py-4">
                         {isEditing ? (
@@ -427,10 +452,10 @@ const BusinessProfilesTable = ({
                               </option>
                             ))}
                           </select>
-                        ) : profile.brand ? (
+                        ) : account.brand ? (
                           <span className="inline-flex items-center gap-2 rounded-full bg-sky-50 px-3 py-1 text-xs font-black text-slate-700">
-                            <span className="h-2.5 w-2.5 rounded-full" style={{ backgroundColor: profile.brand.color }} />
-                            {profile.brand.name}
+                            <span className="h-2.5 w-2.5 rounded-full" style={{ backgroundColor: account.brand.color }} />
+                            {account.brand.name}
                           </span>
                         ) : (
                           <span className="text-sm font-semibold text-slate-400">Unassigned</span>
@@ -450,24 +475,24 @@ const BusinessProfilesTable = ({
                               </option>
                             ))}
                           </select>
-                        ) : profile.agency ? (
+                        ) : account.agency ? (
                           <span className="inline-flex items-center gap-2 rounded-full bg-sky-50 px-3 py-1 text-xs font-black text-slate-700">
                             <Handshake size={13} strokeWidth={2.4} className="text-teal-600" />
-                            {profile.agency.name}
+                            {account.agency.name}
                           </span>
                         ) : (
                           <span className="text-sm font-semibold text-slate-400">Unassigned</span>
                         )}
                       </td>
                       <td className="px-5 py-4 text-sm font-semibold text-slate-500">
-                        {formatDate(profile.lastSyncedAt)}
+                        {formatDate(account.lastSyncedAt)}
                       </td>
                       <td className="px-5 py-4">
                         {isEditing ? (
                           <div className="flex gap-2">
                             <button
                               type="button"
-                              onClick={() => saveAssignment(profile)}
+                              onClick={() => saveAssignment(account)}
                               disabled={saving}
                               className="h-10 rounded-xl bg-sky-600 px-3 text-sm font-bold text-white transition hover:bg-sky-700 disabled:opacity-70"
                             >
@@ -485,20 +510,11 @@ const BusinessProfilesTable = ({
                           <div className="flex gap-2">
                             <button
                               type="button"
-                              onClick={() => startEdit(profile)}
+                              onClick={() => startEdit(account)}
                               className="flex h-10 items-center gap-2 rounded-xl border border-sky-100 bg-white px-3 text-sm font-bold text-slate-700 transition hover:bg-sky-50"
                             >
                               <Edit3 size={16} strokeWidth={2.2} />
                               Edit
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => onDelete(profile)}
-                              disabled={saving}
-                              className="flex h-10 items-center gap-2 rounded-xl border border-red-100 bg-white px-3 text-sm font-bold text-red-600 transition hover:bg-red-50 disabled:opacity-70"
-                            >
-                              <Trash2 size={16} strokeWidth={2.2} />
-                              Delete
                             </button>
                           </div>
                         )}
@@ -511,16 +527,16 @@ const BusinessProfilesTable = ({
           </div>
         </div>
       ) : (
-        <EmptyState>No business profile data yet. Fetch profiles from Token Management when you are ready to use Meta API calls.</EmptyState>
+        <EmptyState>No social account data yet. Fetch profiles from Token Management to save the token's main social account and connected business profiles.</EmptyState>
       )}
     </DashboardPanel>
   );
 };
 
 const DashboardPage = () => {
-  const [profilePage, setProfilePage] = useState(1);
-  const [profileLimit, setProfileLimit] = useState(5);
-  const [profileFilters, setProfileFilters] = useState({
+  const [socialAccountPage, setSocialAccountPage] = useState(1);
+  const [socialAccountLimit, setSocialAccountLimit] = useState(5);
+  const [socialAccountFilters, setSocialAccountFilters] = useState({
     search: '',
     tokenLabel: '',
     brandId: '',
@@ -533,15 +549,15 @@ const DashboardPage = () => {
     error: businessDataError,
     loadBusinessData,
     loading: businessDataLoading,
-    profileFilterOptions,
-    profilePagination,
-    profiles,
+    socialAccountFilterOptions,
+    socialAccountPagination,
+    socialAccounts,
     setAgencies,
     setBrands,
   } = useBusinessData({
-    page: profilePage,
-    limit: profileLimit,
-    ...profileFilters,
+    page: socialAccountPage,
+    limit: socialAccountLimit,
+    ...socialAccountFilters,
   });
   const [savingBusinessData, setSavingBusinessData] = useState(false);
   const metrics = dashboard?.metrics || {};
@@ -566,8 +582,8 @@ const DashboardPage = () => {
       tone: 'bg-indigo-50 text-indigo-700',
     },
     {
-      label: 'Business Profiles',
-      value: metrics.businessProfiles ?? profiles.length,
+      label: 'Social Accounts',
+      value: metrics.socialAccounts ?? socialAccounts.length,
       icon: BriefcaseBusiness,
       tone: 'bg-amber-50 text-amber-700',
     },
@@ -577,27 +593,27 @@ const DashboardPage = () => {
     await Promise.all([reload(), loadBusinessData({ showLoading: false })]);
   };
 
-  const updateProfileFilter = (field, value) => {
-    setProfileFilters((current) => ({
+  const updateSocialAccountFilter = (field, value) => {
+    setSocialAccountFilters((current) => ({
       ...current,
       [field]: value,
     }));
-    setProfilePage(1);
+    setSocialAccountPage(1);
   };
 
-  const clearProfileFilters = () => {
-    setProfileFilters({
+  const clearSocialAccountFilters = () => {
+    setSocialAccountFilters({
       search: '',
       tokenLabel: '',
       brandId: '',
       agencyId: '',
     });
-    setProfilePage(1);
+    setSocialAccountPage(1);
   };
 
-  const updateProfileLimit = (value) => {
-    setProfileLimit(value);
-    setProfilePage(1);
+  const updateSocialAccountLimit = (value) => {
+    setSocialAccountLimit(value);
+    setSocialAccountPage(1);
   };
 
   const saveBrand = async (form, editingItem) => {
@@ -672,10 +688,10 @@ const DashboardPage = () => {
     }
   };
 
-  const assignBusinessProfile = async (profile, assignment) => {
+  const assignSocialAccount = async (account, assignment) => {
     setSavingBusinessData(true);
     try {
-      const data = await businessDataApi.updateBusinessProfile(profile.id, assignment);
+      const data = await businessDataApi.updateSocialAccount(account.id, assignment);
       toast.success(data.message);
       await loadBusinessData({ showLoading: false });
       return true;
@@ -687,28 +703,11 @@ const DashboardPage = () => {
     }
   };
 
-  const deleteBusinessProfile = async (profile) => {
-    if (!window.confirm(`Delete business profile "${profile.name}"?`)) {
-      return;
-    }
-
-    setSavingBusinessData(true);
-    try {
-      const data = await businessDataApi.deleteBusinessProfile(profile.id);
-      toast.success(data.message);
-      await refreshAll();
-    } catch (requestError) {
-      toast.error(requestError.message);
-    } finally {
-      setSavingBusinessData(false);
-    }
-  };
-
   return (
     <div>
       <DashboardHeader
         title="Dashboard"
-        description="Manage brands, agencies, Meta access tokens, and saved business profiles."
+        description="Manage brands, agencies, Meta access tokens, and saved social accounts."
         action={
           <button
             type="button"
@@ -735,22 +734,21 @@ const DashboardPage = () => {
           : metricCards.map((card) => <StatCard key={card.label} {...card} />)}
       </div>
 
-      <BusinessProfilesTable
+      <SocialAccountsTable
         agencies={agencies}
         brands={brands}
-        filters={profileFilters}
-        filterOptions={profileFilterOptions}
-        limit={profileLimit}
+        filters={socialAccountFilters}
+        filterOptions={socialAccountFilterOptions}
+        limit={socialAccountLimit}
         loading={businessDataLoading}
-        pagination={profilePagination}
-        profiles={profiles}
+        pagination={socialAccountPagination}
         saving={savingBusinessData}
-        onClearFilters={clearProfileFilters}
-        onFilterChange={updateProfileFilter}
-        onLimitChange={updateProfileLimit}
-        onPageChange={setProfilePage}
-        onAssign={assignBusinessProfile}
-        onDelete={deleteBusinessProfile}
+        socialAccounts={socialAccounts}
+        onClearFilters={clearSocialAccountFilters}
+        onFilterChange={updateSocialAccountFilter}
+        onLimitChange={updateSocialAccountLimit}
+        onPageChange={setSocialAccountPage}
+        onAssign={assignSocialAccount}
       />
 
       <div className="mt-4 grid gap-4 xl:grid-cols-2">

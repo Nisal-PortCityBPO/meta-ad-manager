@@ -614,6 +614,8 @@ async function postToMeta({ token, path, params = {}, formData = null, videoHost
     throw new HttpError(400, buildMetaErrorMessage(path, payload));
   }
 
+  await tokenService.markTokenConnected({ tokenId: token.id });
+
   return payload;
 }
 

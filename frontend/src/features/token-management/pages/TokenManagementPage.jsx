@@ -15,7 +15,26 @@ const emptyForm = {
 
 const statusStyles = {
   ACTIVE: 'bg-emerald-50 text-emerald-700',
+  DEACTIVE: 'bg-slate-100 text-slate-600',
+};
+
+const statusLabels = {
+  ACTIVE: 'Active',
+  DEACTIVE: 'Deactive',
+};
+
+const connectionStyles = {
+  UNKNOWN: 'bg-slate-100 text-slate-600',
+  CONNECTED: 'bg-emerald-50 text-emerald-700',
   BLOCKED: 'bg-red-50 text-red-700',
+  DISABLED: 'bg-orange-50 text-orange-700',
+};
+
+const connectionLabels = {
+  UNKNOWN: 'Unknown',
+  CONNECTED: 'Connected',
+  BLOCKED: 'Blocked',
+  DISABLED: 'Disabled',
 };
 
 const syncMessage = (summary) =>
@@ -214,7 +233,7 @@ const TokenManagementPage = () => {
                 className="h-12 w-full rounded-xl border border-sky-100 bg-white px-4 outline-none transition focus:border-sky-400 focus:ring-4 focus:ring-sky-100"
               >
                 <option value="ACTIVE">Active</option>
-                <option value="BLOCKED">Blocked</option>
+                <option value="DEACTIVE">Deactive</option>
               </select>
             </div>
 
@@ -243,7 +262,7 @@ const TokenManagementPage = () => {
         <DashboardPanel title="Saved Meta API tokens">
           <div className="mb-4 flex flex-col justify-between gap-3 rounded-2xl border border-sky-50 bg-sky-50/60 p-4 sm:flex-row sm:items-center">
             <p className="text-sm leading-6 text-slate-500">
-              Fetch profiles only when needed. Use one token at a time to avoid spending hourly Meta API limits across every saved token.
+              Fetch profiles only when needed. Deactive tokens are skipped when fetching all profiles.
             </p>
             <button
               type="button"
@@ -264,7 +283,7 @@ const TokenManagementPage = () => {
                 <table className="min-w-full divide-y divide-sky-50">
                   <thead className="bg-sky-50/70">
                     <tr>
-                      {['Token label', 'Purpose', 'Access token', 'Status', 'API calls', 'Actions'].map((heading) => (
+                      {['Token label', 'Purpose', 'Access token', 'Status', 'Connection', 'API calls', 'Actions'].map((heading) => (
                         <th key={heading} className="px-5 py-4 text-left text-xs font-black uppercase tracking-[0.16em] text-sky-700">
                           {heading}
                         </th>
@@ -283,9 +302,20 @@ const TokenManagementPage = () => {
                         <td className="px-5 py-4 text-sm font-semibold text-slate-600">{token.purpose}</td>
                         <td className="px-5 py-4 font-mono text-sm font-bold text-slate-700">{token.accessToken}</td>
                         <td className="px-5 py-4">
-                          <span className={`inline-flex rounded-full px-3 py-1 text-xs font-black ${statusStyles[token.status]}`}>
-                            {token.status}
+                          <span className={`inline-flex rounded-full px-3 py-1 text-xs font-black ${statusStyles[token.status] || statusStyles.DEACTIVE}`}>
+                            {statusLabels[token.status] || token.status}
                           </span>
+                        </td>
+                        <td className="px-5 py-4">
+                          <span className={`inline-flex rounded-full px-3 py-1 text-xs font-black ${connectionStyles[token.connectionStatus] || connectionStyles.UNKNOWN}`}>
+                            {connectionLabels[token.connectionStatus] || 'Unknown'}
+                          </span>
+                          <p className="mt-1 text-xs font-semibold text-slate-400">
+                            {token.lastConnectionCheckedAt ? new Date(token.lastConnectionCheckedAt).toLocaleString() : 'Not checked yet'}
+                          </p>
+                          {token.connectionMessage ? (
+                            <p className="mt-1 max-w-52 text-xs font-semibold text-slate-400">{token.connectionMessage}</p>
+                          ) : null}
                         </td>
                         <td className="px-5 py-4">
                           <p className="font-black text-slate-950">{token.apiCallCount}</p>
@@ -299,27 +329,30 @@ const TokenManagementPage = () => {
                               type="button"
                               onClick={() => handleSyncTokenProfiles(token)}
                               disabled={saving || syncingAll || Boolean(syncingTokenId) || token.status !== 'ACTIVE'}
-                              className="flex h-10 items-center gap-2 rounded-xl border border-indigo-100 bg-white px-3 text-sm font-bold text-indigo-700 transition hover:bg-indigo-50 disabled:opacity-70"
+                              className="flex h-10 w-10 items-center justify-center rounded-xl border border-indigo-100 bg-white text-indigo-700 transition hover:bg-indigo-50 disabled:opacity-70"
+                              title="Fetch profiles"
+                              aria-label={`Fetch profiles for ${token.label}`}
                             >
-                              <DownloadCloud size={16} strokeWidth={2.2} />
-                              {syncingTokenId === token.id ? 'Fetching...' : 'Fetch'}
+                              <DownloadCloud size={16} strokeWidth={2.2} className={syncingTokenId === token.id ? 'animate-pulse' : ''} />
                             </button>
                             <button
                               type="button"
                               onClick={() => startEdit(token)}
-                              className="flex h-10 items-center gap-2 rounded-xl border border-sky-100 bg-white px-3 text-sm font-bold text-slate-700 transition hover:bg-sky-50"
+                              className="flex h-10 w-10 items-center justify-center rounded-xl border border-sky-100 bg-white text-slate-700 transition hover:bg-sky-50"
+                              title="Edit token"
+                              aria-label={`Edit ${token.label}`}
                             >
                               <Edit3 size={16} strokeWidth={2.2} />
-                              Edit
                             </button>
                             <button
                               type="button"
                               onClick={() => handleDelete(token)}
                               disabled={saving}
-                              className="flex h-10 items-center gap-2 rounded-xl border border-red-100 bg-white px-3 text-sm font-bold text-red-600 transition hover:bg-red-50 disabled:opacity-70"
+                              className="flex h-10 w-10 items-center justify-center rounded-xl border border-red-100 bg-white text-red-600 transition hover:bg-red-50 disabled:opacity-70"
+                              title="Delete token"
+                              aria-label={`Delete ${token.label}`}
                             >
                               <Trash2 size={16} strokeWidth={2.2} />
-                              Delete
                             </button>
                           </div>
                         </td>

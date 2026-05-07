@@ -2,6 +2,7 @@ const ActivityLog = require('../activity-logs/activityLog.model');
 const Agency = require('../agencies/agency.model');
 const Brand = require('../brands/brand.model');
 const { BusinessProfile } = require('../business-profiles/businessProfile.model');
+const socialAccountService = require('../social-accounts/socialAccount.service');
 const { Token } = require('../token-management/token.model');
 const { User, USER_ROLES } = require('../users/user.model');
 
@@ -23,10 +24,11 @@ async function getDashboard(user) {
     })),
   };
 
-  const [brandCount, agencyCount, accessTokenCount, businessProfileCount] = await Promise.all([
+  const [brandCount, agencyCount, accessTokenCount, socialAccountCount, businessProfileCount] = await Promise.all([
     Brand.countDocuments(),
     Agency.countDocuments(),
     Token.countDocuments(),
+    socialAccountService.countSocialAccounts(),
     BusinessProfile.countDocuments(),
   ]);
 
@@ -37,6 +39,7 @@ async function getDashboard(user) {
         brands: brandCount,
         agencies: agencyCount,
         accessTokens: accessTokenCount,
+        socialAccounts: socialAccountCount,
         businessProfiles: businessProfileCount,
       },
     };
@@ -54,6 +57,7 @@ async function getDashboard(user) {
       brands: brandCount,
       agencies: agencyCount,
       accessTokens: accessTokenCount,
+      socialAccounts: socialAccountCount,
       businessProfiles: businessProfileCount,
       totalUsers,
       activeUsers,

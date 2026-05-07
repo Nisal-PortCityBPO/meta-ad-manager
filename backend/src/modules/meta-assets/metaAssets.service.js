@@ -79,8 +79,14 @@ async function fetchGraphCollection({ token, path, fields, limit = 100 }) {
     const payload = await response.json();
 
     if (!response.ok) {
+      await tokenService.markTokenBlockedFromMetaError({
+        tokenId: token.id,
+        payload,
+      });
       throw new HttpError(400, payload.error?.message || `Meta API request failed for ${token.label}`);
     }
+
+    await tokenService.markTokenConnected({ tokenId: token.id });
 
     if (Array.isArray(payload.data)) {
       items.push(...payload.data);

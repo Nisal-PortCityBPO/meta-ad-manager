@@ -14,6 +14,7 @@ const tokenRoutes = require('./modules/token-management/token.route');
 const brandRoutes = require('./modules/brands/brand.route');
 const agencyRoutes = require('./modules/agencies/agency.route');
 const businessProfileRoutes = require('./modules/business-profiles/businessProfile.route');
+const socialAccountRoutes = require('./modules/social-accounts/socialAccount.route');
 const metaAssetsRoutes = require('./modules/meta-assets/metaAssets.route');
 const adsLaunchRoutes = require('./modules/ads-launch/adsLaunch.route');
 const adsManageRoutes = require('./modules/ads-manage/adsManage.route');
@@ -68,6 +69,7 @@ function registerApiRoutes(app) {
   app.use('/api/ads-manage', adsManageRoutes);
   app.use('/api/brands', brandRoutes);
   app.use('/api/agencies', agencyRoutes);
+  app.use('/api/social-accounts', socialAccountRoutes);
   app.use('/api/business-profiles', businessProfileRoutes);
 
   app.use('/api', (req, res) => {

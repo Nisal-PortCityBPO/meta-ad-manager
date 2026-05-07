@@ -2,17 +2,24 @@ const HttpError = require('../../app/utils/httpError');
 const { waitForMetaApiPacing } = require('../../app/utils/metaApiPacing');
 const mongoose = require('mongoose');
 const { writeActivityLog } = require('../activity-logs/activityLog.service');
-const Agency = require('../agencies/agency.model');
-const Brand = require('../brands/brand.model');
+const socialAccountService = require('../social-accounts/socialAccount.service');
 const tokenService = require('../token-management/token.service');
 const {
   BusinessProfile,
+  BUSINESS_PROFILE_ASSET_METRIC_STATUSES,
   BUSINESS_PROFILE_META_STATUSES,
 } = require('./businessProfile.model');
 
 const META_GRAPH_VERSION = process.env.META_GRAPH_VERSION || 'v24.0';
-const META_BUSINESS_LIST_FIELDS = 'id,name';
-const META_BUSINESS_DETAIL_FIELDS = 'id,name,verification_status,created_time,is_disabled_for_integrity_reasons';
+const META_SOCIAL_ACCOUNT_WITH_BUSINESSES_FIELDS = 'id,name,picture.type(large),businesses.limit(100){id,name}';
+const META_BUSINESS_ASSET_FIELDS = [
+  'owned_ad_accounts.limit(100).summary(true){id,account_id,name,currency,account_status,campaigns.limit(1).summary(true){id},insights.date_preset(maximum).limit(1){spend}}',
+  'client_ad_accounts.limit(100).summary(true){id,account_id,name,currency,account_status,campaigns.limit(1).summary(true){id},insights.date_preset(maximum).limit(1){spend}}',
+  'owned_pages.limit(100).summary(true){id,name}',
+  'client_pages.limit(100).summary(true){id,name}',
+].join(',');
+const META_BUSINESS_DETAIL_FIELDS = `id,name,verification_status,created_time,is_disabled_for_integrity_reasons,${META_BUSINESS_ASSET_FIELDS}`;
+const META_BUSINESS_DETAIL_WITHOUT_DISABLED_STATUS_FIELDS = `id,name,verification_status,created_time,${META_BUSINESS_ASSET_FIELDS}`;
 const META_BUSINESS_SAFE_DETAIL_FIELDS = 'id,name,verification_status,created_time';
 const PAGE_LIMITS = [5, 10, 20];
 
@@ -31,7 +38,7 @@ function escapeRegExp(value) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
-function buildBusinessProfileQuery({ search, tokenLabel, brandId, agencyId } = {}) {
+function buildBusinessProfileQuery({ search, tokenLabel } = {}) {
   const query = {};
 
   if (search?.trim()) {
@@ -40,22 +47,6 @@ function buildBusinessProfileQuery({ search, tokenLabel, brandId, agencyId } = {
 
   if (tokenLabel?.trim()) {
     query.sourceTokenLabel = tokenLabel.trim();
-  }
-
-  if (brandId?.trim()) {
-    if (mongoose.Types.ObjectId.isValid(brandId.trim())) {
-      query.brand = brandId.trim();
-    } else {
-      query._id = null;
-    }
-  }
-
-  if (agencyId?.trim()) {
-    if (mongoose.Types.ObjectId.isValid(agencyId.trim())) {
-      query.agency = agencyId.trim();
-    } else {
-      query._id = null;
-    }
   }
 
   return query;
@@ -80,8 +71,7 @@ async function listBusinessProfiles(filters = {}) {
   const currentPage = Math.min(page, totalPages);
   const skip = (currentPage - 1) * limit;
   const profiles = await BusinessProfile.find(query)
-    .populate('brand', 'name color')
-    .populate('agency', 'name')
+    .populate('socialAccount', 'name')
     .sort({ name: 1 })
     .skip(skip)
     .limit(limit);
@@ -101,47 +91,12 @@ async function listBusinessProfiles(filters = {}) {
 }
 
 async function assignBusinessProfile({ profileId, brandId, agencyId, actor, req }) {
-  const profile = await BusinessProfile.findById(profileId);
-  if (!profile) {
-    throw new HttpError(404, 'Business profile not found');
-  }
-
-  if (brandId) {
-    const brand = await Brand.findById(brandId);
-    if (!brand) {
-      throw new HttpError(404, 'Brand not found');
-    }
-  }
-
-  if (agencyId) {
-    const agency = await Agency.findById(agencyId);
-    if (!agency) {
-      throw new HttpError(404, 'Agency not found');
-    }
-  }
-
-  profile.brand = brandId || null;
-  profile.agency = agencyId || null;
-  await profile.save();
-
-  await writeActivityLog({
-    user: actor,
-    action: 'BUSINESS_PROFILE_ASSIGNED',
-    entity: 'BusinessProfile',
-    entityId: profile._id.toString(),
-    metadata: {
-      name: profile.name,
-      brandId: brandId || null,
-      agencyId: agencyId || null,
-    },
-    req,
-  });
-
-  const populated = await BusinessProfile.findById(profile._id)
-    .populate('brand', 'name color')
-    .populate('agency', 'name');
-
-  return populated.toSafeObject();
+  void profileId;
+  void brandId;
+  void agencyId;
+  void actor;
+  void req;
+  throw new HttpError(400, 'Assign brand and agency from the social account, not the business profile');
 }
 
 async function deleteBusinessProfile({ profileId, actor, req }) {
@@ -189,19 +144,31 @@ async function requestMetaApi(path, token, { fields, limit } = {}) {
   const payload = await response.json();
 
   if (!response.ok) {
+    await tokenService.markTokenBlockedFromMetaError({
+      tokenId: token.id,
+      payload,
+    });
     throw new HttpError(400, getMetaErrorMessage(payload, `Meta API request failed for ${token.label}`));
   }
+
+  await tokenService.markTokenConnected({ tokenId: token.id });
 
   return payload;
 }
 
-async function fetchBusinessesForToken(token) {
-  const payload = await requestMetaApi('me/businesses', token, {
-    fields: META_BUSINESS_LIST_FIELDS,
-    limit: '100',
+async function fetchSocialAccountAndBusinessesForToken(token) {
+  const payload = await requestMetaApi('me', token, {
+    fields: META_SOCIAL_ACCOUNT_WITH_BUSINESSES_FIELDS,
   });
 
-  return Array.isArray(payload.data) ? payload.data : [];
+  return {
+    metaSocialAccount: {
+      id: payload.id,
+      name: payload.name,
+      profileImageUrl: payload.picture?.data?.url || null,
+    },
+    metaProfiles: Array.isArray(payload.businesses?.data) ? payload.businesses.data : [],
+  };
 }
 
 async function fetchBusinessDetailsForToken(token, metaBusinessId, fields) {
@@ -212,11 +179,28 @@ function shouldRetryWithoutStatusField(error) {
   return error.message?.toLowerCase().includes('is_disabled_for_integrity_reasons');
 }
 
+function shouldRetryWithoutAssetFields(error) {
+  const message = error.message?.toLowerCase() || '';
+
+  return [
+    'owned_ad_accounts',
+    'client_ad_accounts',
+    'owned_pages',
+    'client_pages',
+    'campaigns',
+    'insights',
+  ].some((fieldName) => message.includes(fieldName));
+}
+
 async function fetchBusinessProfileStatus(metaProfile, token, summary, { requestDisabledStatus = true } = {}) {
   if (!requestDisabledStatus) {
     try {
       summary.apiCalls += 1;
-      const details = await fetchBusinessDetailsForToken(token, metaProfile.id, META_BUSINESS_SAFE_DETAIL_FIELDS);
+      const details = await fetchBusinessDetailsForToken(
+        token,
+        metaProfile.id,
+        META_BUSINESS_DETAIL_WITHOUT_DISABLED_STATUS_FIELDS
+      );
 
       return {
         ...metaProfile,
@@ -224,14 +208,41 @@ async function fetchBusinessProfileStatus(metaProfile, token, summary, { request
         name: details.name || metaProfile.name,
         __statusCheckSucceeded: true,
         __statusCheckLimited: true,
+        __assetMetricsStatus: BUSINESS_PROFILE_ASSET_METRIC_STATUSES.SYNCED,
       };
     } catch (error) {
+      if (shouldRetryWithoutAssetFields(error)) {
+        try {
+          summary.apiCalls += 1;
+          const details = await fetchBusinessDetailsForToken(token, metaProfile.id, META_BUSINESS_SAFE_DETAIL_FIELDS);
+
+          return {
+            ...metaProfile,
+            ...details,
+            name: details.name || metaProfile.name,
+            __statusCheckSucceeded: true,
+            __statusCheckLimited: true,
+            __assetMetricsStatus: BUSINESS_PROFILE_ASSET_METRIC_STATUSES.UNKNOWN,
+          };
+        } catch (fallbackError) {
+          summary.statusCheckFailed += 1;
+
+          return {
+            ...metaProfile,
+            __statusCheckSucceeded: false,
+            __statusCheckError: fallbackError.message,
+            __assetMetricsStatus: BUSINESS_PROFILE_ASSET_METRIC_STATUSES.UNKNOWN,
+          };
+        }
+      }
+
       summary.statusCheckFailed += 1;
 
       return {
         ...metaProfile,
         __statusCheckSucceeded: false,
         __statusCheckError: error.message,
+        __assetMetricsStatus: BUSINESS_PROFILE_ASSET_METRIC_STATUSES.UNKNOWN,
       };
     }
   }
@@ -245,9 +256,66 @@ async function fetchBusinessProfileStatus(metaProfile, token, summary, { request
       ...details,
       name: details.name || metaProfile.name,
       __statusCheckSucceeded: true,
+      __assetMetricsStatus: BUSINESS_PROFILE_ASSET_METRIC_STATUSES.SYNCED,
     };
   } catch (error) {
     if (shouldRetryWithoutStatusField(error)) {
+      try {
+        summary.apiCalls += 1;
+        const details = await fetchBusinessDetailsForToken(
+          token,
+          metaProfile.id,
+          META_BUSINESS_DETAIL_WITHOUT_DISABLED_STATUS_FIELDS
+        );
+
+        return {
+          ...metaProfile,
+          ...details,
+          name: details.name || metaProfile.name,
+          __statusCheckSucceeded: true,
+          __statusCheckLimited: true,
+          __disabledStatusFieldUnsupported: true,
+          __assetMetricsStatus: BUSINESS_PROFILE_ASSET_METRIC_STATUSES.SYNCED,
+        };
+      } catch (fallbackError) {
+        if (shouldRetryWithoutAssetFields(fallbackError)) {
+          try {
+            summary.apiCalls += 1;
+            const details = await fetchBusinessDetailsForToken(token, metaProfile.id, META_BUSINESS_SAFE_DETAIL_FIELDS);
+
+            return {
+              ...metaProfile,
+              ...details,
+              name: details.name || metaProfile.name,
+              __statusCheckSucceeded: true,
+              __statusCheckLimited: true,
+              __disabledStatusFieldUnsupported: true,
+              __assetMetricsStatus: BUSINESS_PROFILE_ASSET_METRIC_STATUSES.UNKNOWN,
+            };
+          } catch (safeFallbackError) {
+            summary.statusCheckFailed += 1;
+
+            return {
+              ...metaProfile,
+              __statusCheckSucceeded: false,
+              __statusCheckError: safeFallbackError.message,
+              __assetMetricsStatus: BUSINESS_PROFILE_ASSET_METRIC_STATUSES.UNKNOWN,
+            };
+          }
+        }
+
+        summary.statusCheckFailed += 1;
+
+        return {
+          ...metaProfile,
+          __statusCheckSucceeded: false,
+          __statusCheckError: fallbackError.message,
+          __assetMetricsStatus: BUSINESS_PROFILE_ASSET_METRIC_STATUSES.UNKNOWN,
+        };
+      }
+    }
+
+    if (shouldRetryWithoutAssetFields(error)) {
       try {
         summary.apiCalls += 1;
         const details = await fetchBusinessDetailsForToken(token, metaProfile.id, META_BUSINESS_SAFE_DETAIL_FIELDS);
@@ -257,8 +325,7 @@ async function fetchBusinessProfileStatus(metaProfile, token, summary, { request
           ...details,
           name: details.name || metaProfile.name,
           __statusCheckSucceeded: true,
-          __statusCheckLimited: true,
-          __disabledStatusFieldUnsupported: true,
+          __assetMetricsStatus: BUSINESS_PROFILE_ASSET_METRIC_STATUSES.UNKNOWN,
         };
       } catch (fallbackError) {
         summary.statusCheckFailed += 1;
@@ -267,6 +334,7 @@ async function fetchBusinessProfileStatus(metaProfile, token, summary, { request
           ...metaProfile,
           __statusCheckSucceeded: false,
           __statusCheckError: fallbackError.message,
+          __assetMetricsStatus: BUSINESS_PROFILE_ASSET_METRIC_STATUSES.UNKNOWN,
         };
       }
     }
@@ -277,6 +345,7 @@ async function fetchBusinessProfileStatus(metaProfile, token, summary, { request
       ...metaProfile,
       __statusCheckSucceeded: false,
       __statusCheckError: error.message,
+      __assetMetricsStatus: BUSINESS_PROFILE_ASSET_METRIC_STATUSES.UNKNOWN,
     };
   }
 }
@@ -319,7 +388,116 @@ function getIntegrityDisabledFlag(metaProfile) {
     : null;
 }
 
-function hasProfileChanged(profile, metaProfile, token) {
+function getEdgeItems(edge) {
+  return Array.isArray(edge?.data) ? edge.data : [];
+}
+
+function getUniqueItems(...collections) {
+  const uniqueItems = new Map();
+
+  collections.flatMap(getEdgeItems).forEach((item) => {
+    const id = item?.id || item?.account_id;
+    if (id) {
+      uniqueItems.set(String(id), item);
+    }
+  });
+
+  return Array.from(uniqueItems.values());
+}
+
+function getCampaignCountForAdAccount(account) {
+  const summaryCount = Number.parseInt(account.campaigns?.summary?.total_count, 10);
+
+  if (Number.isFinite(summaryCount)) {
+    return summaryCount;
+  }
+
+  return getEdgeItems(account.campaigns).length;
+}
+
+function getSpendForAdAccount(account) {
+  const spend = Number.parseFloat(account.insights?.data?.[0]?.spend);
+
+  return Number.isFinite(spend) ? spend : 0;
+}
+
+function getAdAccountConnectionStatus(statusCode) {
+  const normalizedStatus = Number.parseInt(statusCode, 10);
+
+  if (!Number.isFinite(normalizedStatus)) {
+    return 'UNKNOWN';
+  }
+
+  return normalizedStatus === 1 ? 'ACTIVE' : 'BLOCKED';
+}
+
+function getAdAccountStatusLabel(statusCode) {
+  const normalizedStatus = Number.parseInt(statusCode, 10);
+
+  if (!Number.isFinite(normalizedStatus)) {
+    return 'Unknown';
+  }
+
+  if (normalizedStatus === 1) {
+    return 'Active';
+  }
+
+  return 'Blocked';
+}
+
+function normalizeAdAccountAsset(account) {
+  const accountId = account.account_id || String(account.id || '').replace(/^act_/, '');
+  const nodeId = String(account.id || `act_${accountId}`);
+  const statusCode = Number.parseInt(account.account_status, 10);
+
+  return {
+    id: nodeId,
+    accountId,
+    name: account.name || `Ad Account ${accountId}`,
+    currency: account.currency || null,
+    connectionStatus: getAdAccountConnectionStatus(statusCode),
+    statusCode: Number.isFinite(statusCode) ? statusCode : null,
+    statusLabel: getAdAccountStatusLabel(statusCode),
+    campaignCount: getCampaignCountForAdAccount(account),
+    totalSpend: getSpendForAdAccount(account),
+  };
+}
+
+function getAdAccountAssets(metaProfile) {
+  return getUniqueItems(metaProfile.owned_ad_accounts, metaProfile.client_ad_accounts).map(normalizeAdAccountAsset);
+}
+
+function getAssetMetrics(metaProfile) {
+  if (metaProfile.__assetMetricsStatus !== BUSINESS_PROFILE_ASSET_METRIC_STATUSES.SYNCED) {
+    return {
+      status: BUSINESS_PROFILE_ASSET_METRIC_STATUSES.UNKNOWN,
+      adAccounts: [],
+      adAccountCount: 0,
+      facebookPageCount: 0,
+      campaignCount: 0,
+      totalSpend: 0,
+      spendCurrency: null,
+    };
+  }
+
+  const adAccounts = getAdAccountAssets(metaProfile);
+  const pages = getUniqueItems(metaProfile.owned_pages, metaProfile.client_pages);
+  const currencies = new Set(adAccounts.map((account) => account.currency).filter(Boolean));
+
+  return {
+    status: BUSINESS_PROFILE_ASSET_METRIC_STATUSES.SYNCED,
+    adAccounts,
+    adAccountCount: adAccounts.length,
+    facebookPageCount: pages.length,
+    campaignCount: adAccounts.reduce((total, account) => total + account.campaignCount, 0),
+    totalSpend: adAccounts.reduce((total, account) => total + account.totalSpend, 0),
+    spendCurrency: currencies.size === 1 ? Array.from(currencies)[0] : currencies.size > 1 ? 'MIXED' : null,
+  };
+}
+
+function hasProfileChanged(profile, metaProfile, token, socialAccount) {
+  const assetMetrics = getAssetMetrics(metaProfile);
+
   return (
     profile.name !== metaProfile.name ||
     profile.verificationStatus !== (metaProfile.verification_status || null) ||
@@ -327,15 +505,42 @@ function hasProfileChanged(profile, metaProfile, token) {
     profile.metaStatusReason !== getMetaStatusReason(metaProfile) ||
     profile.isDisabledForIntegrityReasons !== getIntegrityDisabledFlag(metaProfile) ||
     profile.sourceToken?.toString() !== token.id ||
-    profile.sourceTokenLabel !== token.label
+    profile.sourceTokenLabel !== token.label ||
+    profile.socialAccount?.toString() !== socialAccount._id.toString() ||
+    profile.socialAccountName !== socialAccount.name ||
+    (assetMetrics.status === BUSINESS_PROFILE_ASSET_METRIC_STATUSES.SYNCED &&
+      (profile.adAccountCount !== assetMetrics.adAccountCount ||
+        profile.facebookPageCount !== assetMetrics.facebookPageCount ||
+        profile.campaignCount !== assetMetrics.campaignCount ||
+        profile.totalSpend !== assetMetrics.totalSpend ||
+        profile.spendCurrency !== assetMetrics.spendCurrency ||
+        profile.assetMetricsStatus !== assetMetrics.status ||
+        JSON.stringify(profile.adAccounts || []) !== JSON.stringify(assetMetrics.adAccounts)))
   );
 }
 
-async function upsertMetaProfile(metaProfile, token, syncedAt) {
+function applyAssetMetrics(profile, metaProfile, syncedAt) {
+  const assetMetrics = getAssetMetrics(metaProfile);
+
+  if (assetMetrics.status !== BUSINESS_PROFILE_ASSET_METRIC_STATUSES.SYNCED) {
+    return;
+  }
+
+  profile.adAccountCount = assetMetrics.adAccountCount;
+  profile.facebookPageCount = assetMetrics.facebookPageCount;
+  profile.campaignCount = assetMetrics.campaignCount;
+  profile.totalSpend = assetMetrics.totalSpend;
+  profile.spendCurrency = assetMetrics.spendCurrency;
+  profile.assetMetricsStatus = assetMetrics.status;
+  profile.assetMetricsSyncedAt = syncedAt;
+  profile.adAccounts = assetMetrics.adAccounts;
+}
+
+async function upsertMetaProfile(metaProfile, token, syncedAt, socialAccount) {
   const existingProfile = await BusinessProfile.findOne({ metaBusinessId: metaProfile.id });
 
   if (!existingProfile) {
-    await BusinessProfile.create({
+    const profile = new BusinessProfile({
       metaBusinessId: metaProfile.id,
       name: metaProfile.name || `Business ${metaProfile.id}`,
       verificationStatus: metaProfile.verification_status || null,
@@ -345,17 +550,27 @@ async function upsertMetaProfile(metaProfile, token, syncedAt) {
       lastStatusCheckedAt: syncedAt,
       sourceToken: token.id,
       sourceTokenLabel: token.label,
+      socialAccount: socialAccount._id,
+      socialAccountName: socialAccount.name,
       rawMetaData: metaProfile,
       lastSyncedAt: syncedAt,
     });
+
+    applyAssetMetrics(profile, metaProfile, syncedAt);
+    await profile.save();
     return 'created';
   }
 
-  if (!hasProfileChanged(existingProfile, metaProfile, token)) {
+  if (!hasProfileChanged(existingProfile, metaProfile, token, socialAccount)) {
     existingProfile.lastSyncedAt = syncedAt;
     existingProfile.lastStatusCheckedAt = syncedAt;
     existingProfile.sourceToken = token.id;
     existingProfile.sourceTokenLabel = token.label;
+    existingProfile.socialAccount = socialAccount._id;
+    existingProfile.socialAccountName = socialAccount.name;
+    existingProfile.brand = null;
+    existingProfile.agency = null;
+    applyAssetMetrics(existingProfile, metaProfile, syncedAt);
     await existingProfile.save();
     return 'skipped';
   }
@@ -368,6 +583,11 @@ async function upsertMetaProfile(metaProfile, token, syncedAt) {
   existingProfile.lastStatusCheckedAt = syncedAt;
   existingProfile.sourceToken = token.id;
   existingProfile.sourceTokenLabel = token.label;
+  existingProfile.socialAccount = socialAccount._id;
+  existingProfile.socialAccountName = socialAccount.name;
+  existingProfile.brand = null;
+  existingProfile.agency = null;
+  applyAssetMetrics(existingProfile, metaProfile, syncedAt);
   existingProfile.rawMetaData = metaProfile;
   existingProfile.lastSyncedAt = syncedAt;
   await existingProfile.save();
@@ -399,13 +619,23 @@ async function syncBusinessProfiles({ actor, req, tokenId = null }) {
     skipped: 0,
     failed: 0,
     statusCheckFailed: 0,
+    socialAccountsCreated: 0,
+    socialAccountsUpdated: 0,
+    socialAccountsSkipped: 0,
     errors: [],
   };
 
   for (const token of activeTokens) {
     try {
       summary.apiCalls += 1;
-      const metaProfiles = await fetchBusinessesForToken(token);
+      const { metaSocialAccount, metaProfiles } = await fetchSocialAccountAndBusinessesForToken(token);
+      const socialAccountResult = await socialAccountService.upsertSocialAccountFromMeta({
+        metaAccount: metaSocialAccount,
+        token,
+        syncedAt,
+      });
+      summary[`socialAccounts${socialAccountResult.result[0].toUpperCase()}${socialAccountResult.result.slice(1)}`] += 1;
+
       let requestDisabledStatus = true;
 
       for (const metaProfile of metaProfiles) {
@@ -421,7 +651,7 @@ async function syncBusinessProfiles({ actor, req, tokenId = null }) {
           requestDisabledStatus = false;
         }
 
-        const result = await upsertMetaProfile(checkedMetaProfile, token, syncedAt);
+        const result = await upsertMetaProfile(checkedMetaProfile, token, syncedAt, socialAccountResult.account);
         summary[result] += 1;
       }
     } catch (error) {
