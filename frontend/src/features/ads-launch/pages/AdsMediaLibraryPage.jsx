@@ -3,14 +3,14 @@ import toast from 'react-hot-toast';
 import { ImageIcon, LoaderCircle, Plus, RefreshCw, Trash2, Upload, Video, X } from 'lucide-react';
 import DashboardHeader from '../../dashboard/components/DashboardHeader';
 import DashboardPanel from '../../dashboard/components/DashboardPanel';
-import { adsLaunchApi } from '../api/adsLaunchApi';
+import { ADS_MEDIA_UPLOAD_CHUNK_BYTES, adsLaunchApi } from '../api/adsLaunchApi';
 
 const MIN_DIMENSION = 600;
 const MIN_ASPECT_RATIO = 0.56;
 const MAX_ASPECT_RATIO = 1.92;
 const MAX_IMAGE_BYTES = 30 * 1024 * 1024;
 const MAX_VIDEO_BYTES = 100 * 1024 * 1024;
-const MEDIA_CHUNK_BYTES = 256 * 1024;
+const MEDIA_CHUNK_BYTES = ADS_MEDIA_UPLOAD_CHUNK_BYTES;
 const IMAGE_MIME_TYPES = new Set(['image/jpeg']);
 const VIDEO_MIME_TYPES = new Set(['video/mp4', 'video/quicktime']);
 const MIME_TYPE_BY_EXTENSION = {

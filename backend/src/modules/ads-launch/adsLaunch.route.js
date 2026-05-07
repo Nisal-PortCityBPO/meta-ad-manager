@@ -43,7 +43,7 @@ const mediaChunkUpload = multer({
     },
   }),
   limits: {
-    fileSize: 512 * 1024,
+    fileSize: 2 * 1024 * 1024,
     files: 1,
     fields: 8,
   },

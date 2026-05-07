@@ -133,6 +133,8 @@ const buildMediaChunkFormData = ({ uploadId, chunk, chunkIndex, totalChunks }) =
   return formData;
 };
 
+export const ADS_MEDIA_UPLOAD_CHUNK_BYTES = 1024 * 1024;
+
 export const adsLaunchApi = {
   getTemplates: (params = {}) => {
     const query = new URLSearchParams();

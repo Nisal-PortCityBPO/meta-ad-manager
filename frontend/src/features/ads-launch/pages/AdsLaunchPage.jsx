@@ -28,7 +28,7 @@ import { businessDataApi } from '../../dashboard/api/businessDataApi';
 import { useTokens } from '../../token-management/hooks/useTokens';
 import { usePublishProgress } from '../../notifications/PublishProgressContext';
 import { useMetaKeySettings } from '../../settings/MetaKeySettingsContext';
-import { adsLaunchApi } from '../api/adsLaunchApi';
+import { ADS_MEDIA_UPLOAD_CHUNK_BYTES, adsLaunchApi } from '../api/adsLaunchApi';
 import { useLaunchTemplates } from '../hooks/useLaunchTemplates';
 import { useTokenMetaAssets } from '../hooks/useTokenMetaAssets';
 
@@ -609,6 +609,57 @@ const readFileAsDataUrl = (file, onProgress) =>
     };
     reader.readAsDataURL(file);
   });
+
+const readImageMetadata = (file) =>
+  new Promise((resolve, reject) => {
+    const image = new Image();
+    const url = URL.createObjectURL(file);
+
+    image.onload = () => {
+      URL.revokeObjectURL(url);
+      resolve({
+        width: image.naturalWidth,
+        height: image.naturalHeight,
+        duration: 0,
+      });
+    };
+    image.onerror = () => {
+      URL.revokeObjectURL(url);
+      reject(new Error(`Could not read dimensions for ${file.name}`));
+    };
+    image.src = url;
+  });
+
+const readVideoMetadata = (file) =>
+  new Promise((resolve, reject) => {
+    const video = document.createElement('video');
+    const url = URL.createObjectURL(file);
+
+    video.preload = 'metadata';
+    video.onloadedmetadata = () => {
+      URL.revokeObjectURL(url);
+      resolve({
+        width: video.videoWidth,
+        height: video.videoHeight,
+        duration: video.duration || 0,
+      });
+    };
+    video.onerror = () => {
+      URL.revokeObjectURL(url);
+      reject(new Error(`Could not read video details for ${file.name}`));
+    };
+    video.src = url;
+  });
+
+const readMediaMetadata = (file) => (file?.type?.startsWith('video/') ? readVideoMetadata(file) : readImageMetadata(file));
+
+const createMediaUploadId = () => {
+  if (window.crypto?.randomUUID) {
+    return window.crypto.randomUUID().replace(/-/g, '');
+  }
+
+  return `${Date.now()}${Math.random().toString(36).slice(2, 14)}`;
+};
 
 const normalizeStoredAsset = (asset) => {
   if (!asset?.name || !asset?.type) {
@@ -1299,6 +1350,7 @@ const AdsLaunchPage = () => {
       type: mediaAsset.media.type,
       url: mediaAsset.media.url,
       size: mediaAsset.media.size || 0,
+      mediaAssetId: mediaAsset.id,
     };
   };
 
@@ -1401,16 +1453,132 @@ const AdsLaunchPage = () => {
     };
   };
 
+  const uploadLaunchFileInChunks = async ({ file, label, progressStart = 0, progressEnd = 99 }) => {
+    const uploadId = createMediaUploadId();
+    const totalChunks = Math.max(Math.ceil(file.size / ADS_MEDIA_UPLOAD_CHUNK_BYTES), 1);
+
+    for (let chunkIndex = 0; chunkIndex < totalChunks; chunkIndex += 1) {
+      const chunkStart = chunkIndex * ADS_MEDIA_UPLOAD_CHUNK_BYTES;
+      const chunkEnd = Math.min(chunkStart + ADS_MEDIA_UPLOAD_CHUNK_BYTES, file.size);
+      const chunk = file.slice(chunkStart, chunkEnd, file.type);
+
+      await adsLaunchApi.uploadMediaChunkWithProgress({
+        uploadId,
+        chunk,
+        chunkIndex,
+        totalChunks,
+      }, {
+        onUploadProgress: (chunkPercent) => {
+          const uploadedBytes = chunkStart + Math.round(chunk.size * (chunkPercent / 100));
+          const fileProgress = file.size ? uploadedBytes / file.size : 1;
+          const percent = Math.min(Math.round(progressStart + fileProgress * (progressEnd - progressStart)), progressEnd);
+          setCreativeUploadProgress({
+            label: `Uploading ${label} ${chunkIndex + 1}/${totalChunks}`,
+            percent,
+          });
+        },
+      });
+    }
+
+    return uploadId;
+  };
+
+  const saveUploadedCreativeToMediaLibrary = async ({ label = 'creative upload' } = {}) => {
+    if (!mediaFile) {
+      return null;
+    }
+
+    const mediaMetadata = await readMediaMetadata(mediaFile);
+    const isVideoUpload = mediaFile.type.startsWith('video/');
+    const thumbnailMetadata = isVideoUpload && thumbnailFile ? await readImageMetadata(thumbnailFile) : null;
+    const mediaUploadEnd = isVideoUpload && thumbnailFile ? 94 : 99;
+    const uploadId = await uploadLaunchFileInChunks({
+      file: mediaFile,
+      label: isVideoUpload ? `${label} video` : `${label} image`,
+      progressStart: 0,
+      progressEnd: mediaUploadEnd,
+    });
+    const thumbnailUploadId = isVideoUpload && thumbnailFile
+      ? await uploadLaunchFileInChunks({
+          file: thumbnailFile,
+          label: `${label} thumbnail`,
+          progressStart: mediaUploadEnd,
+          progressEnd: 99,
+        })
+      : '';
+
+    setCreativeUploadProgress({
+      label: `Saving ${label}`,
+      percent: 100,
+    });
+
+    const data = await adsLaunchApi.completeChunkedMediaUpload({
+      name: (templateName || form.launchLabel || mediaFile.name).trim(),
+      uploadId,
+      mediaOriginalName: mediaFile.name,
+      mediaMimeType: mediaFile.type,
+      mediaSize: mediaFile.size,
+      mediaMetadata,
+      thumbnailUploadId,
+      thumbnailOriginalName: thumbnailFile?.name || '',
+      thumbnailMimeType: thumbnailFile?.type || '',
+      thumbnailSize: thumbnailFile?.size || 0,
+      thumbnailMetadata,
+    });
+
+    return data.mediaAsset;
+  };
+
+  const saveUploadedThumbnailToMediaLibrary = async ({ label = 'thumbnail upload' } = {}) => {
+    if (!thumbnailFile) {
+      return null;
+    }
+
+    const thumbnailMetadata = await readImageMetadata(thumbnailFile);
+    const uploadId = await uploadLaunchFileInChunks({
+      file: thumbnailFile,
+      label,
+      progressStart: 0,
+      progressEnd: 99,
+    });
+
+    setCreativeUploadProgress({
+      label: `Saving ${label}`,
+      percent: 100,
+    });
+
+    const data = await adsLaunchApi.completeChunkedMediaUpload({
+      name: `${(templateName || form.launchLabel || thumbnailFile.name).trim()} thumbnail`,
+      uploadId,
+      mediaOriginalName: thumbnailFile.name,
+      mediaMimeType: thumbnailFile.type,
+      mediaSize: thumbnailFile.size,
+      mediaMetadata: thumbnailMetadata,
+    });
+
+    return data.mediaAsset;
+  };
+
   const buildTemplatePayload = async ({ includeStoredAssets = false } = {}) => {
+    const uploadedMediaAsset = mediaFile ? await saveUploadedCreativeToMediaLibrary({ label: 'template media' }) : null;
+    const uploadedThumbnailAsset = !mediaFile && thumbnailFile
+      ? await saveUploadedThumbnailToMediaLibrary({ label: 'template thumbnail' })
+      : null;
+    const mediaAssetId = uploadedMediaAsset?.id || (creativeSource === 'library' ? savedMediaAsset?.mediaAssetId : '');
+    const thumbnailAssetId = uploadedThumbnailAsset?.id || (thumbnailSource === 'library' ? savedThumbnailAsset?.mediaAssetId : '');
     const media = mediaFile
-      ? await serializeAssetForTemplate(mediaFile, 'Preparing media for template')
-      : includeStoredAssets || creativeSource === 'library'
+      ? null
+      : mediaAssetId
+        ? null
+        : includeStoredAssets || creativeSource === 'library'
         ? await serializeStoredAssetForTemplate(savedMediaAsset)
         : null;
     const thumbnail = isVideoAsset
       ? thumbnailFile
-        ? await serializeAssetForTemplate(thumbnailFile, 'Preparing thumbnail for template')
-        : includeStoredAssets || thumbnailSource === 'library'
+        ? null
+        : thumbnailAssetId
+          ? null
+          : includeStoredAssets || thumbnailSource === 'library'
           ? await serializeStoredAssetForTemplate(savedThumbnailAsset)
           : null
       : null;
@@ -1438,20 +1606,32 @@ const AdsLaunchPage = () => {
         })),
         media,
         thumbnail,
+        mediaAssetId,
+        thumbnailAssetId,
       },
     };
   };
 
   const buildPublishPayload = async () => {
+    const uploadedMediaAsset = mediaFile ? await saveUploadedCreativeToMediaLibrary({ label: 'publish media' }) : null;
+    const uploadedThumbnailAsset = !mediaFile && thumbnailFile
+      ? await saveUploadedThumbnailToMediaLibrary({ label: 'publish thumbnail' })
+      : null;
+    const mediaAssetId = uploadedMediaAsset?.id || (creativeSource === 'library' ? activeMediaAsset?.mediaAssetId : '');
+    const thumbnailAssetId = uploadedThumbnailAsset?.id || (thumbnailSource === 'library' ? activeThumbnailAsset?.mediaAssetId : '');
     const media = mediaFile
-      ? await serializeAssetForTemplate(mediaFile, 'Preparing media for publish')
-      : activeMediaAsset
+      ? null
+      : mediaAssetId || activeTemplateId
+        ? null
+        : activeMediaAsset
         ? await serializeStoredAssetForTemplate(activeMediaAsset)
         : null;
     const thumbnail = isVideoAsset
       ? thumbnailFile
-        ? await serializeAssetForTemplate(thumbnailFile, 'Preparing thumbnail for publish')
-        : activeThumbnailAsset
+        ? null
+        : thumbnailAssetId || activeTemplateId
+          ? null
+          : activeThumbnailAsset
           ? await serializeStoredAssetForTemplate(activeThumbnailAsset)
           : null
       : null;
@@ -1493,6 +1673,8 @@ const AdsLaunchPage = () => {
       },
       media,
       thumbnail,
+      mediaAssetId,
+      thumbnailAssetId,
     };
   };
 
@@ -2413,7 +2595,7 @@ const AdsLaunchPage = () => {
                   <p className="mt-3 text-sm font-black text-slate-950">Upload image or video</p>
                   <p className="mt-1 text-xs font-semibold text-slate-500">Upload a new file or use Library above. Either option can be saved with the template.</p>
                 </label>
-                <input id="media-upload" type="file" accept="image/*,video/*" onChange={handleMediaChange} className="hidden" />
+                <input id="media-upload" type="file" accept="image/jpeg,video/mp4,video/quicktime" onChange={handleMediaChange} className="hidden" />
 
                 {activeMediaPreviewUrl ? (
                   <div className="overflow-hidden rounded-2xl border border-sky-100 bg-white">
@@ -2489,7 +2671,7 @@ const AdsLaunchPage = () => {
                 <input
                   id="thumbnail-upload"
                   type="file"
-                  accept="image/*"
+                  accept="image/jpeg"
                   onChange={handleThumbnailChange}
                   className="hidden"
                   disabled={!isVideoAsset}

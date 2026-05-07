@@ -581,6 +581,28 @@ function persistTemplateAsset({ templateId, asset, assetKind }) {
   };
 }
 
+function copyMediaLibraryAssetToTemplateAsset({ templateId, asset, assetKind }) {
+  const sourcePath = getStoredMediaLibraryAssetPath(asset);
+
+  if (!sourcePath || !asset?.type) {
+    throw new HttpError(400, `${assetKind === 'thumbnail' ? 'Thumbnail' : 'Media'} library asset is missing its saved file`);
+  }
+
+  const extension = getAssetFileExtension(asset.name, asset.type);
+  const storageKey = `${templateId}-${assetKind}-${Date.now()}${extension}`;
+  const filePath = path.join(TEMPLATE_ASSET_DIR, storageKey);
+
+  ensureTemplateAssetDir();
+  fs.copyFileSync(sourcePath, filePath);
+
+  return {
+    name: asset.name,
+    type: asset.type,
+    size: asset.size || fs.statSync(filePath).size,
+    storageKey,
+  };
+}
+
 function readStoredTemplateAsset(asset) {
   if (!asset?.storageKey) {
     return null;
@@ -1031,9 +1053,11 @@ function readStoredMediaLibraryAsset(asset) {
   };
 }
 
-async function applyTemplateAssets({ template, snapshotInput, existingSnapshot = null }) {
+async function applyTemplateAssets({ template, snapshotInput, existingSnapshot = null, actor = null }) {
   const nextMediaInput = sanitizeTemplateAssetInput(snapshotInput?.media);
   const nextThumbnailInput = sanitizeTemplateAssetInput(snapshotInput?.thumbnail);
+  const nextMediaAssetId = normalizeText(snapshotInput?.mediaAssetId);
+  const nextThumbnailAssetId = normalizeText(snapshotInput?.thumbnailAssetId);
   const shouldClearAssets = snapshotInput?.clearMedia === true;
   let mediaAsset = existingSnapshot?.media || template.snapshot?.media || null;
   let thumbnailAsset = existingSnapshot?.thumbnail || template.snapshot?.thumbnail || null;
@@ -1043,6 +1067,30 @@ async function applyTemplateAssets({ template, snapshotInput, existingSnapshot =
     deleteStoredTemplateAsset(thumbnailAsset);
     mediaAsset = null;
     thumbnailAsset = null;
+  } else if (nextMediaAssetId) {
+    const libraryMediaAsset = await getMediaAssetDocForActor(nextMediaAssetId, actor);
+    const previousMedia = mediaAsset;
+    const previousThumbnail = thumbnailAsset;
+    mediaAsset = copyMediaLibraryAssetToTemplateAsset({
+      templateId: template._id.toString(),
+      asset: libraryMediaAsset.media,
+      assetKind: 'media',
+    });
+
+    if (libraryMediaAsset.mediaType === ADS_MEDIA_TYPES.VIDEO) {
+      thumbnailAsset = libraryMediaAsset.thumbnail
+        ? copyMediaLibraryAssetToTemplateAsset({
+            templateId: template._id.toString(),
+            asset: libraryMediaAsset.thumbnail,
+            assetKind: 'thumbnail',
+          })
+        : null;
+    } else {
+      thumbnailAsset = null;
+    }
+
+    deleteStoredTemplateAsset(previousMedia);
+    deleteStoredTemplateAsset(previousThumbnail);
   } else if (nextMediaInput) {
     const previousMedia = mediaAsset;
     mediaAsset = persistTemplateAsset({
@@ -1061,7 +1109,19 @@ async function applyTemplateAssets({ template, snapshotInput, existingSnapshot =
     }
   }
 
-  if (nextThumbnailInput) {
+  if (nextThumbnailAssetId) {
+    const libraryThumbnailAsset = await getMediaAssetDocForActor(nextThumbnailAssetId, actor);
+    if (libraryThumbnailAsset.mediaType !== ADS_MEDIA_TYPES.IMAGE) {
+      throw new HttpError(400, 'Template thumbnail must be an image media library asset');
+    }
+    const previousThumbnail = thumbnailAsset;
+    thumbnailAsset = copyMediaLibraryAssetToTemplateAsset({
+      templateId: template._id.toString(),
+      asset: libraryThumbnailAsset.media,
+      assetKind: 'thumbnail',
+    });
+    deleteStoredTemplateAsset(previousThumbnail);
+  } else if (nextThumbnailInput) {
     const previousThumbnail = thumbnailAsset;
     thumbnailAsset = persistTemplateAsset({
       templateId: template._id.toString(),
@@ -1340,6 +1400,7 @@ async function createTemplate({ name, templateType, config, snapshot, actor, req
   await applyTemplateAssets({
     template,
     snapshotInput: snapshot,
+    actor,
   });
   await template.save();
 
@@ -1376,6 +1437,7 @@ async function updateTemplate({ templateId, name, templateType, config, snapshot
     template,
     snapshotInput: snapshot,
     existingSnapshot,
+    actor,
   });
   template.updatedBy = actor._id;
   await template.save();
@@ -1754,6 +1816,8 @@ function ensurePublishPayload(payload) {
     },
     media: sanitizeTemplateAssetInput(payload.media),
     thumbnail: sanitizeTemplateAssetInput(payload.thumbnail),
+    mediaAssetId: normalizeText(payload.mediaAssetId),
+    thumbnailAssetId: normalizeText(payload.thumbnailAssetId),
   };
 
   if (!cleaned.launchLabel) {
@@ -2473,16 +2537,33 @@ async function resolvePublishCreativeAssets({ launch, actor }) {
     };
   }
 
+  if (launch.mediaAssetId) {
+    const mediaAsset = await getMediaAssetDocForActor(launch.mediaAssetId, actor);
+    const creativeAssets = readCreativeAssetsFromMediaAsset(mediaAsset);
+
+    if (launch.thumbnailAssetId) {
+      const thumbnailAsset = await getMediaAssetDocForActor(launch.thumbnailAssetId, actor);
+      creativeAssets.thumbnail = readThumbnailFromMediaLibraryAsset(thumbnailAsset);
+    }
+
+    return creativeAssets;
+  }
+
   if (!launch.templateId) {
     throw new HttpError(400, 'Upload an image or video before publishing');
   }
 
   const template = await getTemplateForActor(launch.templateId, actor);
   const media = readStoredTemplateAsset(template.snapshot?.media);
-  const thumbnail = readStoredTemplateAsset(template.snapshot?.thumbnail);
+  let thumbnail = readStoredTemplateAsset(template.snapshot?.thumbnail);
 
   if (!media) {
     throw new HttpError(400, 'The selected template does not have a saved creative asset');
+  }
+
+  if (launch.thumbnailAssetId) {
+    const thumbnailAsset = await getMediaAssetDocForActor(launch.thumbnailAssetId, actor);
+    thumbnail = readThumbnailFromMediaLibraryAsset(thumbnailAsset);
   }
 
   return {
