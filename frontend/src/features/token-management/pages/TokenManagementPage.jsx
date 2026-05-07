@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import toast from 'react-hot-toast';
-import { Edit3, Plus, Save, Trash2, X } from 'lucide-react';
+import { DownloadCloud, Edit3, Plus, Save, Trash2, X } from 'lucide-react';
 import DashboardHeader from '../../dashboard/components/DashboardHeader';
 import DashboardPanel from '../../dashboard/components/DashboardPanel';
 import { tokensApi } from '../api/tokensApi';
@@ -18,11 +18,16 @@ const statusStyles = {
   BLOCKED: 'bg-red-50 text-red-700',
 };
 
+const syncMessage = (summary) =>
+  `Fetch done: ${summary.created} new, ${summary.updated} updated, ${summary.skipped} skipped, ${summary.apiCalls} API calls`;
+
 const TokenManagementPage = () => {
   const { tokens, loading, error, loadTokens } = useTokens();
   const [form, setForm] = useState(emptyForm);
   const [editingToken, setEditingToken] = useState(null);
   const [saving, setSaving] = useState(false);
+  const [syncingAll, setSyncingAll] = useState(false);
+  const [syncingTokenId, setSyncingTokenId] = useState(null);
 
   const updateField = (field, value) => {
     setForm((current) => ({
@@ -93,6 +98,42 @@ const TokenManagementPage = () => {
       toast.error(requestError.message);
     } finally {
       setSaving(false);
+    }
+  };
+
+  const handleSyncAllProfiles = async () => {
+    setSyncingAll(true);
+    try {
+      const data = await tokensApi.syncBusinessProfiles();
+      toast.success(syncMessage(data.summary));
+
+      if (data.summary.errors?.length) {
+        toast.error(data.summary.errors[0].message);
+      }
+
+      await loadTokens();
+    } catch (requestError) {
+      toast.error(requestError.message);
+    } finally {
+      setSyncingAll(false);
+    }
+  };
+
+  const handleSyncTokenProfiles = async (token) => {
+    setSyncingTokenId(token.id);
+    try {
+      const data = await tokensApi.syncBusinessProfiles(token.id);
+      toast.success(`${token.label}: ${syncMessage(data.summary)}`);
+
+      if (data.summary.errors?.length) {
+        toast.error(data.summary.errors[0].message);
+      }
+
+      await loadTokens();
+    } catch (requestError) {
+      toast.error(requestError.message);
+    } finally {
+      setSyncingTokenId(null);
     }
   };
 
@@ -200,6 +241,21 @@ const TokenManagementPage = () => {
         </DashboardPanel>
 
         <DashboardPanel title="Saved Meta API tokens">
+          <div className="mb-4 flex flex-col justify-between gap-3 rounded-2xl border border-sky-50 bg-sky-50/60 p-4 sm:flex-row sm:items-center">
+            <p className="text-sm leading-6 text-slate-500">
+              Fetch profiles only when needed. Use one token at a time to avoid spending hourly Meta API limits across every saved token.
+            </p>
+            <button
+              type="button"
+              onClick={handleSyncAllProfiles}
+              disabled={syncingAll || Boolean(syncingTokenId) || saving || !tokens.some((token) => token.status === 'ACTIVE')}
+              className="flex h-11 w-fit shrink-0 items-center gap-2 rounded-xl bg-slate-950 px-4 text-sm font-bold text-white transition hover:bg-slate-800 disabled:opacity-70"
+            >
+              <DownloadCloud size={17} strokeWidth={2.2} />
+              {syncingAll ? 'Fetching all...' : 'Fetch all profiles'}
+            </button>
+          </div>
+
           {loading ? (
             <div className="h-72 animate-pulse rounded-2xl bg-sky-50" />
           ) : (
@@ -239,6 +295,15 @@ const TokenManagementPage = () => {
                         </td>
                         <td className="px-5 py-4">
                           <div className="flex gap-2">
+                            <button
+                              type="button"
+                              onClick={() => handleSyncTokenProfiles(token)}
+                              disabled={saving || syncingAll || Boolean(syncingTokenId) || token.status !== 'ACTIVE'}
+                              className="flex h-10 items-center gap-2 rounded-xl border border-indigo-100 bg-white px-3 text-sm font-bold text-indigo-700 transition hover:bg-indigo-50 disabled:opacity-70"
+                            >
+                              <DownloadCloud size={16} strokeWidth={2.2} />
+                              {syncingTokenId === token.id ? 'Fetching...' : 'Fetch'}
+                            </button>
                             <button
                               type="button"
                               onClick={() => startEdit(token)}

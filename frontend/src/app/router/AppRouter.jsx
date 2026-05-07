@@ -5,6 +5,7 @@ import AdsLaunchPage from '../../features/ads-launch/pages/AdsLaunchPage';
 import LoginPage from '../../features/auth/pages/LoginPage';
 import DashboardPage from '../../features/dashboard/pages/DashboardPage';
 import NotificationsPage from '../../features/notifications/pages/NotificationsPage';
+import OverviewPage from '../../features/overview/pages/OverviewPage';
 import ProfilePage from '../../features/profile/pages/ProfilePage';
 import TokenManagementPage from '../../features/token-management/pages/TokenManagementPage';
 import UsersPage from '../../features/users/pages/UsersPage';
@@ -56,6 +57,7 @@ const AppRouter = () => {
         <Route element={<DashboardLayout />}>
           <Route index element={<Navigate to="/dashboard" replace />} />
           <Route path="/dashboard" element={<DashboardPage />} />
+          <Route path="/overview" element={<OverviewPage />} />
           <Route path="/profile" element={<ProfilePage />} />
           <Route path="/notifications" element={<NotificationsPage />} />
 

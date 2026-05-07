@@ -1,5 +1,6 @@
 const dotenv = require('dotenv');
-const createApp = require('./app');
+const http = require('http');
+const { attachFrontend, createApiApp } = require('./app');
 const connectDB = require('./app/config/db');
 const { seedDatabase } = require('./scripts/seedDatabase');
 
@@ -11,9 +12,11 @@ async function startServer() {
   await connectDB();
   await seedDatabase();
 
-  const app = await createApp();
+  const app = createApiApp();
+  const server = http.createServer(app);
+  await attachFrontend(app, { hmrServer: server });
 
-  app.listen(PORT, () => {
+  server.listen(PORT, () => {
     console.log(`Server is running on http://localhost:${PORT}`);
   });
 }

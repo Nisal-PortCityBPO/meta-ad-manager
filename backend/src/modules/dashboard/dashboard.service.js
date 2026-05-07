@@ -1,7 +1,7 @@
 const ActivityLog = require('../activity-logs/activityLog.model');
 const Agency = require('../agencies/agency.model');
 const Brand = require('../brands/brand.model');
-const BusinessProfile = require('../business-profiles/businessProfile.model');
+const { BusinessProfile } = require('../business-profiles/businessProfile.model');
 const { Token } = require('../token-management/token.model');
 const { User, USER_ROLES } = require('../users/user.model');
 

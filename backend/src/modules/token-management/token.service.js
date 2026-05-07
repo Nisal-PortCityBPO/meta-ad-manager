@@ -28,8 +28,14 @@ async function listTokens() {
   return tokens.map((token) => token.toSafeObject());
 }
 
-async function listActiveTokensWithSecrets() {
-  const tokens = await Token.find({ status: TOKEN_STATUSES.ACTIVE }).sort({ createdAt: 1 });
+async function listActiveTokensWithSecrets({ tokenId } = {}) {
+  const query = { status: TOKEN_STATUSES.ACTIVE };
+
+  if (tokenId) {
+    query._id = tokenId;
+  }
+
+  const tokens = await Token.find(query).sort({ createdAt: 1 });
 
   return tokens.map((token) => ({
     id: token._id.toString(),

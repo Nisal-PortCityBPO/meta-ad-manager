@@ -1,57 +1,91 @@
 import { useEffect, useState } from 'react';
 import { businessDataApi } from '../api/businessDataApi';
 
-export const useBusinessData = () => {
+const defaultProfilePagination = {
+  page: 1,
+  limit: 5,
+  total: 0,
+  totalPages: 1,
+  hasPrevious: false,
+  hasNext: false,
+};
+
+const defaultProfileFilterOptions = {
+  tokenLabels: [],
+};
+
+export const useBusinessData = (profileQuery = {}) => {
+  const { agencyId, brandId, limit, page, search, tokenLabel } = profileQuery;
   const [brands, setBrands] = useState([]);
   const [agencies, setAgencies] = useState([]);
   const [profiles, setProfiles] = useState([]);
+  const [profilePagination, setProfilePagination] = useState(defaultProfilePagination);
+  const [profileFilterOptions, setProfileFilterOptions] = useState(defaultProfileFilterOptions);
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState('');
+  const [errors, setErrors] = useState({
+    brands: '',
+    agencies: '',
+    profiles: '',
+  });
+
+  const error = Object.values(errors).filter(Boolean).join(' ');
+
+  const setDataResult = (key, result, setter, responseKey, afterSet) => {
+    if (result.status === 'fulfilled') {
+      setter(result.value[responseKey]);
+      afterSet?.(result.value);
+      setErrors((current) => ({
+        ...current,
+        [key]: '',
+      }));
+      return;
+    }
+
+    setErrors((current) => ({
+      ...current,
+      [key]: result.reason.message,
+    }));
+  };
 
   const loadBusinessData = async ({ showLoading = true } = {}) => {
     if (showLoading) {
       setLoading(true);
     }
 
-    try {
-      const [brandData, agencyData, profileData] = await Promise.all([
-        businessDataApi.getBrands(),
-        businessDataApi.getAgencies(),
-        businessDataApi.getBusinessProfiles(),
-      ]);
+    const [brandResult, agencyResult, profileResult] = await Promise.allSettled([
+      businessDataApi.getBrands(),
+      businessDataApi.getAgencies(),
+      businessDataApi.getBusinessProfiles({ agencyId, brandId, limit, page, search, tokenLabel }),
+    ]);
 
-      setBrands(brandData.brands);
-      setAgencies(agencyData.agencies);
-      setProfiles(profileData.profiles);
-      setError('');
-    } catch (requestError) {
-      setError(requestError.message);
-    } finally {
-      if (showLoading) {
-        setLoading(false);
-      }
+    setDataResult('brands', brandResult, setBrands, 'brands');
+    setDataResult('agencies', agencyResult, setAgencies, 'agencies');
+    setDataResult('profiles', profileResult, setProfiles, 'profiles', (data) => {
+      setProfilePagination(data.pagination || defaultProfilePagination);
+      setProfileFilterOptions(data.filterOptions || defaultProfileFilterOptions);
+    });
+
+    if (showLoading) {
+      setLoading(false);
     }
   };
 
   useEffect(() => {
     let isMounted = true;
 
-    Promise.all([
+    Promise.allSettled([
       businessDataApi.getBrands(),
       businessDataApi.getAgencies(),
-      businessDataApi.getBusinessProfiles(),
+      businessDataApi.getBusinessProfiles({ agencyId, brandId, limit, page, search, tokenLabel }),
     ])
-      .then(([brandData, agencyData, profileData]) => {
+      .then(([brandResult, agencyResult, profileResult]) => {
         if (isMounted) {
-          setBrands(brandData.brands);
-          setAgencies(agencyData.agencies);
-          setProfiles(profileData.profiles);
-          setError('');
-        }
-      })
-      .catch((requestError) => {
-        if (isMounted) {
-          setError(requestError.message);
+          setDataResult('brands', brandResult, setBrands, 'brands');
+          setDataResult('agencies', agencyResult, setAgencies, 'agencies');
+          setDataResult('profiles', profileResult, setProfiles, 'profiles', (data) => {
+            setProfilePagination(data.pagination || defaultProfilePagination);
+            setProfileFilterOptions(data.filterOptions || defaultProfileFilterOptions);
+          });
         }
       })
       .finally(() => {
@@ -63,7 +97,14 @@ export const useBusinessData = () => {
     return () => {
       isMounted = false;
     };
-  }, []);
+  }, [
+    agencyId,
+    brandId,
+    limit,
+    page,
+    search,
+    tokenLabel,
+  ]);
 
   return {
     agencies,
@@ -71,6 +112,8 @@ export const useBusinessData = () => {
     error,
     loadBusinessData,
     loading,
+    profileFilterOptions,
+    profilePagination,
     profiles,
     setAgencies,
     setBrands,

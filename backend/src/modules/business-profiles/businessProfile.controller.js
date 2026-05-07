@@ -2,14 +2,15 @@ const asyncHandler = require('../../app/utils/asyncHandler');
 const businessProfileService = require('./businessProfile.service');
 
 const getBusinessProfiles = asyncHandler(async (req, res) => {
-  const profiles = await businessProfileService.listBusinessProfiles();
-  res.json({ profiles });
+  const result = await businessProfileService.listBusinessProfiles(req.query);
+  res.json(result);
 });
 
 const syncBusinessProfiles = asyncHandler(async (req, res) => {
   const result = await businessProfileService.syncBusinessProfiles({
     actor: req.user,
     req,
+    tokenId: req.body?.tokenId,
   });
 
   res.json({

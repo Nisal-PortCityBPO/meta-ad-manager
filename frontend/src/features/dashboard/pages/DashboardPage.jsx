@@ -3,8 +3,10 @@ import toast from 'react-hot-toast';
 import {
   BriefcaseBusiness,
   Building2,
-  DownloadCloud,
+  ChevronLeft,
+  ChevronRight,
   Edit3,
+  Filter,
   Handshake,
   KeyRound,
   Save,
@@ -26,6 +28,8 @@ const defaultAgencyForm = {
   name: '',
 };
 
+const businessProfilePageSizes = [5, 10, 20];
+
 const formatDate = (value) => {
   if (!value) {
     return 'Not yet';
@@ -35,6 +39,22 @@ const formatDate = (value) => {
     dateStyle: 'medium',
     timeStyle: 'short',
   }).format(new Date(value));
+};
+
+const metaStatusStyles = {
+  ACTIVE: 'bg-emerald-50 text-emerald-700',
+  BLOCKED: 'bg-red-50 text-red-700',
+  CONNECTED: 'bg-emerald-50 text-emerald-700',
+  DISABLED: 'bg-red-50 text-red-700',
+  UNKNOWN: 'bg-slate-100 text-slate-600',
+};
+
+const metaStatusLabels = {
+  ACTIVE: 'Connected',
+  BLOCKED: 'Disabled',
+  CONNECTED: 'Connected',
+  DISABLED: 'Disabled',
+  UNKNOWN: 'Unknown',
 };
 
 const StatCard = ({ icon: Icon, label, value, tone }) => (
@@ -177,13 +197,19 @@ const EntityManager = ({ title, emptyText, items, defaultForm, saving, onSubmit,
 const BusinessProfilesTable = ({
   agencies,
   brands,
+  filters,
+  filterOptions,
   loading,
+  limit,
+  onClearFilters,
   profiles,
+  pagination,
+  onFilterChange,
+  onLimitChange,
+  onPageChange,
   saving,
   onAssign,
   onDelete,
-  onSync,
-  syncing,
 }) => {
   const [editingProfile, setEditingProfile] = useState(null);
   const [assignment, setAssignment] = useState({
@@ -218,17 +244,123 @@ const BusinessProfilesTable = ({
     >
       <div className="mb-4 flex flex-col justify-between gap-3 sm:flex-row sm:items-center">
         <p className="text-sm leading-6 text-slate-500">
-          Saved profiles are loaded from the database. Meta API calls happen only when you click fetch.
+          Saved profiles are loaded from the database. Fetch Meta data from Token Management to control API call usage.
         </p>
-        <button
-          type="button"
-          onClick={onSync}
-          disabled={syncing}
-          className="flex h-11 w-fit items-center gap-2 rounded-xl bg-slate-950 px-4 text-sm font-bold text-white transition hover:bg-slate-800 disabled:opacity-70"
-        >
-          <DownloadCloud size={17} strokeWidth={2.2} />
-          {syncing ? 'Fetching...' : 'Fetch from Meta API'}
-        </button>
+      </div>
+
+      <div className="mb-4 grid gap-3 rounded-2xl border border-sky-50 bg-sky-50/50 p-4 md:grid-cols-2 xl:grid-cols-[minmax(0,1.1fr)_minmax(0,1fr)_minmax(0,1fr)_minmax(0,1fr)_120px_auto]">
+        <label className="grid gap-1">
+          <span className="text-xs font-black uppercase tracking-[0.14em] text-sky-700">Profile name</span>
+          <input
+            value={filters.search}
+            onChange={(event) => onFilterChange('search', event.target.value)}
+            className="h-11 rounded-xl border border-sky-100 bg-white px-3 text-sm font-semibold text-slate-700 outline-none transition focus:border-sky-400 focus:ring-4 focus:ring-sky-100"
+            placeholder="Search profiles"
+          />
+        </label>
+
+        <label className="grid gap-1">
+          <span className="text-xs font-black uppercase tracking-[0.14em] text-sky-700">API token</span>
+          <select
+            value={filters.tokenLabel}
+            onChange={(event) => onFilterChange('tokenLabel', event.target.value)}
+            className="h-11 rounded-xl border border-sky-100 bg-white px-3 text-sm font-semibold text-slate-700 outline-none transition focus:border-sky-400 focus:ring-4 focus:ring-sky-100"
+          >
+            <option value="">All tokens</option>
+            {filterOptions.tokenLabels.map((tokenLabel) => (
+              <option key={tokenLabel} value={tokenLabel}>
+                {tokenLabel}
+              </option>
+            ))}
+          </select>
+        </label>
+
+        <label className="grid gap-1">
+          <span className="text-xs font-black uppercase tracking-[0.14em] text-sky-700">Brand</span>
+          <select
+            value={filters.brandId}
+            onChange={(event) => onFilterChange('brandId', event.target.value)}
+            className="h-11 rounded-xl border border-sky-100 bg-white px-3 text-sm font-semibold text-slate-700 outline-none transition focus:border-sky-400 focus:ring-4 focus:ring-sky-100"
+          >
+            <option value="">All brands</option>
+            {brands.map((brand) => (
+              <option key={brand.id} value={brand.id}>
+                {brand.name}
+              </option>
+            ))}
+          </select>
+        </label>
+
+        <label className="grid gap-1">
+          <span className="text-xs font-black uppercase tracking-[0.14em] text-sky-700">Agency</span>
+          <select
+            value={filters.agencyId}
+            onChange={(event) => onFilterChange('agencyId', event.target.value)}
+            className="h-11 rounded-xl border border-sky-100 bg-white px-3 text-sm font-semibold text-slate-700 outline-none transition focus:border-sky-400 focus:ring-4 focus:ring-sky-100"
+          >
+            <option value="">All agencies</option>
+            {agencies.map((agency) => (
+              <option key={agency.id} value={agency.id}>
+                {agency.name}
+              </option>
+            ))}
+          </select>
+        </label>
+
+        <label className="grid gap-1">
+          <span className="text-xs font-black uppercase tracking-[0.14em] text-sky-700">Rows</span>
+          <select
+            value={limit}
+            onChange={(event) => onLimitChange(Number(event.target.value))}
+            className="h-11 rounded-xl border border-sky-100 bg-white px-3 text-sm font-semibold text-slate-700 outline-none transition focus:border-sky-400 focus:ring-4 focus:ring-sky-100"
+          >
+            {businessProfilePageSizes.map((size) => (
+              <option key={size} value={size}>
+                {size}
+              </option>
+            ))}
+          </select>
+        </label>
+
+        <div className="flex items-end">
+          <button
+            type="button"
+            onClick={onClearFilters}
+            className="h-11 rounded-xl border border-sky-100 bg-white px-4 text-sm font-bold text-slate-700 transition hover:bg-sky-50"
+          >
+            Clear
+          </button>
+        </div>
+      </div>
+
+      <div className="mb-4 flex flex-col justify-between gap-3 sm:flex-row sm:items-center">
+        <div className="flex items-center gap-2 text-sm font-bold text-slate-500">
+          <Filter size={17} strokeWidth={2.2} className="text-sky-600" />
+          Showing {pagination.total ? (pagination.page - 1) * pagination.limit + 1 : 0}-{Math.min(pagination.page * pagination.limit, pagination.total)} of {pagination.total} profiles
+        </div>
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={() => onPageChange(Math.max(pagination.page - 1, 1))}
+            disabled={!pagination.hasPrevious || loading}
+            className="flex h-10 items-center gap-2 rounded-xl border border-sky-100 bg-white px-3 text-sm font-bold text-slate-700 transition hover:bg-sky-50 disabled:opacity-50"
+          >
+            <ChevronLeft size={16} strokeWidth={2.2} />
+            Previous
+          </button>
+          <span className="min-w-24 text-center text-sm font-black text-slate-700">
+            Page {pagination.page} of {pagination.totalPages}
+          </span>
+          <button
+            type="button"
+            onClick={() => onPageChange(pagination.page + 1)}
+            disabled={!pagination.hasNext || loading}
+            className="flex h-10 items-center gap-2 rounded-xl border border-sky-100 bg-white px-3 text-sm font-bold text-slate-700 transition hover:bg-sky-50 disabled:opacity-50"
+          >
+            Next
+            <ChevronRight size={16} strokeWidth={2.2} />
+          </button>
+        </div>
       </div>
 
       {loading ? (
@@ -239,7 +371,7 @@ const BusinessProfilesTable = ({
             <table className="min-w-full divide-y divide-sky-50">
               <thead className="bg-sky-50/70">
                 <tr>
-                  {['Business profile', 'Brand', 'Agency', 'Last synced', 'Actions'].map((heading) => (
+                  {['Business profile', 'Meta status', 'API token', 'Brand', 'Agency', 'Last synced', 'Actions'].map((heading) => (
                     <th key={heading} className="px-5 py-4 text-left text-xs font-black uppercase tracking-[0.16em] text-sky-700">
                       {heading}
                     </th>
@@ -257,6 +389,29 @@ const BusinessProfilesTable = ({
                         <p className="mt-1 text-xs font-semibold text-slate-400">
                           Meta ID: {profile.metaBusinessId}
                         </p>
+                      </td>
+                      <td className="px-5 py-4">
+                        <span className={`inline-flex rounded-full px-3 py-1 text-xs font-black ${metaStatusStyles[profile.metaStatus] || metaStatusStyles.UNKNOWN}`}>
+                          {metaStatusLabels[profile.metaStatus] || metaStatusLabels.UNKNOWN}
+                        </span>
+                        <p className="mt-1 text-xs font-semibold text-slate-400">
+                          {profile.lastStatusCheckedAt ? `Checked ${formatDate(profile.lastStatusCheckedAt)}` : 'Not checked yet'}
+                        </p>
+                        {profile.metaStatusReason ? (
+                          <p className="mt-1 max-w-52 text-xs font-semibold text-slate-400">
+                            {profile.metaStatusReason}
+                          </p>
+                        ) : null}
+                      </td>
+                      <td className="px-5 py-4">
+                        {profile.sourceTokenLabel ? (
+                          <span className="inline-flex items-center gap-2 rounded-full bg-indigo-50 px-3 py-1 text-xs font-black text-indigo-700">
+                            <KeyRound size={13} strokeWidth={2.4} />
+                            {profile.sourceTokenLabel}
+                          </span>
+                        ) : (
+                          <span className="text-sm font-semibold text-slate-400">Not tracked</span>
+                        )}
                       </td>
                       <td className="px-5 py-4">
                         {isEditing ? (
@@ -356,13 +511,21 @@ const BusinessProfilesTable = ({
           </div>
         </div>
       ) : (
-        <EmptyState>No business profile data yet. Click fetch to pull profiles from saved Meta API tokens.</EmptyState>
+        <EmptyState>No business profile data yet. Fetch profiles from Token Management when you are ready to use Meta API calls.</EmptyState>
       )}
     </DashboardPanel>
   );
 };
 
 const DashboardPage = () => {
+  const [profilePage, setProfilePage] = useState(1);
+  const [profileLimit, setProfileLimit] = useState(5);
+  const [profileFilters, setProfileFilters] = useState({
+    search: '',
+    tokenLabel: '',
+    brandId: '',
+    agencyId: '',
+  });
   const { dashboard, error, loading, reload } = useDashboard();
   const {
     agencies,
@@ -370,13 +533,17 @@ const DashboardPage = () => {
     error: businessDataError,
     loadBusinessData,
     loading: businessDataLoading,
+    profileFilterOptions,
+    profilePagination,
     profiles,
     setAgencies,
     setBrands,
-    setProfiles,
-  } = useBusinessData();
+  } = useBusinessData({
+    page: profilePage,
+    limit: profileLimit,
+    ...profileFilters,
+  });
   const [savingBusinessData, setSavingBusinessData] = useState(false);
-  const [syncingProfiles, setSyncingProfiles] = useState(false);
   const metrics = dashboard?.metrics || {};
 
   const metricCards = [
@@ -408,6 +575,29 @@ const DashboardPage = () => {
 
   const refreshAll = async () => {
     await Promise.all([reload(), loadBusinessData({ showLoading: false })]);
+  };
+
+  const updateProfileFilter = (field, value) => {
+    setProfileFilters((current) => ({
+      ...current,
+      [field]: value,
+    }));
+    setProfilePage(1);
+  };
+
+  const clearProfileFilters = () => {
+    setProfileFilters({
+      search: '',
+      tokenLabel: '',
+      brandId: '',
+      agencyId: '',
+    });
+    setProfilePage(1);
+  };
+
+  const updateProfileLimit = (value) => {
+    setProfileLimit(value);
+    setProfilePage(1);
   };
 
   const saveBrand = async (form, editingItem) => {
@@ -487,8 +677,7 @@ const DashboardPage = () => {
     try {
       const data = await businessDataApi.updateBusinessProfile(profile.id, assignment);
       toast.success(data.message);
-      const profileData = await businessDataApi.getBusinessProfiles();
-      setProfiles(profileData.profiles);
+      await loadBusinessData({ showLoading: false });
       return true;
     } catch (requestError) {
       toast.error(requestError.message);
@@ -512,25 +701,6 @@ const DashboardPage = () => {
       toast.error(requestError.message);
     } finally {
       setSavingBusinessData(false);
-    }
-  };
-
-  const syncBusinessProfiles = async () => {
-    setSyncingProfiles(true);
-    try {
-      const data = await businessDataApi.syncBusinessProfiles();
-      setProfiles(data.profiles);
-      await reload();
-      const summary = data.summary;
-      toast.success(`Sync done: ${summary.created} new, ${summary.updated} updated, ${summary.skipped} skipped`);
-
-      if (summary.errors?.length) {
-        toast.error(summary.errors[0].message);
-      }
-    } catch (requestError) {
-      toast.error(requestError.message);
-    } finally {
-      setSyncingProfiles(false);
     }
   };
 
@@ -568,13 +738,19 @@ const DashboardPage = () => {
       <BusinessProfilesTable
         agencies={agencies}
         brands={brands}
+        filters={profileFilters}
+        filterOptions={profileFilterOptions}
+        limit={profileLimit}
         loading={businessDataLoading}
+        pagination={profilePagination}
         profiles={profiles}
         saving={savingBusinessData}
-        syncing={syncingProfiles}
+        onClearFilters={clearProfileFilters}
+        onFilterChange={updateProfileFilter}
+        onLimitChange={updateProfileLimit}
+        onPageChange={setProfilePage}
         onAssign={assignBusinessProfile}
         onDelete={deleteBusinessProfile}
-        onSync={syncBusinessProfiles}
       />
 
       <div className="mt-4 grid gap-4 xl:grid-cols-2">

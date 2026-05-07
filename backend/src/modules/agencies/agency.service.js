@@ -16,6 +16,11 @@ async function listAgencies() {
 async function createAgency({ name, actor, req }) {
   validateAgency({ name });
 
+  const existingAgency = await Agency.findOne({ name: name.trim() });
+  if (existingAgency) {
+    throw new HttpError(409, 'An agency with this name already exists');
+  }
+
   const agency = await Agency.create({
     name: name.trim(),
     createdBy: actor._id,
@@ -40,6 +45,11 @@ async function updateAgency({ agencyId, name, actor, req }) {
   const agency = await Agency.findById(agencyId);
   if (!agency) {
     throw new HttpError(404, 'Agency not found');
+  }
+
+  const existingAgency = await Agency.findOne({ name: name.trim(), _id: { $ne: agency._id } });
+  if (existingAgency) {
+    throw new HttpError(409, 'An agency with this name already exists');
   }
 
   agency.name = name.trim();
