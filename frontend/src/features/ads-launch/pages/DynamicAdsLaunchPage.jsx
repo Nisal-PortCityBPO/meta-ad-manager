@@ -6,6 +6,7 @@ import DashboardPanel from '../../dashboard/components/DashboardPanel';
 import { businessDataApi } from '../../dashboard/api/businessDataApi';
 import { useTokens } from '../../token-management/hooks/useTokens';
 import { usePublishProgress } from '../../notifications/PublishProgressContext';
+import { useMetaKeySettings } from '../../settings/MetaKeySettingsContext';
 import { adsLaunchApi } from '../api/adsLaunchApi';
 import { useLaunchTemplates } from '../hooks/useLaunchTemplates';
 import { useTokenMetaAssets } from '../hooks/useTokenMetaAssets';
@@ -341,6 +342,7 @@ const DynamicAdsLaunchPage = () => {
   const assignmentScrollRef = useRef(null);
   const scrollAnimationRef = useRef(null);
   const scrollDirectionRef = useRef(0);
+  const { publishTokenType } = useMetaKeySettings();
   const [brands, setBrands] = useState([]);
   const [brandsLoading, setBrandsLoading] = useState(true);
   const [brandId, setBrandId] = useState('');
@@ -803,7 +805,10 @@ const DynamicAdsLaunchPage = () => {
     beginPublish();
 
     try {
-      const payload = buildPublishPayload();
+      const payload = {
+        ...buildPublishPayload(),
+        tokenType: publishTokenType,
+      };
       const data = await adsLaunchApi.publishLaunchStream(payload, {
         onProgress: pushPublishEvent,
       });

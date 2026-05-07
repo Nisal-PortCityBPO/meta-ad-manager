@@ -1084,14 +1084,14 @@ async function postToMeta({ token, path, params = {}, formData = null, videoHost
     body,
   });
 
-  await tokenService.recordTokenApiCall(token.id);
+  await tokenService.recordTokenApiCall(token.id, token.tokenType);
   const payload = await response.json().catch(() => ({}));
 
   if (!response.ok || payload.error) {
     throw new HttpError(400, buildMetaErrorMessage(path, payload));
   }
 
-  await tokenService.markTokenConnected({ tokenId: token.id });
+  await tokenService.markTokenConnected({ tokenId: token.id, tokenType: token.tokenType });
 
   return payload;
 }
@@ -1114,14 +1114,14 @@ async function getFromMeta({ token, path, params = {}, videoHost = false }) {
     method: 'GET',
   });
 
-  await tokenService.recordTokenApiCall(token.id);
+  await tokenService.recordTokenApiCall(token.id, token.tokenType);
   const payload = await response.json().catch(() => ({}));
 
   if (!response.ok || payload.error) {
     throw new HttpError(400, buildMetaErrorMessage(path, payload));
   }
 
-  await tokenService.markTokenConnected({ tokenId: token.id });
+  await tokenService.markTokenConnected({ tokenId: token.id, tokenType: token.tokenType });
 
   return payload;
 }
@@ -2290,7 +2290,7 @@ async function resolveAccountLaunchFromTemplates({ baseLaunch, accountLaunch, se
   };
 }
 
-async function publishLaunch({ payload, actor, req, onProgress = null }) {
+async function publishLaunch({ payload, actor, req, onProgress = null, tokenType = null }) {
   const launch = ensurePublishPayload(payload);
   launch.staticDefaults = {
     ...launch.staticDefaults,
@@ -2315,7 +2315,7 @@ async function publishLaunch({ payload, actor, req, onProgress = null }) {
     }
   }
 
-  const token = await tokenService.getActiveTokenWithSecret(launch.tokenId);
+  const token = await tokenService.getActiveTokenWithSecret(launch.tokenId, tokenType);
   const accountMap = new Map(launch.selectedAdAccounts.map((account) => [account.id, account]));
   const results = [];
   const failed = [];

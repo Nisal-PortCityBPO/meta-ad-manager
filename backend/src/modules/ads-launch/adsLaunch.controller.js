@@ -119,6 +119,7 @@ const publishLaunch = asyncHandler(async (req, res) => {
     payload: req.body,
     actor: req.user,
     req,
+    tokenType: req.body?.tokenType,
   });
 
   res.json(result);
@@ -141,6 +142,7 @@ const publishLaunchStream = async (req, res, next) => {
       actor: req.user,
       req,
       onProgress: sendEvent,
+      tokenType: req.body?.tokenType,
     });
 
     sendEvent({

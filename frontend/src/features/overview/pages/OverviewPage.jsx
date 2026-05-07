@@ -18,6 +18,7 @@ import DashboardHeader from '../../dashboard/components/DashboardHeader';
 import DashboardPanel from '../../dashboard/components/DashboardPanel';
 import { businessDataApi } from '../../dashboard/api/businessDataApi';
 import { useMetaSync } from '../../dashboard/context/MetaSyncContext';
+import { getMetaKeyTypeLabel, META_KEY_TYPES, useMetaKeySettings } from '../../settings/MetaKeySettingsContext';
 
 const profileStatusStyles = {
   CONNECTED: 'bg-emerald-50 text-emerald-700',
@@ -558,8 +559,12 @@ const BrandTreeSidebar = ({ brands, onBack, onSelectAccount, onSelectBrand, sele
   );
 };
 
-const SocialAccountTable = ({ accounts, onSelectAccount, onSyncAccount, syncingAccountId }) => (
-  <div className="overflow-hidden rounded-2xl border border-sky-100 bg-white">
+const SocialAccountTable = ({ accounts, onSelectAccount, onSyncAccount, syncingAccountId }) => {
+  const { fetchTokenType } = useMetaKeySettings();
+  const selectedFetchKeyLabel = getMetaKeyTypeLabel(fetchTokenType);
+
+  return (
+    <div className="overflow-hidden rounded-2xl border border-sky-100 bg-white">
     <div className="overflow-x-auto">
       <table className="min-w-full divide-y divide-sky-50">
         <thead className="bg-sky-50/70">
@@ -574,6 +579,12 @@ const SocialAccountTable = ({ accounts, onSelectAccount, onSyncAccount, syncingA
         <tbody className="divide-y divide-sky-50">
           {accounts.map((account, index) => {
             const stats = getSocialAccountStats(account, index);
+            const canFetch =
+              account.sourceTokenId &&
+              account.sourceTokenStatus !== 'DEACTIVE' &&
+              (fetchTokenType === META_KEY_TYPES.SYSTEM_USER
+                ? account.systemUserAccessTokenStatus !== 'DEACTIVE'
+                : account.profileAccessTokenStatus !== 'DEACTIVE');
 
             return (
               <tr
@@ -628,9 +639,9 @@ const SocialAccountTable = ({ accounts, onSelectAccount, onSyncAccount, syncingA
                       event.stopPropagation();
                       onSyncAccount(account);
                     }}
-                    disabled={syncingAccountId === account.id || !account.sourceTokenId}
+                    disabled={syncingAccountId === account.id || !canFetch}
                     className="flex h-10 items-center gap-2 rounded-xl bg-sky-600 px-3 text-sm font-bold text-white transition hover:bg-sky-700 disabled:cursor-not-allowed disabled:opacity-60"
-                    title={account.sourceTokenId ? 'Fetch latest Meta data for this social account' : 'No saved token for this social account'}
+                    title={canFetch ? `Fetch latest Meta data using ${selectedFetchKeyLabel}` : `No active ${selectedFetchKeyLabel} for this social account`}
                   >
                     <DownloadCloud size={16} strokeWidth={2.2} />
                     {syncingAccountId === account.id ? 'Fetching' : 'Fetch'}
@@ -642,8 +653,9 @@ const SocialAccountTable = ({ accounts, onSelectAccount, onSyncAccount, syncingA
         </tbody>
       </table>
     </div>
-  </div>
-);
+    </div>
+  );
+};
 
 const BusinessProfileMetric = ({ icon: Icon, label, value, tone }) => (
   <div className={`rounded-xl border px-3 py-3 ${tone}`}>

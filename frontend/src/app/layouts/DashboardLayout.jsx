@@ -15,6 +15,7 @@ import {
   LogOut,
   Megaphone,
   Route,
+  Settings2,
   UserCircle,
   Users,
   XCircle,
@@ -23,10 +24,17 @@ import { USER_ROLES, useAuth } from '../../features/auth/hooks/useAuth';
 import { MetaSyncProvider } from '../../features/dashboard/context/MetaSyncContext';
 import { PublishProgressProvider, usePublishProgress } from '../../features/notifications/PublishProgressContext';
 import PublishProgressPanel, { formatDuration } from '../../features/notifications/components/PublishProgressPanel';
+import {
+  getMetaKeyTypeLabel,
+  META_KEY_TYPES,
+  MetaKeySettingsProvider,
+  useMetaKeySettings,
+} from '../../features/settings/MetaKeySettingsContext';
 import brandLogo from '../../assets/200m-logo.png';
 
 const navItemsConfig = [
   { to: '/dashboard', label: 'Dashboard', icon: LayoutDashboard },
+  { to: '/meta-connection', label: 'Meta Connection', icon: KeyRound, roles: [USER_ROLES.SUPER_ADMIN, USER_ROLES.ADMIN] },
   { to: '/roadmap', label: 'Roadmap', icon: Route, roles: [USER_ROLES.SUPER_ADMIN, USER_ROLES.ADMIN] },
   { to: '/overview', label: 'Overview', icon: BarChart3, roles: [USER_ROLES.SUPER_ADMIN] },
   { to: '/ads-launch', label: 'Ads Launch', icon: Megaphone, roles: [USER_ROLES.SUPER_ADMIN, USER_ROLES.ADMIN] },
@@ -34,7 +42,6 @@ const navItemsConfig = [
   { to: '/ads-media-library', label: 'Ads Media Library', icon: ImageIcon, roles: [USER_ROLES.SUPER_ADMIN, USER_ROLES.ADMIN] },
   { to: '/dynamic-ads-launch', label: 'Dynamic Ads Launch', icon: Megaphone, roles: [USER_ROLES.SUPER_ADMIN, USER_ROLES.ADMIN] },
   { to: '/ads-manage', label: 'Ads Manage', icon: FolderKanban, roles: [USER_ROLES.SUPER_ADMIN] },
-  { to: '/tokens', label: 'Token Management', icon: KeyRound, roles: [USER_ROLES.SUPER_ADMIN, USER_ROLES.ADMIN] },
   { to: '/users', label: 'Users', icon: Users, roles: [USER_ROLES.SUPER_ADMIN] },
   { to: '/activity-logs', label: 'Activity Logs', icon: ClipboardList, roles: [USER_ROLES.SUPER_ADMIN] },
   { to: '/notifications', label: 'Notifications', icon: Bell },
@@ -168,6 +175,86 @@ const PublishStatusControl = () => {
   );
 };
 
+const KeyTypeToggle = ({ value, onChange }) => (
+  <div className="grid w-64 grid-cols-2 rounded-xl border border-sky-100 bg-sky-50 p-1">
+    {Object.values(META_KEY_TYPES).map((tokenType) => {
+      const isActive = value === tokenType;
+      const label = tokenType === META_KEY_TYPES.PROFILE ? 'Profile Access' : 'System User';
+
+      return (
+        <button
+          key={tokenType}
+          type="button"
+          onClick={() => onChange(tokenType)}
+          className={[
+            'h-9 rounded-lg text-xs font-black transition',
+            isActive ? 'bg-white text-sky-700 shadow-sm' : 'text-slate-500 hover:text-slate-900',
+          ].join(' ')}
+          title={getMetaKeyTypeLabel(tokenType)}
+        >
+          {label}
+        </button>
+      );
+    })}
+  </div>
+);
+
+const MetaKeySettingsControl = () => {
+  const { fetchTokenType, publishTokenType, setFetchTokenType, setPublishTokenType } = useMetaKeySettings();
+  const [open, setOpen] = useState(false);
+  const controlRef = useRef(null);
+
+  useEffect(() => {
+    if (!open) {
+      return undefined;
+    }
+
+    const handlePointerDown = (event) => {
+      if (!controlRef.current?.contains(event.target)) {
+        setOpen(false);
+      }
+    };
+
+    window.addEventListener('pointerdown', handlePointerDown);
+    return () => window.removeEventListener('pointerdown', handlePointerDown);
+  }, [open]);
+
+  return (
+    <div className="relative" ref={controlRef}>
+      <button
+        type="button"
+        onClick={() => setOpen((current) => !current)}
+        className="flex h-11 items-center gap-2 rounded-xl border border-sky-100 bg-white px-4 text-sm font-bold text-slate-700 transition hover:bg-sky-50"
+      >
+        <Settings2 size={17} strokeWidth={2.2} />
+        Settings
+      </button>
+
+      {open ? (
+        <div className="absolute right-0 top-14 z-50 w-[min(92vw,420px)] rounded-2xl border border-sky-100 bg-white p-4 shadow-xl shadow-sky-200/70">
+          <div className="space-y-3">
+            <div className="flex items-center justify-between gap-4">
+              <div>
+                <p className="text-sm font-black text-slate-950">Fetch data</p>
+                <p className="mt-1 text-xs font-semibold text-slate-500">{getMetaKeyTypeLabel(fetchTokenType)}</p>
+              </div>
+              <KeyTypeToggle value={fetchTokenType} onChange={setFetchTokenType} />
+            </div>
+
+            <div className="flex items-center justify-between gap-4 border-t border-sky-50 pt-3">
+              <div>
+                <p className="text-sm font-black text-slate-950">Publish data</p>
+                <p className="mt-1 text-xs font-semibold text-slate-500">{getMetaKeyTypeLabel(publishTokenType)}</p>
+              </div>
+              <KeyTypeToggle value={publishTokenType} onChange={setPublishTokenType} />
+            </div>
+          </div>
+        </div>
+      ) : null}
+    </div>
+  );
+};
+
 const DashboardShell = () => {
   const navigate = useNavigate();
   const { user, logout, hasRole } = useAuth();
@@ -244,6 +331,7 @@ const DashboardShell = () => {
                 <Bell size={17} strokeWidth={2.2} />
                 Notifications
               </button>
+              <MetaKeySettingsControl />
               <button
                 type="button"
                 onClick={() => navigate('/profile')}
@@ -273,11 +361,13 @@ const DashboardShell = () => {
 };
 
 const DashboardLayout = () => (
-  <PublishProgressProvider>
-    <MetaSyncProvider>
-      <DashboardShell />
-    </MetaSyncProvider>
-  </PublishProgressProvider>
+  <MetaKeySettingsProvider>
+    <PublishProgressProvider>
+      <MetaSyncProvider>
+        <DashboardShell />
+      </MetaSyncProvider>
+    </PublishProgressProvider>
+  </MetaKeySettingsProvider>
 );
 
 export default DashboardLayout;

@@ -2,6 +2,7 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import toast from 'react-hot-toast';
 import { tokensApi } from '../../token-management/api/tokensApi';
+import { getMetaKeyTypeLabel, META_KEY_TYPES, useMetaKeySettings } from '../../settings/MetaKeySettingsContext';
 import { businessDataApi } from '../api/businessDataApi';
 
 const MetaSyncContext = createContext(null);
@@ -13,6 +14,7 @@ const getSyncSummaryMessage = (accountName, summary = {}) =>
   `${accountName}: ${summary.created || 0} new, ${summary.updated || 0} updated, ${summary.skipped || 0} skipped, ${summary.apiCalls || 0} API calls`;
 
 export const MetaSyncProvider = ({ children }) => {
+  const { fetchTokenType } = useMetaKeySettings();
   const [syncState, setSyncState] = useState({
     active: false,
     accountId: null,
@@ -43,7 +45,7 @@ export const MetaSyncProvider = ({ children }) => {
     }, CLEAR_DELAY_MS);
   }, []);
 
-  const getTokenApiCallCount = useCallback(async (tokenId) => {
+  const getTokenApiCallCount = useCallback(async (tokenId, tokenType = META_KEY_TYPES.PROFILE) => {
     if (!tokenId) {
       return null;
     }
@@ -51,7 +53,13 @@ export const MetaSyncProvider = ({ children }) => {
     const data = await tokensApi.getTokens();
     const token = data.tokens.find((item) => item.id === tokenId);
 
-    return token ? Number(token.apiCallCount) || 0 : null;
+    if (!token) {
+      return null;
+    }
+
+    return tokenType === META_KEY_TYPES.SYSTEM_USER
+      ? Number(token.systemUserApiCallCount) || 0
+      : Number(token.profileApiCallCount ?? token.apiCallCount) || 0;
   }, []);
 
   const startSocialAccountSync = useCallback(
@@ -68,11 +76,12 @@ export const MetaSyncProvider = ({ children }) => {
       let apiCallBaseline = 0;
       let latestApiCallsSent = 0;
       const sourceTokenId = account.sourceTokenId || null;
+      const keyLabel = getMetaKeyTypeLabel(fetchTokenType);
       const baseMessage = 'Fetching real Meta campaigns, ad sets, ads, media, pages, and insights';
       const getLoadingMessage = (apiCallsSent) =>
-        `${baseMessage}. API calls sent: ${apiCallsSent}`;
+        `${baseMessage} using ${keyLabel}. API calls sent: ${apiCallsSent}`;
       const updateLoadingToast = (apiCallsSent) => {
-        toast.loading(`Fetching real Meta data for ${account.name}... API calls sent: ${apiCallsSent}`, {
+        toast.loading(`Fetching ${account.sourceTokenLabel || 'Meta connection'} / ${account.name} with ${keyLabel}. API calls sent: ${apiCallsSent}`, {
           id: SYNC_TOAST_ID,
           duration: Infinity,
           position: 'top-center',
@@ -85,7 +94,7 @@ export const MetaSyncProvider = ({ children }) => {
 
       if (sourceTokenId) {
         try {
-          apiCallBaseline = await getTokenApiCallCount(sourceTokenId) ?? 0;
+          apiCallBaseline = await getTokenApiCallCount(sourceTokenId, fetchTokenType) ?? 0;
         } catch {
           apiCallBaseline = 0;
         }
@@ -105,7 +114,7 @@ export const MetaSyncProvider = ({ children }) => {
       if (sourceTokenId) {
         const pollApiCallCount = async () => {
           try {
-            const currentCount = await getTokenApiCallCount(sourceTokenId);
+            const currentCount = await getTokenApiCallCount(sourceTokenId, fetchTokenType);
 
             if (currentCount === null) {
               return;
@@ -131,7 +140,7 @@ export const MetaSyncProvider = ({ children }) => {
       }
 
       try {
-        const data = await businessDataApi.syncSocialAccount(account.id);
+        const data = await businessDataApi.syncSocialAccount(account.id, fetchTokenType);
         if (pollId) {
           window.clearInterval(pollId);
           pollId = null;
@@ -197,7 +206,7 @@ export const MetaSyncProvider = ({ children }) => {
         activeRef.current = false;
       }
     },
-    [clearLater, getTokenApiCallCount]
+    [clearLater, fetchTokenType, getTokenApiCallCount]
   );
 
   useEffect(

@@ -16,10 +16,13 @@ export const tokensApi = {
     apiRequest(`/tokens/${id}`, {
       method: 'DELETE',
     }),
-  syncBusinessProfiles: (tokenId) =>
+  syncBusinessProfiles: (tokenId, tokenType) =>
     apiRequest('/business-profiles/sync', {
       method: 'POST',
-      body: tokenId ? { tokenId } : {},
+      body: {
+        ...(tokenId ? { tokenId } : {}),
+        ...(tokenType ? { tokenType } : {}),
+      },
     }),
   recordApiCall: (id) =>
     apiRequest(`/tokens/${id}/api-calls`, {

@@ -102,7 +102,7 @@ async function listSocialAccounts(filters = {}) {
   const accounts = await SocialAccount.find(query)
     .populate('brand', 'name color')
     .populate('agency', 'name')
-    .populate('sourceToken', 'label adsPowerProfile connectionStatus connectionMessage lastConnectionCheckedAt')
+    .populate('sourceToken', 'label adsPowerProfile status profileAccessTokenStatus systemUserAccessTokenStatus connectionStatus connectionMessage lastConnectionCheckedAt')
     .sort({ name: 1 })
     .skip(skip)
     .limit(limit);
@@ -180,7 +180,7 @@ async function assignSocialAccount({ accountId, brandId, agencyId, actor, req })
   const populated = await SocialAccount.findById(account._id)
     .populate('brand', 'name color')
     .populate('agency', 'name')
-    .populate('sourceToken', 'label adsPowerProfile connectionStatus connectionMessage lastConnectionCheckedAt');
+    .populate('sourceToken', 'label adsPowerProfile status profileAccessTokenStatus systemUserAccessTokenStatus connectionStatus connectionMessage lastConnectionCheckedAt');
   const profileCounts = await getProfileCounts([account._id]);
 
   return populated.toSafeObject({
@@ -198,6 +198,8 @@ async function upsertSocialAccountFromMeta({ metaAccount, token, syncedAt }) {
       profileImageUrl: metaAccount.profileImageUrl || null,
       sourceToken: token.id,
       sourceTokenLabel: token.label,
+      brand: token.brandId || null,
+      agency: token.agencyId || null,
       rawMetaData: metaAccount,
       lastSyncedAt: syncedAt,
     });
@@ -212,12 +214,16 @@ async function upsertSocialAccountFromMeta({ metaAccount, token, syncedAt }) {
     existingAccount.name !== (metaAccount.name || existingAccount.name) ||
     existingAccount.profileImageUrl !== (metaAccount.profileImageUrl || null) ||
     existingAccount.sourceToken?.toString() !== token.id ||
-    existingAccount.sourceTokenLabel !== token.label;
+    existingAccount.sourceTokenLabel !== token.label ||
+    existingAccount.brand?.toString() !== (token.brandId || '') ||
+    existingAccount.agency?.toString() !== (token.agencyId || '');
 
   existingAccount.name = metaAccount.name || existingAccount.name;
   existingAccount.profileImageUrl = metaAccount.profileImageUrl || null;
   existingAccount.sourceToken = token.id;
   existingAccount.sourceTokenLabel = token.label;
+  existingAccount.brand = token.brandId || null;
+  existingAccount.agency = token.agencyId || null;
   existingAccount.rawMetaData = metaAccount;
   existingAccount.lastSyncedAt = syncedAt;
   await existingAccount.save();
