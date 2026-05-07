@@ -1,5 +1,11 @@
 const mongoose = require('mongoose');
 
+const LAUNCH_TEMPLATE_TYPES = Object.freeze({
+  FULL: 'FULL',
+  CAMPAIGN: 'CAMPAIGN',
+  MEDIA: 'MEDIA',
+});
+
 const launchTemplateAssetSchema = new mongoose.Schema(
   {
     name: {
@@ -74,6 +80,11 @@ const launchTemplateConfigSchema = new mongoose.Schema(
       trim: true,
     },
     pixelId: {
+      type: String,
+      default: '',
+      trim: true,
+    },
+    websiteEvent: {
       type: String,
       default: '',
       trim: true,
@@ -244,6 +255,12 @@ const launchTemplateSchema = new mongoose.Schema(
       required: true,
       trim: true,
     },
+    templateType: {
+      type: String,
+      enum: Object.values(LAUNCH_TEMPLATE_TYPES),
+      default: LAUNCH_TEMPLATE_TYPES.FULL,
+      trim: true,
+    },
     config: {
       type: launchTemplateConfigSchema,
       default: () => ({}),
@@ -289,6 +306,7 @@ launchTemplateSchema.methods.toSafeObject = function toSafeObject() {
   return {
     id: this._id.toString(),
     name: this.name,
+    templateType: this.templateType || LAUNCH_TEMPLATE_TYPES.FULL,
     config: this.config,
     snapshot: {
       brandName: this.snapshot?.brandName || '',
@@ -316,3 +334,4 @@ const LaunchTemplate =
   mongoose.models.LaunchTemplate || mongoose.model('LaunchTemplate', launchTemplateSchema);
 
 module.exports = LaunchTemplate;
+module.exports.LAUNCH_TEMPLATE_TYPES = LAUNCH_TEMPLATE_TYPES;

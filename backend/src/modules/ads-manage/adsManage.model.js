@@ -172,6 +172,11 @@ const launchDetailsSchema = new mongoose.Schema(
       type: metaIdSchema,
       default: () => ({}),
     },
+    websiteEvent: {
+      type: String,
+      default: '',
+      trim: true,
+    },
     headline: {
       type: String,
       default: '',

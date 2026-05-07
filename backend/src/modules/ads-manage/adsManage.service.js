@@ -368,6 +368,7 @@ async function recordPublishedCampaign({ token, launch, account, names, campaign
             id: launch.pixelId || '',
             name: launch.pixelName || '',
           },
+          websiteEvent: launch.websiteEvent || '',
           headline: launch.headline,
           primaryText: launch.primaryText,
           description: launch.description,

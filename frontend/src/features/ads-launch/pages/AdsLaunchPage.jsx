@@ -49,6 +49,22 @@ const objectiveOptions = [
   { value: 'OUTCOME_SALES', label: 'Sales' },
 ];
 
+const websiteEventOptions = [
+  { value: 'LEAD', label: 'Lead' },
+  { value: 'PURCHASE', label: 'Purchase' },
+  { value: 'COMPLETE_REGISTRATION', label: 'Complete registration' },
+  { value: 'ADD_TO_CART', label: 'Add to cart' },
+  { value: 'INITIATE_CHECKOUT', label: 'Initiate checkout' },
+  { value: 'VIEW_CONTENT', label: 'View content' },
+  { value: 'CONTACT', label: 'Contact' },
+  { value: 'SUBSCRIBE', label: 'Subscribe' },
+];
+
+const defaultWebsiteEventByObjective = {
+  OUTCOME_LEADS: 'LEAD',
+  OUTCOME_SALES: 'PURCHASE',
+};
+
 const callToActionOptions = [
   { value: 'LEARN_MORE', label: 'Learn More' },
   { value: 'SHOP_NOW', label: 'Shop Now' },
@@ -161,6 +177,7 @@ const emptyForm = {
   selectedAdAccountIds: [],
   pageId: '',
   pixelId: '',
+  websiteEvent: 'LEAD',
   headline: '',
   primaryText: '',
   description: '',
@@ -345,6 +362,12 @@ const getUrlParameterValidationError = (value) => {
 };
 
 const getLaunchValidationError = (form) => {
+  const pixelRequired = form.objective === 'OUTCOME_LEADS' || form.objective === 'OUTCOME_SALES';
+
+  if (pixelRequired && !form.websiteEvent) {
+    return 'Select the website event to optimize for';
+  }
+
   if (form.displayUrl.trim() && !parseHttpUrl(form.displayUrl)) {
     return 'Display URL must be a valid domain or URL, for example example.com or https://example.com';
   }
@@ -796,6 +819,20 @@ const AdsLaunchPage = () => {
     }));
   };
 
+  const handleObjectiveChange = (objective) => {
+    setForm((current) => {
+      const currentDefaultEvent = defaultWebsiteEventByObjective[current.objective] || current.websiteEvent;
+      const nextDefaultEvent = defaultWebsiteEventByObjective[objective] || current.websiteEvent || 'LEAD';
+      const shouldUseNextDefault = !current.websiteEvent || current.websiteEvent === currentDefaultEvent;
+
+      return {
+        ...current,
+        objective,
+        websiteEvent: shouldUseNextDefault ? nextDefaultEvent : current.websiteEvent,
+      };
+    });
+  };
+
   const updateUrlParameter = (key, value) => {
     const normalizedKey = key.trim();
     const normalizedValue = value.trim();
@@ -1011,6 +1048,7 @@ const AdsLaunchPage = () => {
       name: (templateName || form.launchLabel).trim(),
       config: {
         ...form,
+        websiteEvent: pixelRequired ? form.websiteEvent : '',
         staticDefaults: {
           ...form.staticDefaults,
         },
@@ -1068,6 +1106,7 @@ const AdsLaunchPage = () => {
       pageName: selectedPage?.name || '',
       pixelId: form.pixelId,
       pixelName: selectedPixel?.name || '',
+      websiteEvent: form.websiteEvent,
       headline: form.headline.trim(),
       primaryText: form.primaryText.trim(),
       description: form.description.trim(),
@@ -1187,6 +1226,7 @@ const AdsLaunchPage = () => {
       brandId,
       country: countries[0] || '',
       countries,
+      websiteEvent: template.config.websiteEvent || defaultWebsiteEventByObjective[template.config.objective] || 'LEAD',
       selectedAdAccountIds: Array.isArray(template.config.selectedAdAccountIds) ? template.config.selectedAdAccountIds : [],
       staticDefaults: {
         ...defaultStaticDefaults,
@@ -1451,7 +1491,7 @@ const AdsLaunchPage = () => {
                 <select
                   id="objective"
                   value={form.objective}
-                  onChange={(event) => updateField('objective', event.target.value)}
+                  onChange={(event) => handleObjectiveChange(event.target.value)}
                   className="h-12 w-full rounded-xl border border-sky-100 bg-white px-4 outline-none transition focus:border-sky-400 focus:ring-4 focus:ring-sky-100"
                 >
                   {objectiveOptions.map((objective) => (
@@ -1580,7 +1620,7 @@ const AdsLaunchPage = () => {
                 ) : null}
               </div>
 
-              <div className="grid gap-4 md:grid-cols-2">
+              <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
                 <FormFieldCard htmlFor="page-id" label="Facebook page" helper="Loaded directly from the selected token page access.">
                   <select
                     id="page-id"
@@ -1625,6 +1665,30 @@ const AdsLaunchPage = () => {
                     {pixels.map((pixel) => (
                       <option key={pixel.id} value={pixel.id}>
                         {pixel.name}
+                      </option>
+                    ))}
+                  </select>
+                </FormFieldCard>
+
+                <FormFieldCard
+                  htmlFor="website-event"
+                  label="Website event"
+                  helper={
+                    pixelRequired
+                      ? 'Used with the selected pixel as the Meta conversion event for optimization.'
+                      : 'Only used for Leads and Sales objectives. Traffic and Engagement ignore this field.'
+                  }
+                >
+                  <select
+                    id="website-event"
+                    value={form.websiteEvent}
+                    onChange={(event) => updateField('websiteEvent', event.target.value)}
+                    disabled={!pixelRequired}
+                    className="h-12 w-full rounded-xl border border-sky-100 bg-white px-4 outline-none transition focus:border-sky-400 focus:ring-4 focus:ring-sky-100 disabled:bg-slate-50 disabled:text-slate-400"
+                  >
+                    {websiteEventOptions.map((eventOption) => (
+                      <option key={eventOption.value} value={eventOption.value}>
+                        {eventOption.label}
                       </option>
                     ))}
                   </select>

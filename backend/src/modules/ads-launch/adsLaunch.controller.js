@@ -4,6 +4,7 @@ const adsLaunchService = require('./adsLaunch.service');
 const getTemplates = asyncHandler(async (req, res) => {
   const templates = await adsLaunchService.listTemplates({
     actor: req.user,
+    templateType: req.query.templateType,
   });
 
   res.json({ templates });
@@ -24,6 +25,7 @@ const getTemplateAsset = asyncHandler(async (req, res) => {
 const createTemplate = asyncHandler(async (req, res) => {
   const template = await adsLaunchService.createTemplate({
     name: req.body.name,
+    templateType: req.body.templateType,
     config: req.body.config,
     snapshot: req.body.snapshot,
     actor: req.user,
@@ -40,6 +42,7 @@ const updateTemplate = asyncHandler(async (req, res) => {
   const template = await adsLaunchService.updateTemplate({
     templateId: req.params.id,
     name: req.body.name,
+    templateType: req.body.templateType,
     config: req.body.config,
     snapshot: req.body.snapshot,
     actor: req.user,
