@@ -484,8 +484,14 @@ async function postToMeta({ token, path, params = {}, formData = null, videoHost
   const payload = await response.json();
 
   if (!response.ok || payload.error) {
+    await tokenService.markTokenBlockedFromMetaError({
+      tokenId: token.id,
+      payload,
+    });
     throw new HttpError(400, payload.error?.message || `Meta API request failed for ${path}`);
   }
+
+  await tokenService.markTokenConnected({ tokenId: token.id });
 
   return payload;
 }
