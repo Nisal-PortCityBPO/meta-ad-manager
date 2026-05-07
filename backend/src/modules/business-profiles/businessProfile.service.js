@@ -47,7 +47,7 @@ const META_AD_SAFE_FIELDS = `id,name,status,effective_status,configured_status,c
 const getMetaAdSetFields = (adFields) =>
   `id,name,status,effective_status,daily_budget,lifetime_budget,budget_remaining,ads.limit(100).summary(true){${adFields}},insights.date_preset(maximum).limit(1){${META_INSIGHT_FIELDS}}`;
 const getMetaCampaignFields = (adSetFields) =>
-  `id,name,status,effective_status,objective,adsets.limit(100).summary(true){${adSetFields}},insights.date_preset(maximum).limit(1){${META_INSIGHT_FIELDS}}`;
+  `id,name,status,effective_status,objective,daily_budget,lifetime_budget,budget_remaining,adsets.limit(100).summary(true){${adSetFields}},insights.date_preset(maximum).limit(1){${META_INSIGHT_FIELDS}}`;
 const getMetaAdAccountHierarchyFields = (adFields) => {
   const adSetFields = getMetaAdSetFields(adFields);
   const campaignFields = getMetaCampaignFields(adSetFields);
@@ -590,6 +590,14 @@ const LEAD_ACTION_TYPES = [
   'onsite_conversion.lead',
 ];
 
+const WEBSITE_REGISTRATION_ACTION_TYPES = [
+  'complete_registration',
+  'omni_complete_registration',
+  'offsite_conversion.fb_pixel_complete_registration',
+  'onsite_conversion.complete_registration',
+  'app_custom_event.fb_mobile_complete_registration',
+];
+
 const ZERO_DECIMAL_CURRENCIES = new Set([
   'BIF',
   'CLP',
@@ -620,23 +628,33 @@ function isLeadActionType(actionType = '') {
   return LEAD_ACTION_TYPES.includes(normalizedActionType) || normalizedActionType.includes('lead');
 }
 
-function getActionValue(insight, actionTypes) {
+function isRegistrationActionType(actionType = '') {
+  const normalizedActionType = String(actionType).toLowerCase();
+
+  return (
+    WEBSITE_REGISTRATION_ACTION_TYPES.includes(normalizedActionType) ||
+    normalizedActionType.includes('complete_registration') ||
+    normalizedActionType.includes('registration')
+  );
+}
+
+function getActionValue(insight, actionTypes, matcher = isLeadActionType) {
   const actions = Array.isArray(insight.actions) ? insight.actions : [];
 
   return actions.reduce((total, action) => {
     const normalizedActionType = String(action.action_type || '').toLowerCase();
-    const matches = actionTypes.includes(normalizedActionType) || isLeadActionType(normalizedActionType);
+    const matches = actionTypes.includes(normalizedActionType) || matcher(normalizedActionType);
 
     return matches ? total + parseMetricNumber(action.value) : total;
   }, 0);
 }
 
-function getCostPerActionValue(insight, actionTypes) {
+function getCostPerActionValue(insight, actionTypes, matcher = isLeadActionType) {
   const costs = Array.isArray(insight.cost_per_action_type) ? insight.cost_per_action_type : [];
   const match = costs.find((cost) => {
     const normalizedActionType = String(cost.action_type || '').toLowerCase();
 
-    return actionTypes.includes(normalizedActionType) || isLeadActionType(normalizedActionType);
+    return actionTypes.includes(normalizedActionType) || matcher(normalizedActionType);
   });
 
   return parseMetricNumber(match?.value);
@@ -651,7 +669,11 @@ function normalizeInsights(edge) {
   const spend = parseMetricNumber(insight.spend);
   const clicks = parseMetricNumber(insight.clicks);
   const leads = getActionValue(insight, LEAD_ACTION_TYPES);
-  const cpr = getCostPerActionValue(insight, LEAD_ACTION_TYPES) || getRatioMetric(spend, leads);
+  const results = getActionValue(insight, WEBSITE_REGISTRATION_ACTION_TYPES, isRegistrationActionType);
+  const resultCpr =
+    getCostPerActionValue(insight, WEBSITE_REGISTRATION_ACTION_TYPES, isRegistrationActionType) ||
+    getRatioMetric(spend, results);
+  const cpr = resultCpr || getCostPerActionValue(insight, LEAD_ACTION_TYPES) || getRatioMetric(spend, leads);
 
   return {
     spend,
@@ -659,6 +681,7 @@ function normalizeInsights(edge) {
     reach: parseMetricNumber(insight.reach),
     clicks,
     leads,
+    results,
     ctr: parseMetricNumber(insight.ctr),
     cpc: parseMetricNumber(insight.cpc) || getRatioMetric(spend, clicks),
     cpl: cpr,
@@ -678,6 +701,10 @@ function normalizeMetaBudget(value, currency) {
 
 function getAdSetBudget(adSet, currency) {
   return normalizeMetaBudget(adSet.daily_budget || adSet.lifetime_budget || adSet.budget_remaining, currency);
+}
+
+function getCampaignBudget(campaign, currency) {
+  return normalizeMetaBudget(campaign.daily_budget || campaign.lifetime_budget || campaign.budget_remaining, currency);
 }
 
 function getMetaStatusValue(item) {
@@ -771,6 +798,7 @@ function normalizeAdAsset(ad, { adSet, campaign, currency, pagesById }) {
     pageStatus: getPageStatus(page),
     clicks: insights.clicks,
     leads: insights.leads,
+    results: insights.results,
     cpr: insights.cpr,
     budget: getAdSetBudget(adSet, currency),
     spend: insights.spend,
@@ -858,6 +886,7 @@ function normalizeCampaignAsset(campaign, { currency, pagesById }) {
     clicks: insights.clicks,
     leads: insights.leads,
     cpr: insights.cpr,
+    budget: getCampaignBudget(campaign, currency),
     adSetCount: Number.isFinite(summaryCount) ? summaryCount : adSets.length,
     adSets,
     insights,
