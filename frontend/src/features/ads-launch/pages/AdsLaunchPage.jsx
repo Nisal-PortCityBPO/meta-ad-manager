@@ -121,6 +121,9 @@ const emptyForm = {
   primaryText: '',
   description: '',
   websiteUrl: '',
+  displayUrl: '',
+  scheduleStart: '',
+  scheduleEnd: '',
   callToAction: 'LEARN_MORE',
   staticDefaults: defaultStaticDefaults,
 };
@@ -660,6 +663,9 @@ const AdsLaunchPage = () => {
       primaryText: form.primaryText.trim(),
       description: form.description.trim(),
       websiteUrl: form.websiteUrl.trim(),
+      displayUrl: form.displayUrl.trim(),
+      scheduleStart: form.scheduleStart,
+      scheduleEnd: form.scheduleEnd,
       callToAction: form.callToAction,
       staticDefaults: {
         ...form.staticDefaults,
@@ -1191,17 +1197,59 @@ const AdsLaunchPage = () => {
               />
             </div>
 
-            <div className="space-y-2">
-              <FieldLabel htmlFor="website-url">Destination URL</FieldLabel>
-              <input
-                id="website-url"
-                type="url"
-                value={form.websiteUrl}
-                onChange={(event) => updateField('websiteUrl', event.target.value)}
-                className="h-12 w-full rounded-xl border border-sky-100 bg-white px-4 outline-none transition focus:border-sky-400 focus:ring-4 focus:ring-sky-100"
-                placeholder="https://example.com/landing-page"
-                required
-              />
+            <div className="grid gap-4 xl:grid-cols-2">
+              <div className="space-y-2">
+                <FieldLabel htmlFor="website-url">Destination URL</FieldLabel>
+                <input
+                  id="website-url"
+                  type="url"
+                  value={form.websiteUrl}
+                  onChange={(event) => updateField('websiteUrl', event.target.value)}
+                  className="h-12 w-full rounded-xl border border-sky-100 bg-white px-4 outline-none transition focus:border-sky-400 focus:ring-4 focus:ring-sky-100"
+                  placeholder="https://example.com/landing-page"
+                  required
+                />
+                <p className="text-xs font-semibold text-slate-400">Where people go after clicking the ad.</p>
+              </div>
+
+              <div className="space-y-2">
+                <FieldLabel htmlFor="display-url">Display URL</FieldLabel>
+                <input
+                  id="display-url"
+                  value={form.displayUrl}
+                  onChange={(event) => updateField('displayUrl', event.target.value)}
+                  className="h-12 w-full rounded-xl border border-sky-100 bg-white px-4 outline-none transition focus:border-sky-400 focus:ring-4 focus:ring-sky-100"
+                  placeholder="example.com"
+                />
+                <p className="text-xs font-semibold text-slate-400">Optional URL text shown on the creative. Leave blank to let Meta decide.</p>
+              </div>
+            </div>
+
+            <div className="grid gap-4 xl:grid-cols-2">
+              <div className="space-y-2">
+                <FieldLabel htmlFor="schedule-start">Schedule start</FieldLabel>
+                <input
+                  id="schedule-start"
+                  type="datetime-local"
+                  value={form.scheduleStart}
+                  onChange={(event) => updateField('scheduleStart', event.target.value)}
+                  className="h-12 w-full rounded-xl border border-sky-100 bg-white px-4 outline-none transition focus:border-sky-400 focus:ring-4 focus:ring-sky-100"
+                />
+                <p className="text-xs font-semibold text-slate-400">Optional. Sent to Meta as ad set start time.</p>
+              </div>
+
+              <div className="space-y-2">
+                <FieldLabel htmlFor="schedule-end">Schedule end</FieldLabel>
+                <input
+                  id="schedule-end"
+                  type="datetime-local"
+                  value={form.scheduleEnd}
+                  min={form.scheduleStart || undefined}
+                  onChange={(event) => updateField('scheduleEnd', event.target.value)}
+                  className="h-12 w-full rounded-xl border border-sky-100 bg-white px-4 outline-none transition focus:border-sky-400 focus:ring-4 focus:ring-sky-100"
+                />
+                <p className="text-xs font-semibold text-slate-400">Optional. End time must be after the start time.</p>
+              </div>
             </div>
 
             <div className="grid gap-4 xl:grid-cols-2">

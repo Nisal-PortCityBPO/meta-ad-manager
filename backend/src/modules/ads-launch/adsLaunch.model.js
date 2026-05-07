@@ -93,6 +93,21 @@ const launchTemplateConfigSchema = new mongoose.Schema(
       default: '',
       trim: true,
     },
+    displayUrl: {
+      type: String,
+      default: '',
+      trim: true,
+    },
+    scheduleStart: {
+      type: String,
+      default: '',
+      trim: true,
+    },
+    scheduleEnd: {
+      type: String,
+      default: '',
+      trim: true,
+    },
     callToAction: {
       type: String,
       default: '',
