@@ -74,11 +74,50 @@ const publishLaunch = asyncHandler(async (req, res) => {
   res.json(result);
 });
 
+const publishLaunchStream = async (req, res, next) => {
+  const sendEvent = (event) => {
+    res.write(`${JSON.stringify(event)}\n`);
+  };
+
+  res.setHeader('Content-Type', 'application/x-ndjson');
+  res.setHeader('Cache-Control', 'no-cache');
+  res.setHeader('Connection', 'keep-alive');
+  res.setHeader('X-Accel-Buffering', 'no');
+  res.flushHeaders?.();
+
+  try {
+    const result = await adsLaunchService.publishLaunch({
+      payload: req.body,
+      actor: req.user,
+      req,
+      onProgress: sendEvent,
+    });
+
+    sendEvent({
+      type: 'complete',
+      result,
+    });
+    res.end();
+  } catch (error) {
+    if (!res.headersSent) {
+      next(error);
+      return;
+    }
+
+    sendEvent({
+      type: 'error',
+      message: error.message || 'Publish failed',
+    });
+    res.end();
+  }
+};
+
 module.exports = {
   createTemplate,
   deleteTemplate,
   getTemplates,
   getTemplateAsset,
   publishLaunch,
+  publishLaunchStream,
   updateTemplate,
 };

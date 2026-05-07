@@ -45,6 +45,10 @@ const launchTemplateConfigSchema = new mongoose.Schema(
       default: '',
       trim: true,
     },
+    countries: {
+      type: [String],
+      default: [],
+    },
     objective: {
       type: String,
       default: '',
@@ -113,6 +117,11 @@ const launchTemplateConfigSchema = new mongoose.Schema(
       placements: {
         type: String,
         default: 'ADVANTAGE_PLUS',
+        trim: true,
+      },
+      budgetLevel: {
+        type: String,
+        default: 'AD_SET',
         trim: true,
       },
       audienceAgeMin: {

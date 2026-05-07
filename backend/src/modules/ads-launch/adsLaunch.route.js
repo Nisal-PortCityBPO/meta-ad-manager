@@ -13,5 +13,6 @@ router.post('/templates', adsLaunchController.createTemplate);
 router.put('/templates/:id', adsLaunchController.updateTemplate);
 router.delete('/templates/:id', adsLaunchController.deleteTemplate);
 router.post('/publish', adsLaunchController.publishLaunch);
+router.post('/publish-stream', adsLaunchController.publishLaunchStream);
 
 module.exports = router;
