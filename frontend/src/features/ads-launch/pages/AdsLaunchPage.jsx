@@ -18,7 +18,6 @@ import {
   Trash2,
   Upload,
   Video,
-  Wand2,
 } from 'lucide-react';
 import DashboardHeader from '../../dashboard/components/DashboardHeader';
 import DashboardPanel from '../../dashboard/components/DashboardPanel';
@@ -37,6 +36,8 @@ const countryOptions = [
   { value: 'GB', label: 'United Kingdom' },
   { value: 'US', label: 'United States' },
 ];
+
+const TEMPLATES_PER_PAGE = 2;
 
 const objectiveOptions = [
   { value: 'OUTCOME_TRAFFIC', label: 'Traffic' },
@@ -244,6 +245,7 @@ const AdsLaunchPage = () => {
   const [savingTemplate, setSavingTemplate] = useState(false);
   const [publishing, setPublishing] = useState(false);
   const [latestPublish, setLatestPublish] = useState(null);
+  const [templatePage, setTemplatePage] = useState(1);
   const [mediaFile, setMediaFile] = useState(null);
   const [thumbnailFile, setThumbnailFile] = useState(null);
   const [savedMediaAsset, setSavedMediaAsset] = useState(null);
@@ -259,6 +261,14 @@ const AdsLaunchPage = () => {
   const selectedToken = activeTokens.find((token) => token.id === form.tokenId) || null;
   const selectedPage = pages.find((page) => page.id === form.pageId) || null;
   const selectedPixel = pixels.find((pixel) => pixel.id === form.pixelId) || null;
+  const templatePageCount = Math.max(Math.ceil(templates.length / TEMPLATES_PER_PAGE), 1);
+  const safeTemplatePage = Math.min(Math.max(templatePage, 1), templatePageCount);
+  const templateRangeStart = templates.length ? (safeTemplatePage - 1) * TEMPLATES_PER_PAGE + 1 : 0;
+  const templateRangeEnd = Math.min(safeTemplatePage * TEMPLATES_PER_PAGE, templates.length);
+  const visibleTemplates = useMemo(
+    () => templates.slice((safeTemplatePage - 1) * TEMPLATES_PER_PAGE, safeTemplatePage * TEMPLATES_PER_PAGE),
+    [safeTemplatePage, templates]
+  );
   const selectedAdAccounts = useMemo(
     () => adAccounts.filter((account) => form.selectedAdAccountIds.includes(account.id)),
     [adAccounts, form.selectedAdAccountIds]
@@ -340,6 +350,10 @@ const AdsLaunchPage = () => {
   useEffect(() => {
     loadAssets(form.tokenId);
   }, [form.tokenId, loadAssets]);
+
+  useEffect(() => {
+    setTemplatePage((currentPage) => Math.min(Math.max(currentPage, 1), templatePageCount));
+  }, [templatePageCount]);
 
   useEffect(() => {
     loadPixels(form.tokenId, form.selectedAdAccountIds);
@@ -687,6 +701,7 @@ const AdsLaunchPage = () => {
       setSavedThumbnailAsset(normalizeStoredAsset(data.template.snapshot?.thumbnail));
       clearUploadedCreativeFiles();
       await loadTemplates();
+      setTemplatePage(1);
       toast.success(data.message);
     } catch (requestError) {
       toast.error(requestError.message);
@@ -745,19 +760,6 @@ const AdsLaunchPage = () => {
     setSavedMediaAsset(normalizeStoredAsset(template.snapshot?.media));
     setSavedThumbnailAsset(normalizeStoredAsset(template.snapshot?.thumbnail));
     toast.success(`Loaded template "${template.name}"`);
-  };
-
-  const handleGenerate = () => {
-    if (!canGenerate) {
-      toast.error(
-        pixelRequired
-          ? 'Select countries, token, ad accounts, page, shared pixel, and required copy fields first'
-          : 'Select countries, token, ad accounts, page, and required copy fields first'
-      );
-      return;
-    }
-
-    toast.success('Launch plan generated from the current selections.');
   };
 
   const handlePublish = async () => {
@@ -1225,14 +1227,6 @@ const AdsLaunchPage = () => {
             <div className="flex flex-wrap gap-3">
               <button
                 type="button"
-                onClick={handleGenerate}
-                className="flex h-11 w-full items-center justify-center gap-2 rounded-xl border border-sky-100 bg-white px-5 text-sm font-bold text-slate-700 transition hover:bg-sky-50 sm:w-auto"
-              >
-                <Wand2 size={17} strokeWidth={2.2} />
-                Generate one-click plan
-              </button>
-              <button
-                type="button"
                 onClick={handleSaveTemplate}
                 disabled={savingTemplate}
                 className="flex h-11 w-full items-center justify-center gap-2 rounded-xl bg-sky-600 px-5 text-sm font-bold text-white transition hover:bg-sky-700 disabled:opacity-70 sm:w-auto"
@@ -1270,7 +1264,7 @@ const AdsLaunchPage = () => {
               <div className="h-56 animate-pulse rounded-2xl bg-sky-50" />
             ) : templates.length ? (
               <div className="space-y-3">
-                {templates.map((template) => (
+                {visibleTemplates.map((template) => (
                   <div key={template.id} className="rounded-2xl border border-sky-100 bg-white p-4">
                     <div className="flex items-start justify-between gap-3">
                       <div className="min-w-0">
@@ -1337,6 +1331,33 @@ const AdsLaunchPage = () => {
                     </div>
                   </div>
                 ))}
+
+                <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-sky-100 bg-sky-50/70 px-4 py-3">
+                  <p className="text-xs font-black uppercase tracking-[0.18em] text-sky-700">
+                    Showing {templateRangeStart}-{templateRangeEnd} of {templates.length}
+                  </p>
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setTemplatePage((currentPage) => Math.max(currentPage - 1, 1))}
+                      disabled={safeTemplatePage <= 1}
+                      className="h-9 rounded-xl border border-sky-100 bg-white px-3 text-xs font-black text-slate-700 transition hover:bg-sky-50 disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      Previous
+                    </button>
+                    <span className="rounded-xl bg-white px-3 py-2 text-xs font-black text-slate-500">
+                      Page {safeTemplatePage} / {templatePageCount}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => setTemplatePage((currentPage) => Math.min(currentPage + 1, templatePageCount))}
+                      disabled={safeTemplatePage >= templatePageCount}
+                      className="h-9 rounded-xl border border-sky-100 bg-white px-3 text-xs font-black text-slate-700 transition hover:bg-sky-50 disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      Next
+                    </button>
+                  </div>
+                </div>
               </div>
             ) : (
               <EmptyState>Save your first launch template to reuse the setup later.</EmptyState>
@@ -1599,7 +1620,7 @@ const AdsLaunchPage = () => {
           </div>
         </DashboardPanel>
 
-        <DashboardPanel title="Generated launch plan">
+        <DashboardPanel title="Automatic launch plan">
           {previewItems.length ? (
             <div className="space-y-4">
               <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
@@ -1677,7 +1698,7 @@ const AdsLaunchPage = () => {
               ) : null}
             </div>
           ) : (
-            <EmptyState>Select the token and one or more ad accounts to generate the launch structure.</EmptyState>
+            <EmptyState>Select the token and one or more ad accounts to preview the launch structure.</EmptyState>
           )}
         </DashboardPanel>
       </div>

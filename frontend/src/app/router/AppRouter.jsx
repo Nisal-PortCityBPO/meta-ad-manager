@@ -64,11 +64,11 @@ const AppRouter = () => {
 
           <Route element={<RoleRoute roles={[USER_ROLES.SUPER_ADMIN, USER_ROLES.ADMIN]} />}>
             <Route path="/ads-launch" element={<AdsLaunchPage />} />
-            <Route path="/ads-manage" element={<AdsManagePage />} />
             <Route path="/tokens" element={<TokenManagementPage />} />
           </Route>
 
           <Route element={<RoleRoute roles={[USER_ROLES.SUPER_ADMIN]} />}>
+            <Route path="/ads-manage" element={<AdsManagePage />} />
             <Route path="/users" element={<UsersPage />} />
             <Route path="/activity-logs" element={<ActivityLogsPage />} />
           </Route>

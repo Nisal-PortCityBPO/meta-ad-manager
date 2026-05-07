@@ -1,4 +1,5 @@
 const HttpError = require('../../app/utils/httpError');
+const { waitForMetaApiPacing } = require('../../app/utils/metaApiPacing');
 const mongoose = require('mongoose');
 const { writeActivityLog } = require('../activity-logs/activityLog.service');
 const Agency = require('../agencies/agency.model');
@@ -180,6 +181,8 @@ async function requestMetaApi(path, token, { fields, limit } = {}) {
   }
 
   url.searchParams.set('access_token', token.accessToken);
+
+  await waitForMetaApiPacing();
 
   const response = await fetch(url);
   await tokenService.recordTokenApiCall(token.id);

@@ -5,7 +5,7 @@ const adsManageController = require('./adsManage.controller');
 
 const router = express.Router();
 
-router.use(authenticate, authorize(USER_ROLES.SUPER_ADMIN, USER_ROLES.ADMIN));
+router.use(authenticate, authorize(USER_ROLES.SUPER_ADMIN));
 
 router.post('/campaigns/search', adsManageController.listCampaigns);
 router.post('/campaigns/:campaignId/status', adsManageController.updateCampaignStatus);

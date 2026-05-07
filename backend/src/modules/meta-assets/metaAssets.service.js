@@ -1,4 +1,5 @@
 const HttpError = require('../../app/utils/httpError');
+const { waitForMetaApiPacing } = require('../../app/utils/metaApiPacing');
 const tokenService = require('../token-management/token.service');
 
 const META_GRAPH_VERSION = process.env.META_GRAPH_VERSION || 'v24.0';
@@ -71,6 +72,8 @@ async function fetchGraphCollection({ token, path, fields, limit = 100 }) {
   }).toString();
 
   while (nextUrl) {
+    await waitForMetaApiPacing();
+
     const response = await fetch(nextUrl);
     await tokenService.recordTokenApiCall(token.id);
     const payload = await response.json();
@@ -155,18 +158,40 @@ async function getBaseAssets({ tokenId, token }) {
   return getOrSetCacheEntry(getBaseAssetsCacheKey(tokenId), async () => {
     const warnings = [];
 
-    const [adAccountsResult, pagesResult] = await Promise.allSettled([
-      fetchGraphCollection({
-        token,
-        path: 'me/adaccounts',
-        fields: 'id,account_id,name,account_status,currency',
-      }),
-      fetchGraphCollection({
-        token,
-        path: 'me/accounts',
-        fields: 'id,name,category',
-      }),
-    ]);
+    let adAccountsResult;
+    let pagesResult;
+
+    try {
+      adAccountsResult = {
+        status: 'fulfilled',
+        value: await fetchGraphCollection({
+          token,
+          path: 'me/adaccounts',
+          fields: 'id,account_id,name,account_status,currency',
+        }),
+      };
+    } catch (error) {
+      adAccountsResult = {
+        status: 'rejected',
+        reason: error,
+      };
+    }
+
+    try {
+      pagesResult = {
+        status: 'fulfilled',
+        value: await fetchGraphCollection({
+          token,
+          path: 'me/accounts',
+          fields: 'id,name,category',
+        }),
+      };
+    } catch (error) {
+      pagesResult = {
+        status: 'rejected',
+        reason: error,
+      };
+    }
 
     const adAccounts =
       adAccountsResult.status === 'fulfilled'
@@ -222,15 +247,27 @@ async function getSharedPixels({ tokenId, token, adAccountIds }) {
     };
   }
 
-  const results = await Promise.allSettled(
-    adAccountIds.map((adAccountId) =>
-      getPixelsForAdAccount({
+  const results = [];
+
+  for (const adAccountId of adAccountIds) {
+    try {
+      const pixels = await getPixelsForAdAccount({
         tokenId,
         token,
         adAccountId,
-      })
-    )
-  );
+      });
+
+      results.push({
+        status: 'fulfilled',
+        value: pixels,
+      });
+    } catch (error) {
+      results.push({
+        status: 'rejected',
+        reason: error,
+      });
+    }
+  }
 
   const fulfilled = results.filter((result) => result.status === 'fulfilled').map((result) => result.value);
   const rejected = results

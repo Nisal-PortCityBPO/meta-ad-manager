@@ -1,6 +1,7 @@
 const fs = require('fs');
 const path = require('path');
 const HttpError = require('../../app/utils/httpError');
+const { waitForMetaApiPacing } = require('../../app/utils/metaApiPacing');
 const { writeActivityLog } = require('../activity-logs/activityLog.service');
 const { USER_ROLES } = require('../users/user.model');
 const LaunchTemplate = require('./adsLaunch.model');
@@ -581,6 +582,8 @@ async function postToMeta({ token, path, params = {}, formData = null, videoHost
   } else if (!formData.has('access_token')) {
     formData.set('access_token', token.accessToken);
   }
+
+  await waitForMetaApiPacing();
 
   const response = await fetch(buildGraphUrl(path, { videoHost }), {
     method: 'POST',

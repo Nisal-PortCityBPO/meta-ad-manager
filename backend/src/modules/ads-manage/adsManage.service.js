@@ -1,4 +1,5 @@
 const HttpError = require('../../app/utils/httpError');
+const { waitForMetaApiPacing } = require('../../app/utils/metaApiPacing');
 const { writeActivityLog } = require('../activity-logs/activityLog.service');
 const tokenService = require('../token-management/token.service');
 
@@ -101,6 +102,8 @@ async function recordApiCall(token) {
 }
 
 async function getFromMeta({ token, path, params = {} }) {
+  await waitForMetaApiPacing();
+
   const response = await fetch(
     buildGraphUrl(path, {
       access_token: token.accessToken,
@@ -129,6 +132,8 @@ async function postToMeta({ token, path, params = {} }) {
     }
   });
 
+  await waitForMetaApiPacing();
+
   const response = await fetch(buildGraphUrl(path), {
     method: 'POST',
     body,
@@ -152,6 +157,8 @@ async function fetchGraphCollection({ token, path, params = {}, limit = 100 }) {
   }).toString();
 
   while (nextUrl) {
+    await waitForMetaApiPacing();
+
     const response = await fetch(nextUrl);
     await recordApiCall(token);
     const payload = await response.json().catch(() => ({}));
@@ -255,15 +262,27 @@ async function listAccountCampaigns({ token, account, datePreset, status }) {
     },
   });
 
-  const insightResults = await Promise.allSettled(
-    campaigns.map((campaign) =>
-      getCampaignInsights({
+  const insightResults = [];
+
+  for (const campaign of campaigns) {
+    try {
+      const insights = await getCampaignInsights({
         token,
         campaignId: campaign.id,
         datePreset,
-      })
-    )
-  );
+      });
+
+      insightResults.push({
+        status: 'fulfilled',
+        value: insights,
+      });
+    } catch (error) {
+      insightResults.push({
+        status: 'rejected',
+        reason: error,
+      });
+    }
+  }
 
   return {
     campaigns: campaigns.map((campaign, index) =>
@@ -312,16 +331,28 @@ async function listCampaigns({ tokenId, adAccounts = [], datePreset, status }) {
   const token = await tokenService.getActiveTokenWithSecret(tokenId);
   const normalizedDatePreset = getDatePreset(datePreset);
   const normalizedStatus = normalizeText(status);
-  const results = await Promise.allSettled(
-    accounts.map((account) =>
-      listAccountCampaigns({
+  const results = [];
+
+  for (const account of accounts) {
+    try {
+      const result = await listAccountCampaigns({
         token,
         account,
         datePreset: normalizedDatePreset,
         status: normalizedStatus,
-      })
-    )
-  );
+      });
+
+      results.push({
+        status: 'fulfilled',
+        value: result,
+      });
+    } catch (error) {
+      results.push({
+        status: 'rejected',
+        reason: error,
+      });
+    }
+  }
 
   const campaigns = results
     .filter((result) => result.status === 'fulfilled')
