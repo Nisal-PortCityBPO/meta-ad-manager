@@ -1,11 +1,12 @@
 import { NavLink, Outlet, useNavigate } from 'react-router-dom';
 import toast from 'react-hot-toast';
-import { Bell, ClipboardList, KeyRound, LayoutDashboard, LogOut, Megaphone, UserCircle, Users } from 'lucide-react';
+import { BarChart3, Bell, ClipboardList, KeyRound, LayoutDashboard, LogOut, UserCircle, Users } from 'lucide-react';
 import { USER_ROLES, useAuth } from '../../features/auth/hooks/useAuth';
 import brandLogo from '../../assets/200m-logo.png';
 
 const navItemsConfig = [
   { to: '/dashboard', label: 'Dashboard', icon: LayoutDashboard },
+  { to: '/overview', label: 'Overview', icon: BarChart3 },
   { to: '/ads-launch', label: 'Ads Launch', icon: Megaphone, roles: [USER_ROLES.SUPER_ADMIN, USER_ROLES.ADMIN] },
   { to: '/tokens', label: 'Token Management', icon: KeyRound, roles: [USER_ROLES.SUPER_ADMIN, USER_ROLES.ADMIN] },
   { to: '/users', label: 'Users', icon: Users, roles: [USER_ROLES.SUPER_ADMIN] },
