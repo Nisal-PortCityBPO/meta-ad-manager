@@ -17,13 +17,14 @@ import {
   XCircle,
 } from 'lucide-react';
 import { USER_ROLES, useAuth } from '../../features/auth/hooks/useAuth';
+import { MetaSyncProvider } from '../../features/dashboard/context/MetaSyncContext';
 import { PublishProgressProvider, usePublishProgress } from '../../features/notifications/PublishProgressContext';
 import PublishProgressPanel, { formatDuration } from '../../features/notifications/components/PublishProgressPanel';
 import brandLogo from '../../assets/200m-logo.png';
 
 const navItemsConfig = [
   { to: '/dashboard', label: 'Dashboard', icon: LayoutDashboard },
-  { to: '/overview', label: 'Overview', icon: BarChart3 },
+  { to: '/overview', label: 'Overview', icon: BarChart3, roles: [USER_ROLES.SUPER_ADMIN] },
   { to: '/ads-launch', label: 'Ads Launch', icon: Megaphone, roles: [USER_ROLES.SUPER_ADMIN, USER_ROLES.ADMIN] },
   { to: '/ads-manage', label: 'Ads Manage', icon: FolderKanban, roles: [USER_ROLES.SUPER_ADMIN] },
   { to: '/tokens', label: 'Token Management', icon: KeyRound, roles: [USER_ROLES.SUPER_ADMIN, USER_ROLES.ADMIN] },
@@ -70,13 +71,6 @@ const PublishStatusControl = () => {
     window.addEventListener('pointerdown', handlePointerDown);
     return () => window.removeEventListener('pointerdown', handlePointerDown);
   }, [panelOpen]);
-
-  useEffect(() => {
-    if (!hasPublishState) {
-      setPanelOpen(false);
-      setPreviewOpen(false);
-    }
-  }, [hasPublishState]);
 
   return (
     <div
@@ -273,7 +267,9 @@ const DashboardShell = () => {
 
 const DashboardLayout = () => (
   <PublishProgressProvider>
-    <DashboardShell />
+    <MetaSyncProvider>
+      <DashboardShell />
+    </MetaSyncProvider>
   </PublishProgressProvider>
 );
 

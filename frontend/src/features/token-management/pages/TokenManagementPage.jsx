@@ -9,6 +9,7 @@ import { useTokens } from '../hooks/useTokens';
 const emptyForm = {
   label: '',
   purpose: '',
+  adsPowerProfile: '',
   accessToken: '',
   status: 'ACTIVE',
 };
@@ -65,6 +66,7 @@ const TokenManagementPage = () => {
     setForm({
       label: token.label,
       purpose: token.purpose,
+      adsPowerProfile: token.adsPowerProfile || '',
       accessToken: '',
       status: token.status,
     });
@@ -78,6 +80,7 @@ const TokenManagementPage = () => {
       const payload = {
         label: form.label,
         purpose: form.purpose,
+        adsPowerProfile: form.adsPowerProfile,
         status: form.status,
         ...(form.accessToken.trim() ? { accessToken: form.accessToken } : {}),
       };
@@ -209,6 +212,19 @@ const TokenManagementPage = () => {
             </div>
 
             <div className="space-y-2">
+              <label htmlFor="ads-power-profile" className="text-sm font-semibold text-slate-700">
+                AdsPower Profile
+              </label>
+              <input
+                id="ads-power-profile"
+                value={form.adsPowerProfile}
+                onChange={(event) => updateField('adsPowerProfile', event.target.value)}
+                className="h-12 w-full rounded-xl border border-sky-100 bg-white px-4 outline-none transition focus:border-sky-400 focus:ring-4 focus:ring-sky-100"
+                placeholder="AdsPower browser profile name"
+              />
+            </div>
+
+            <div className="space-y-2">
               <label htmlFor="access-token" className="text-sm font-semibold text-slate-700">
                 Access token
               </label>
@@ -283,7 +299,7 @@ const TokenManagementPage = () => {
                 <table className="min-w-full divide-y divide-sky-50">
                   <thead className="bg-sky-50/70">
                     <tr>
-                      {['Token label', 'Purpose', 'Access token', 'Status', 'Connection', 'API calls', 'Actions'].map((heading) => (
+                      {['Token label', 'Purpose', 'AdsPower Profile', 'Access token', 'Status', 'Connection', 'API calls', 'Actions'].map((heading) => (
                         <th key={heading} className="px-5 py-4 text-left text-xs font-black uppercase tracking-[0.16em] text-sky-700">
                           {heading}
                         </th>
@@ -300,6 +316,9 @@ const TokenManagementPage = () => {
                           </p>
                         </td>
                         <td className="px-5 py-4 text-sm font-semibold text-slate-600">{token.purpose}</td>
+                        <td className="px-5 py-4 text-sm font-bold text-slate-700">
+                          {token.adsPowerProfile || <span className="font-semibold text-slate-400">Not set</span>}
+                        </td>
                         <td className="px-5 py-4 font-mono text-sm font-bold text-slate-700">{token.accessToken}</td>
                         <td className="px-5 py-4">
                           <span className={`inline-flex rounded-full px-3 py-1 text-xs font-black ${statusStyles[token.status] || statusStyles.DEACTIVE}`}>
