@@ -4,8 +4,7 @@ const adsManageService = require('./adsManage.service');
 const listCampaigns = asyncHandler(async (req, res) => {
   const result = await adsManageService.listCampaigns({
     tokenId: req.body.tokenId,
-    adAccounts: req.body.adAccounts,
-    datePreset: req.body.datePreset,
+    adAccountIds: req.body.adAccountIds,
     status: req.body.status,
   });
 
@@ -38,7 +37,19 @@ const duplicateCampaign = asyncHandler(async (req, res) => {
   res.status(201).json(result);
 });
 
+const deleteCampaign = asyncHandler(async (req, res) => {
+  const result = await adsManageService.deleteCampaign({
+    tokenId: req.body.tokenId,
+    campaignId: req.params.campaignId,
+    actor: req.user,
+    req,
+  });
+
+  res.json(result);
+});
+
 module.exports = {
+  deleteCampaign,
   duplicateCampaign,
   listCampaigns,
   updateCampaignStatus,

@@ -16,4 +16,9 @@ export const adsManageApi = {
       method: 'POST',
       body: payload,
     }),
+  deleteCampaign: (campaignId, payload) =>
+    apiRequest(`/ads-manage/campaigns/${campaignId}`, {
+      method: 'DELETE',
+      body: payload,
+    }),
 };

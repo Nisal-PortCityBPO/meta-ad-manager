@@ -2,42 +2,46 @@ const HttpError = require('../../app/utils/httpError');
 const { waitForMetaApiPacing } = require('../../app/utils/metaApiPacing');
 const { writeActivityLog } = require('../activity-logs/activityLog.service');
 const tokenService = require('../token-management/token.service');
+const ManagedCampaign = require('./adsManage.model');
 
 const META_GRAPH_VERSION = process.env.META_GRAPH_VERSION || 'v24.0';
 const GRAPH_API_BASE = `https://graph.facebook.com/${META_GRAPH_VERSION}`;
-
-const CAMPAIGN_FIELDS = [
-  'id',
-  'name',
-  'status',
-  'effective_status',
-  'objective',
-  'buying_type',
-  'daily_budget',
-  'lifetime_budget',
-  'budget_remaining',
-  'spend_cap',
-  'start_time',
-  'stop_time',
-  'created_time',
-  'updated_time',
-  'special_ad_categories',
-].join(',');
-
-const INSIGHT_FIELDS = ['spend', 'impressions', 'reach', 'clicks', 'ctr', 'cpc', 'cpm'].join(',');
 const ALLOWED_STATUS_UPDATES = new Set(['ACTIVE', 'PAUSED']);
-const ALLOWED_DATE_PRESETS = new Set([
-  'today',
-  'yesterday',
-  'last_7d',
-  'last_14d',
-  'last_30d',
-  'this_month',
-  'last_month',
+
+const ZERO_DECIMAL_CURRENCIES = new Set([
+  'BIF',
+  'CLP',
+  'DJF',
+  'GNF',
+  'IDR',
+  'JPY',
+  'KMF',
+  'KRW',
+  'MGA',
+  'PYG',
+  'RWF',
+  'UGX',
+  'VND',
+  'VUV',
+  'XAF',
+  'XOF',
+  'XPF',
 ]);
 
 function normalizeText(value) {
   return typeof value === 'string' ? value.trim() : '';
+}
+
+function dedupeStrings(values) {
+  return Array.from(
+    new Set(
+      Array.isArray(values)
+        ? values
+            .map((value) => normalizeText(value))
+            .filter(Boolean)
+        : []
+    )
+  );
 }
 
 function buildGraphUrl(path, params = {}) {
@@ -101,25 +105,6 @@ async function recordApiCall(token) {
   await tokenService.recordTokenApiCall(token.id);
 }
 
-async function getFromMeta({ token, path, params = {} }) {
-  await waitForMetaApiPacing();
-
-  const response = await fetch(
-    buildGraphUrl(path, {
-      access_token: token.accessToken,
-      ...params,
-    })
-  );
-  await recordApiCall(token);
-  const payload = await response.json().catch(() => ({}));
-
-  if (!response.ok || payload.error) {
-    throw new HttpError(400, buildMetaErrorMessage(path, payload));
-  }
-
-  return payload;
-}
-
 async function postToMeta({ token, path, params = {} }) {
   const body = new URLSearchParams();
 
@@ -148,239 +133,335 @@ async function postToMeta({ token, path, params = {} }) {
   return payload;
 }
 
-async function fetchGraphCollection({ token, path, params = {}, limit = 100 }) {
-  const items = [];
-  let nextUrl = buildGraphUrl(path, {
-    access_token: token.accessToken,
-    limit,
-    ...params,
-  }).toString();
+function getBudgetMultiplier(currency) {
+  return ZERO_DECIMAL_CURRENCIES.has(String(currency || '').toUpperCase()) ? 1 : 100;
+}
 
-  while (nextUrl) {
-    await waitForMetaApiPacing();
+function toStoredBudgetAmount(value, currency) {
+  const numericValue = Number(value);
 
-    const response = await fetch(nextUrl);
-    await recordApiCall(token);
-    const payload = await response.json().catch(() => ({}));
-
-    if (!response.ok || payload.error) {
-      throw new HttpError(400, buildMetaErrorMessage(path, payload));
-    }
-
-    if (Array.isArray(payload.data)) {
-      items.push(...payload.data);
-    }
-
-    nextUrl = payload.paging?.next || null;
+  if (!Number.isFinite(numericValue) || numericValue <= 0) {
+    return '';
   }
 
-  return items;
+  return String(Math.round(numericValue * getBudgetMultiplier(currency)));
 }
 
-function getDatePreset(value) {
-  const normalizedValue = normalizeText(value) || 'last_30d';
-  return ALLOWED_DATE_PRESETS.has(normalizedValue) ? normalizedValue : 'last_30d';
+function getSpecialAdCategories(value) {
+  const normalizedValue = normalizeText(value);
+  return !normalizedValue || normalizedValue === 'NONE' ? [] : [normalizedValue];
 }
 
-function getBudgetDisplay(campaign) {
-  if (campaign.daily_budget) {
-    return {
-      type: 'Daily',
-      amount: campaign.daily_budget,
+function mapAssetForHistory(asset) {
+  if (!asset?.name && !asset?.type) {
+    return null;
+  }
+
+  return {
+    name: normalizeText(asset.name),
+    type: normalizeText(asset.type),
+    size: Number(asset.size || asset.buffer?.length || 0),
+  };
+}
+
+function pushAction({ action, status = '', message = '', actor = null }) {
+  return {
+    action,
+    status,
+    message,
+    actor: actor?._id || actor?.id || null,
+    at: new Date(),
+  };
+}
+
+function buildCampaignQuery({ tokenId, adAccountIds = [], status }) {
+  const query = {};
+  const normalizedTokenId = normalizeText(tokenId);
+  const normalizedStatus = normalizeText(status);
+  const normalizedAccountIds = dedupeStrings(adAccountIds);
+
+  if (normalizedTokenId) {
+    query.tokenId = normalizedTokenId;
+  }
+
+  if (normalizedStatus) {
+    query.status = normalizedStatus;
+  }
+
+  if (normalizedAccountIds.length) {
+    query['adAccount.id'] = {
+      $in: normalizedAccountIds,
     };
   }
 
-  if (campaign.lifetime_budget) {
-    return {
-      type: 'Lifetime',
-      amount: campaign.lifetime_budget,
-    };
-  }
-
-  return {
-    type: 'Ad set',
-    amount: '',
-  };
+  return query;
 }
 
-function normalizeInsights(insight) {
-  return {
-    spend: insight?.spend || '0',
-    impressions: insight?.impressions || '0',
-    reach: insight?.reach || '0',
-    clicks: insight?.clicks || '0',
-    ctr: insight?.ctr || '0',
-    cpc: insight?.cpc || '0',
-    cpm: insight?.cpm || '0',
-  };
+function normalizeStoredCampaign(campaign) {
+  return campaign.toSafeObject();
 }
 
-async function getCampaignInsights({ token, campaignId, datePreset }) {
-  const payload = await getFromMeta({
-    token,
-    path: `${campaignId}/insights`,
-    params: {
-      fields: INSIGHT_FIELDS,
-      date_preset: datePreset,
-      limit: 1,
+async function getLocalAdAccounts({ tokenId }) {
+  const accountRecords = await ManagedCampaign.find({
+    tokenId,
+    'adAccount.id': {
+      $ne: '',
     },
-  });
+  })
+    .select('adAccount')
+    .lean();
 
-  return normalizeInsights(payload.data?.[0]);
-}
+  const accountsById = new Map();
 
-function normalizeCampaign({ campaign, account, insights }) {
-  const budget = getBudgetDisplay(campaign);
+  accountRecords.forEach((record) => {
+    const account = record.adAccount || {};
 
-  return {
-    id: String(campaign.id),
-    name: campaign.name || `Campaign ${campaign.id}`,
-    status: campaign.status || '',
-    effectiveStatus: campaign.effective_status || '',
-    objective: campaign.objective || '',
-    buyingType: campaign.buying_type || '',
-    budget,
-    budgetRemaining: campaign.budget_remaining || '',
-    spendCap: campaign.spend_cap || '',
-    startTime: campaign.start_time || '',
-    stopTime: campaign.stop_time || '',
-    createdTime: campaign.created_time || '',
-    updatedTime: campaign.updated_time || '',
-    specialAdCategories: Array.isArray(campaign.special_ad_categories) ? campaign.special_ad_categories : [],
-    insights,
-    adAccount: account,
-  };
-}
-
-async function listAccountCampaigns({ token, account, datePreset, status }) {
-  const campaigns = await fetchGraphCollection({
-    token,
-    path: `${account.id}/campaigns`,
-    params: {
-      fields: CAMPAIGN_FIELDS,
-      effective_status: status ? [status] : undefined,
-    },
-  });
-
-  const insightResults = [];
-
-  for (const campaign of campaigns) {
-    try {
-      const insights = await getCampaignInsights({
-        token,
-        campaignId: campaign.id,
-        datePreset,
-      });
-
-      insightResults.push({
-        status: 'fulfilled',
-        value: insights,
-      });
-    } catch (error) {
-      insightResults.push({
-        status: 'rejected',
-        reason: error,
-      });
+    if (!account.id || accountsById.has(account.id)) {
+      return;
     }
-  }
 
-  return {
-    campaigns: campaigns.map((campaign, index) =>
-      normalizeCampaign({
-        campaign,
-        account,
-        insights:
-          insightResults[index]?.status === 'fulfilled'
-            ? insightResults[index].value
-            : normalizeInsights(null),
-      })
-    ),
-    warnings: insightResults
-      .map((result, index) =>
-        result.status === 'rejected'
-          ? {
-              scope: `insights:${campaigns[index].id}`,
-              message: result.reason.message,
-            }
-          : null
-      )
-      .filter(Boolean),
-  };
+    accountsById.set(account.id, {
+      id: account.id,
+      accountId: account.accountId || '',
+      name: account.name || account.id,
+      currency: account.currency || '',
+    });
+  });
+
+  return Array.from(accountsById.values()).sort((left, right) => left.name.localeCompare(right.name));
 }
 
-async function listCampaigns({ tokenId, adAccounts = [], datePreset, status }) {
-  if (!tokenId) {
+async function listCampaigns({ tokenId, adAccountIds = [], status }) {
+  const normalizedTokenId = normalizeText(tokenId);
+
+  if (!normalizedTokenId) {
     throw new HttpError(400, 'Token id is required');
   }
 
-  const accounts = Array.isArray(adAccounts)
-    ? adAccounts
-        .map((account) => ({
-          id: normalizeText(account?.id),
-          accountId: normalizeText(account?.accountId),
-          name: normalizeText(account?.name),
-          currency: normalizeText(account?.currency),
-        }))
-        .filter((account) => account.id)
-    : [];
-
-  if (!accounts.length) {
-    throw new HttpError(400, 'Select at least one ad account');
-  }
-
-  const token = await tokenService.getActiveTokenWithSecret(tokenId);
-  const normalizedDatePreset = getDatePreset(datePreset);
-  const normalizedStatus = normalizeText(status);
-  const results = [];
-
-  for (const account of accounts) {
-    try {
-      const result = await listAccountCampaigns({
-        token,
-        account,
-        datePreset: normalizedDatePreset,
-        status: normalizedStatus,
-      });
-
-      results.push({
-        status: 'fulfilled',
-        value: result,
-      });
-    } catch (error) {
-      results.push({
-        status: 'rejected',
-        reason: error,
-      });
-    }
-  }
-
-  const campaigns = results
-    .filter((result) => result.status === 'fulfilled')
-    .flatMap((result) => result.value.campaigns)
-    .sort((left, right) => new Date(right.updatedTime || 0) - new Date(left.updatedTime || 0));
-
-  const warnings = results.flatMap((result, index) => {
-    if (result.status === 'fulfilled') {
-      return result.value.warnings;
-    }
-
-    return [
-      {
-        scope: accounts[index].name || accounts[index].id,
-        message: result.reason.message,
-      },
-    ];
+  const query = buildCampaignQuery({
+    tokenId: normalizedTokenId,
+    adAccountIds,
+    status,
   });
+  const [campaigns, adAccounts] = await Promise.all([
+    ManagedCampaign.find(query).sort({ updatedAt: -1, createdAt: -1 }),
+    getLocalAdAccounts({ tokenId: normalizedTokenId }),
+  ]);
 
   return {
-    campaigns,
-    warnings,
+    campaigns: campaigns.map(normalizeStoredCampaign),
+    warnings: [],
+    filters: {
+      adAccounts,
+    },
     summary: {
-      accountsRequested: accounts.length,
+      source: 'mongo-history',
       campaigns: campaigns.length,
-      datePreset: normalizedDatePreset,
+      accounts: adAccounts.length,
     },
   };
+}
+
+async function getCampaignForAction({ tokenId, campaignId }) {
+  const normalizedTokenId = normalizeText(tokenId);
+  const normalizedCampaignId = normalizeText(campaignId);
+
+  if (!normalizedTokenId) {
+    throw new HttpError(400, 'Token id is required');
+  }
+
+  if (!normalizedCampaignId) {
+    throw new HttpError(400, 'Campaign id is required');
+  }
+
+  const campaign = await ManagedCampaign.findOne({
+    tokenId: normalizedTokenId,
+    campaignId: normalizedCampaignId,
+  });
+
+  if (!campaign) {
+    throw new HttpError(404, 'Campaign was not found in saved launch history');
+  }
+
+  return campaign;
+}
+
+async function rememberMetaActionFailure({ campaign, action, error, actor }) {
+  campaign.lastMetaError = error.message;
+  campaign.lastActionAt = new Date();
+  campaign.actionHistory.push(
+    pushAction({
+      action,
+      message: error.message,
+      actor,
+    })
+  );
+  await campaign.save();
+}
+
+async function recordPublishedCampaign({ token, launch, account, names, campaign, adSet, creative, ad, media, thumbnail, actor }) {
+  const status = normalizeText(launch.staticDefaults?.campaignStatus) || 'PAUSED';
+  const campaignId = normalizeText(campaign?.id);
+
+  if (!campaignId) {
+    throw new HttpError(400, 'Cannot save campaign history without a Meta campaign id');
+  }
+
+  const now = new Date();
+  const history = await ManagedCampaign.findOneAndUpdate(
+    {
+      campaignId,
+    },
+    {
+      $set: {
+        tokenId: token.id,
+        tokenLabel: token.label || '',
+        campaignId,
+        name: names.campaignName,
+        status,
+        effectiveStatus: status,
+        objective: launch.objective,
+        buyingType: launch.staticDefaults?.buyingType || 'AUCTION',
+        adAccount: {
+          id: account.id,
+          accountId: account.accountId || String(account.id || '').replace(/^act_/, ''),
+          name: account.name || account.id,
+          currency: account.currency || '',
+        },
+        adSetId: normalizeText(adSet?.id),
+        adSetName: names.adSetName,
+        creativeId: normalizeText(creative?.id),
+        creativeName: names.adName,
+        adId: normalizeText(ad?.id),
+        adName: names.adName,
+        budget: {
+          type: 'Daily',
+          amount: toStoredBudgetAmount(launch.dailyBudget, account.currency),
+          currency: account.currency || '',
+        },
+        budgetRemaining: '',
+        spendCap: '',
+        insights: {
+          spend: '0',
+          impressions: '0',
+          reach: '0',
+          clicks: '0',
+          ctr: '0',
+          cpc: '0',
+          cpm: '0',
+        },
+        specialAdCategories: getSpecialAdCategories(launch.staticDefaults?.specialAdCategories),
+        launch: {
+          launchLabel: launch.launchLabel,
+          templateId: launch.templateId || '',
+          countries: launch.countries || [],
+          countryLabel: launch.countryLabel || (launch.countries || []).join(', '),
+          dailyBudget: launch.dailyBudget,
+          page: {
+            id: launch.pageId,
+            name: launch.pageName || '',
+          },
+          pixel: {
+            id: launch.pixelId || '',
+            name: launch.pixelName || '',
+          },
+          headline: launch.headline,
+          primaryText: launch.primaryText,
+          description: launch.description,
+          websiteUrl: launch.websiteUrl,
+          callToAction: launch.callToAction,
+          media: mapAssetForHistory(media),
+          thumbnail: mapAssetForHistory(thumbnail),
+          staticDefaults: launch.staticDefaults || {},
+        },
+        source: 'ADS_LAUNCH',
+        duplicatedFromCampaignId: '',
+        deletedAt: null,
+        lastActionAt: now,
+        lastMetaError: '',
+        createdBy: actor?._id || null,
+        updatedBy: actor?._id || null,
+      },
+      $push: {
+        actionHistory: pushAction({
+          action: 'CREATED',
+          status,
+          message: 'Campaign created from Ads Launch',
+          actor,
+        }),
+      },
+    },
+    {
+      new: true,
+      upsert: true,
+      setDefaultsOnInsert: true,
+    }
+  );
+
+  return history.toSafeObject();
+}
+
+async function updateCampaignStatus({ tokenId, campaignId, status, actor, req }) {
+  const normalizedStatus = normalizeText(status).toUpperCase();
+
+  if (!ALLOWED_STATUS_UPDATES.has(normalizedStatus)) {
+    throw new HttpError(400, 'Campaign status must be ACTIVE or PAUSED');
+  }
+
+  const campaign = await getCampaignForAction({ tokenId, campaignId });
+  const token = await tokenService.getActiveTokenWithSecret(tokenId);
+
+  try {
+    const payload = await postToMeta({
+      token,
+      path: campaign.campaignId,
+      params: {
+        status: normalizedStatus,
+      },
+    });
+
+    campaign.status = normalizedStatus;
+    campaign.effectiveStatus = normalizedStatus;
+    campaign.updatedBy = actor?._id || null;
+    campaign.lastActionAt = new Date();
+    campaign.lastMetaError = '';
+    campaign.actionHistory.push(
+      pushAction({
+        action: 'STATUS_UPDATED',
+        status: normalizedStatus,
+        message: `Campaign ${normalizedStatus === 'PAUSED' ? 'paused' : 'activated'} in Meta`,
+        actor,
+      })
+    );
+    await campaign.save();
+
+    await writeActivityLog({
+      user: actor,
+      action: 'ADS_MANAGE_CAMPAIGN_STATUS_UPDATED',
+      entity: 'Campaign',
+      entityId: campaign.campaignId,
+      metadata: {
+        status: normalizedStatus,
+      },
+      req,
+    });
+
+    return {
+      message: `Campaign ${normalizedStatus === 'PAUSED' ? 'paused' : 'activated'} successfully`,
+      campaign: campaign.toSafeObject(),
+      campaignId: campaign.campaignId,
+      status: normalizedStatus,
+      meta: payload,
+    };
+  } catch (error) {
+    await rememberMetaActionFailure({
+      campaign,
+      action: 'STATUS_UPDATE_FAILED',
+      error,
+      actor,
+    });
+    throw error;
+  }
 }
 
 function getCopiedCampaignId(payload) {
@@ -394,54 +475,9 @@ function getCopiedCampaignId(payload) {
   );
 }
 
-async function updateCampaignStatus({ tokenId, campaignId, status, actor, req }) {
-  const normalizedCampaignId = normalizeText(campaignId);
-  const normalizedStatus = normalizeText(status).toUpperCase();
-
-  if (!normalizedCampaignId) {
-    throw new HttpError(400, 'Campaign id is required');
-  }
-
-  if (!ALLOWED_STATUS_UPDATES.has(normalizedStatus)) {
-    throw new HttpError(400, 'Campaign status must be ACTIVE or PAUSED');
-  }
-
-  const token = await tokenService.getActiveTokenWithSecret(tokenId);
-  const payload = await postToMeta({
-    token,
-    path: normalizedCampaignId,
-    params: {
-      status: normalizedStatus,
-    },
-  });
-
-  await writeActivityLog({
-    user: actor,
-    action: 'ADS_MANAGE_CAMPAIGN_STATUS_UPDATED',
-    entity: 'Campaign',
-    entityId: normalizedCampaignId,
-    metadata: {
-      status: normalizedStatus,
-    },
-    req,
-  });
-
-  return {
-    message: `Campaign ${normalizedStatus === 'PAUSED' ? 'paused' : 'activated'} successfully`,
-    campaignId: normalizedCampaignId,
-    status: normalizedStatus,
-    meta: payload,
-  };
-}
-
 async function duplicateCampaign({ tokenId, campaignId, name, status = 'PAUSED', deepCopy = true, actor, req }) {
-  const normalizedCampaignId = normalizeText(campaignId);
   const normalizedName = normalizeText(name);
   const normalizedStatus = normalizeText(status).toUpperCase() || 'PAUSED';
-
-  if (!normalizedCampaignId) {
-    throw new HttpError(400, 'Campaign id is required');
-  }
 
   if (!normalizedName) {
     throw new HttpError(400, 'New campaign name is required');
@@ -451,56 +487,216 @@ async function duplicateCampaign({ tokenId, campaignId, name, status = 'PAUSED',
     throw new HttpError(400, 'New campaign status must be ACTIVE or PAUSED');
   }
 
-  const token = await tokenService.getActiveTokenWithSecret(tokenId);
-  const copyPayload = await postToMeta({
-    token,
-    path: `${normalizedCampaignId}/copies`,
-    params: {
-      deep_copy: Boolean(deepCopy),
-      status_option: normalizedStatus,
-    },
-  });
-  const copiedCampaignId = getCopiedCampaignId(copyPayload);
+  const sourceCampaign = await getCampaignForAction({ tokenId, campaignId });
 
-  if (copiedCampaignId) {
-    await postToMeta({
-      token,
-      path: copiedCampaignId,
-      params: {
-        name: normalizedName,
-        status: normalizedStatus,
-      },
-    });
+  if (sourceCampaign.status === 'DELETED') {
+    throw new HttpError(400, 'Deleted campaigns cannot be duplicated');
   }
 
-  await writeActivityLog({
-    user: actor,
-    action: 'ADS_MANAGE_CAMPAIGN_DUPLICATED',
-    entity: 'Campaign',
-    entityId: normalizedCampaignId,
-    metadata: {
+  const token = await tokenService.getActiveTokenWithSecret(tokenId);
+
+  try {
+    const copyPayload = await postToMeta({
+      token,
+      path: `${sourceCampaign.campaignId}/copies`,
+      params: {
+        deep_copy: Boolean(deepCopy),
+        status_option: normalizedStatus,
+      },
+    });
+    const copiedCampaignId = getCopiedCampaignId(copyPayload);
+    let copiedCampaign = null;
+
+    if (copiedCampaignId) {
+      await postToMeta({
+        token,
+        path: copiedCampaignId,
+        params: {
+          name: normalizedName,
+          status: normalizedStatus,
+        },
+      });
+
+      copiedCampaign = await ManagedCampaign.findOneAndUpdate(
+        {
+          campaignId: copiedCampaignId,
+        },
+        {
+          $set: {
+            tokenId: sourceCampaign.tokenId,
+            tokenLabel: sourceCampaign.tokenLabel,
+            campaignId: copiedCampaignId,
+            name: normalizedName,
+            status: normalizedStatus,
+            effectiveStatus: normalizedStatus,
+            objective: sourceCampaign.objective,
+            buyingType: sourceCampaign.buyingType,
+            adAccount: sourceCampaign.adAccount,
+            adSetId: '',
+            adSetName: sourceCampaign.adSetName ? `${sourceCampaign.adSetName} Copy` : '',
+            creativeId: '',
+            creativeName: sourceCampaign.creativeName ? `${sourceCampaign.creativeName} Copy` : '',
+            adId: '',
+            adName: sourceCampaign.adName ? `${sourceCampaign.adName} Copy` : '',
+            budget: sourceCampaign.budget,
+            budgetRemaining: '',
+            spendCap: '',
+            insights: {
+              spend: '0',
+              impressions: '0',
+              reach: '0',
+              clicks: '0',
+              ctr: '0',
+              cpc: '0',
+              cpm: '0',
+            },
+            specialAdCategories: sourceCampaign.specialAdCategories,
+            launch: sourceCampaign.launch,
+            source: 'DUPLICATE',
+            duplicatedFromCampaignId: sourceCampaign.campaignId,
+            deletedAt: null,
+            lastActionAt: new Date(),
+            lastMetaError: '',
+            createdBy: actor?._id || null,
+            updatedBy: actor?._id || null,
+          },
+          $push: {
+            actionHistory: pushAction({
+              action: 'DUPLICATED',
+              status: normalizedStatus,
+              message: `Duplicated from ${sourceCampaign.campaignId}`,
+              actor,
+            }),
+          },
+        },
+        {
+          new: true,
+          upsert: true,
+          setDefaultsOnInsert: true,
+        }
+      );
+    }
+
+    sourceCampaign.lastActionAt = new Date();
+    sourceCampaign.lastMetaError = '';
+    sourceCampaign.actionHistory.push(
+      pushAction({
+        action: 'DUPLICATE_REQUESTED',
+        status: normalizedStatus,
+        message: copiedCampaignId ? `Created copy ${copiedCampaignId}` : 'Meta did not return a copied campaign id',
+        actor,
+      })
+    );
+    await sourceCampaign.save();
+
+    await writeActivityLog({
+      user: actor,
+      action: 'ADS_MANAGE_CAMPAIGN_DUPLICATED',
+      entity: 'Campaign',
+      entityId: sourceCampaign.campaignId,
+      metadata: {
+        copiedCampaignId,
+        name: normalizedName,
+        status: normalizedStatus,
+        deepCopy: Boolean(deepCopy),
+      },
+      req,
+    });
+
+    return {
+      message: copiedCampaignId
+        ? 'Campaign duplicated successfully'
+        : 'Campaign duplication requested, but Meta did not return the copied campaign id',
+      campaign: copiedCampaign ? copiedCampaign.toSafeObject() : null,
+      campaignId: sourceCampaign.campaignId,
       copiedCampaignId,
       name: normalizedName,
       status: normalizedStatus,
-      deepCopy: Boolean(deepCopy),
-    },
-    req,
-  });
+      meta: copyPayload,
+    };
+  } catch (error) {
+    await rememberMetaActionFailure({
+      campaign: sourceCampaign,
+      action: 'DUPLICATE_FAILED',
+      error,
+      actor,
+    });
+    throw error;
+  }
+}
 
-  return {
-    message: copiedCampaignId
-      ? 'Campaign duplicated successfully'
-      : 'Campaign duplication requested, but Meta did not return the copied campaign id',
-    campaignId: normalizedCampaignId,
-    copiedCampaignId,
-    name: normalizedName,
-    status: normalizedStatus,
-    meta: copyPayload,
-  };
+async function deleteCampaign({ tokenId, campaignId, actor, req }) {
+  const campaign = await getCampaignForAction({ tokenId, campaignId });
+
+  if (campaign.status === 'DELETED') {
+    return {
+      message: 'Campaign is already marked deleted',
+      campaign: campaign.toSafeObject(),
+      campaignId: campaign.campaignId,
+      status: campaign.status,
+    };
+  }
+
+  const token = await tokenService.getActiveTokenWithSecret(tokenId);
+
+  try {
+    const payload = await postToMeta({
+      token,
+      path: campaign.campaignId,
+      params: {
+        status: 'DELETED',
+      },
+    });
+
+    campaign.status = 'DELETED';
+    campaign.effectiveStatus = 'DELETED';
+    campaign.deletedAt = new Date();
+    campaign.updatedBy = actor?._id || null;
+    campaign.lastActionAt = new Date();
+    campaign.lastMetaError = '';
+    campaign.actionHistory.push(
+      pushAction({
+        action: 'DELETED',
+        status: 'DELETED',
+        message: 'Campaign marked deleted in Meta',
+        actor,
+      })
+    );
+    await campaign.save();
+
+    await writeActivityLog({
+      user: actor,
+      action: 'ADS_MANAGE_CAMPAIGN_DELETED',
+      entity: 'Campaign',
+      entityId: campaign.campaignId,
+      metadata: {
+        status: 'DELETED',
+      },
+      req,
+    });
+
+    return {
+      message: 'Campaign deleted successfully',
+      campaign: campaign.toSafeObject(),
+      campaignId: campaign.campaignId,
+      status: 'DELETED',
+      meta: payload,
+    };
+  } catch (error) {
+    await rememberMetaActionFailure({
+      campaign,
+      action: 'DELETE_FAILED',
+      error,
+      actor,
+    });
+    throw error;
+  }
 }
 
 module.exports = {
+  deleteCampaign,
   duplicateCampaign,
   listCampaigns,
+  recordPublishedCampaign,
   updateCampaignStatus,
 };

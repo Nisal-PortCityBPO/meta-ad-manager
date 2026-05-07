@@ -2,6 +2,8 @@ import { useEffect, useMemo, useState } from 'react';
 import toast from 'react-hot-toast';
 import {
   AlertCircle,
+  ChevronLeft,
+  ChevronRight,
   Check,
   X,
   FolderOpen,
@@ -190,6 +192,9 @@ const normalizeStoredAsset = (asset) => {
   };
 };
 
+const isLocalTemplateAssetUrl = (url) =>
+  typeof url === 'string' && url.startsWith('/api/ads-launch/templates/');
+
 const buildName = (...parts) => parts.filter(Boolean).join(' | ');
 
 const normalizeTemplateCountries = (config = {}) => {
@@ -246,6 +251,7 @@ const AdsLaunchPage = () => {
   const [publishing, setPublishing] = useState(false);
   const [latestPublish, setLatestPublish] = useState(null);
   const [templatePage, setTemplatePage] = useState(1);
+  const [templatePreview, setTemplatePreview] = useState(null);
   const [mediaFile, setMediaFile] = useState(null);
   const [thumbnailFile, setThumbnailFile] = useState(null);
   const [savedMediaAsset, setSavedMediaAsset] = useState(null);
@@ -263,8 +269,6 @@ const AdsLaunchPage = () => {
   const selectedPixel = pixels.find((pixel) => pixel.id === form.pixelId) || null;
   const templatePageCount = Math.max(Math.ceil(templates.length / TEMPLATES_PER_PAGE), 1);
   const safeTemplatePage = Math.min(Math.max(templatePage, 1), templatePageCount);
-  const templateRangeStart = templates.length ? (safeTemplatePage - 1) * TEMPLATES_PER_PAGE + 1 : 0;
-  const templateRangeEnd = Math.min(safeTemplatePage * TEMPLATES_PER_PAGE, templates.length);
   const visibleTemplates = useMemo(
     () => templates.slice((safeTemplatePage - 1) * TEMPLATES_PER_PAGE, safeTemplatePage * TEMPLATES_PER_PAGE),
     [safeTemplatePage, templates]
@@ -760,6 +764,27 @@ const AdsLaunchPage = () => {
     setSavedMediaAsset(normalizeStoredAsset(template.snapshot?.media));
     setSavedThumbnailAsset(normalizeStoredAsset(template.snapshot?.thumbnail));
     toast.success(`Loaded template "${template.name}"`);
+  };
+
+  const openTemplatePreview = (template) => {
+    const media = template.snapshot?.media;
+
+    if (!media?.url) {
+      return;
+    }
+
+    if (!isLocalTemplateAssetUrl(media.url)) {
+      toast.error('Saved template preview is only available for local stored assets');
+      return;
+    }
+
+    setTemplatePreview({
+      name: media.name || template.name,
+      templateName: template.name,
+      type: media.type || '',
+      url: media.url,
+      thumbnailUrl: isLocalTemplateAssetUrl(template.snapshot?.thumbnail?.url) ? template.snapshot.thumbnail.url : '',
+    });
   };
 
   const handlePublish = async () => {
@@ -1259,7 +1284,33 @@ const AdsLaunchPage = () => {
         </DashboardPanel>
 
         <div className="space-y-4">
-          <DashboardPanel title="Saved templates">
+          <DashboardPanel
+            title="Saved templates"
+            headerAction={
+              templates.length > TEMPLATES_PER_PAGE ? (
+                <div className="flex items-center gap-1">
+                  <button
+                    type="button"
+                    onClick={() => setTemplatePage((currentPage) => Math.max(currentPage - 1, 1))}
+                    disabled={safeTemplatePage <= 1}
+                    className="flex h-8 w-8 items-center justify-center rounded-lg border border-sky-100 bg-white text-slate-600 transition hover:bg-sky-50 disabled:cursor-not-allowed disabled:opacity-40"
+                    aria-label="Previous saved templates page"
+                  >
+                    <ChevronLeft size={16} strokeWidth={2.4} />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setTemplatePage((currentPage) => Math.min(currentPage + 1, templatePageCount))}
+                    disabled={safeTemplatePage >= templatePageCount}
+                    className="flex h-8 w-8 items-center justify-center rounded-lg border border-sky-100 bg-white text-slate-600 transition hover:bg-sky-50 disabled:cursor-not-allowed disabled:opacity-40"
+                    aria-label="Next saved templates page"
+                  >
+                    <ChevronRight size={16} strokeWidth={2.4} />
+                  </button>
+                </div>
+              ) : null
+            }
+          >
             {templatesLoading ? (
               <div className="h-56 animate-pulse rounded-2xl bg-sky-50" />
             ) : templates.length ? (
@@ -1280,7 +1331,18 @@ const AdsLaunchPage = () => {
                     </div>
 
                     {template.snapshot?.media?.url ? (
-                      <div className="mt-3 overflow-hidden rounded-2xl border border-sky-100 bg-sky-50/60">
+                      <div
+                        className="mt-3 cursor-zoom-in overflow-hidden rounded-2xl border border-sky-100 bg-sky-50/60 transition hover:border-sky-300"
+                        onDoubleClick={() => openTemplatePreview(template)}
+                        role="button"
+                        tabIndex={0}
+                        onKeyDown={(event) => {
+                          if (event.key === 'Enter') {
+                            openTemplatePreview(template);
+                          }
+                        }}
+                        aria-label={`Preview ${template.name}`}
+                      >
                         {template.snapshot.media.type?.startsWith('video/') ? (
                           template.snapshot?.thumbnail?.url ? (
                             <img
@@ -1332,32 +1394,6 @@ const AdsLaunchPage = () => {
                   </div>
                 ))}
 
-                <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-sky-100 bg-sky-50/70 px-4 py-3">
-                  <p className="text-xs font-black uppercase tracking-[0.18em] text-sky-700">
-                    Showing {templateRangeStart}-{templateRangeEnd} of {templates.length}
-                  </p>
-                  <div className="flex items-center gap-2">
-                    <button
-                      type="button"
-                      onClick={() => setTemplatePage((currentPage) => Math.max(currentPage - 1, 1))}
-                      disabled={safeTemplatePage <= 1}
-                      className="h-9 rounded-xl border border-sky-100 bg-white px-3 text-xs font-black text-slate-700 transition hover:bg-sky-50 disabled:cursor-not-allowed disabled:opacity-50"
-                    >
-                      Previous
-                    </button>
-                    <span className="rounded-xl bg-white px-3 py-2 text-xs font-black text-slate-500">
-                      Page {safeTemplatePage} / {templatePageCount}
-                    </span>
-                    <button
-                      type="button"
-                      onClick={() => setTemplatePage((currentPage) => Math.min(currentPage + 1, templatePageCount))}
-                      disabled={safeTemplatePage >= templatePageCount}
-                      className="h-9 rounded-xl border border-sky-100 bg-white px-3 text-xs font-black text-slate-700 transition hover:bg-sky-50 disabled:cursor-not-allowed disabled:opacity-50"
-                    >
-                      Next
-                    </button>
-                  </div>
-                </div>
               </div>
             ) : (
               <EmptyState>Save your first launch template to reuse the setup later.</EmptyState>

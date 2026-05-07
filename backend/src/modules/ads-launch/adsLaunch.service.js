@@ -5,6 +5,7 @@ const { waitForMetaApiPacing } = require('../../app/utils/metaApiPacing');
 const { writeActivityLog } = require('../activity-logs/activityLog.service');
 const { USER_ROLES } = require('../users/user.model');
 const LaunchTemplate = require('./adsLaunch.model');
+const adsManageService = require('../ads-manage/adsManage.service');
 const tokenService = require('../token-management/token.service');
 
 const META_GRAPH_VERSION = process.env.META_GRAPH_VERSION || 'v24.0';
@@ -860,6 +861,9 @@ async function createAdSet({
     geo_locations: {
       countries,
     },
+    targeting_automation: {
+      advantage_audience: 0,
+    },
   };
 
   if (!isSpecialAdCategory) {
@@ -1273,6 +1277,34 @@ async function publishLaunch({ payload, actor, req, onProgress = null }) {
         'ad'
       );
 
+      let historyRecord = null;
+      let historyError = '';
+
+      try {
+        historyRecord = await adsManageService.recordPublishedCampaign({
+          token,
+          launch,
+          account: selectedAccount,
+          names,
+          campaign,
+          adSet,
+          creative,
+          ad,
+          media: creativeAssets.media,
+          thumbnail: creativeAssets.thumbnail,
+          actor,
+        });
+      } catch (error) {
+        historyError = error.message;
+        progress.info({
+          ...progressContext,
+          step: 'history',
+          status: 'failed',
+          error: error.message,
+          message: `${accountLabel}: Meta publish succeeded but local history save failed`,
+        });
+      }
+
       results.push({
         adAccountId,
         adAccountName: selectedAccount.name,
@@ -1281,6 +1313,9 @@ async function publishLaunch({ payload, actor, req, onProgress = null }) {
         creativeId: creative.id,
         adId: ad.id,
         status: launch.staticDefaults.campaignStatus || DEFAULT_STATIC_DEFAULTS.campaignStatus,
+        historyRecordId: historyRecord?.recordId || null,
+        historySaved: Boolean(historyRecord),
+        historyError,
       });
       progress.info({
         ...progressContext,
