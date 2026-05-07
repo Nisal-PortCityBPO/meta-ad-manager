@@ -935,7 +935,7 @@ async function saveMediaUploadChunk({ uploadId, chunkIndex, totalChunks, chunk, 
   };
 }
 
-function assembleMediaUploadChunks({ uploadId, actor, mediaOriginalName, mediaMimeType, mediaSize }) {
+function assembleMediaUploadChunks({ uploadId, actor, originalName, mimeType, size, label = 'Media' }) {
   const normalizedUploadId = sanitizeMediaUploadId(uploadId);
   const manifest = readMediaChunkManifest(normalizedUploadId);
   const actorId = actor?._id?.toString?.() || '';
@@ -953,7 +953,7 @@ function assembleMediaUploadChunks({ uploadId, actor, mediaOriginalName, mediaMi
     throw new HttpError(400, 'Upload session is incomplete. Please upload the video again.');
   }
 
-  const extension = getAssetFileExtension(mediaOriginalName, mediaMimeType) || '.upload';
+  const extension = getAssetFileExtension(originalName, mimeType) || '.upload';
   const assembledPath = path.join(MEDIA_LIBRARY_ASSET_DIR, `${normalizedUploadId}-assembled-${Date.now()}${extension}`);
 
   ensureMediaLibraryAssetDir();
@@ -974,16 +974,16 @@ function assembleMediaUploadChunks({ uploadId, actor, mediaOriginalName, mediaMi
     }
 
     const stat = fs.statSync(assembledPath);
-    const expectedSize = Number(mediaSize) || 0;
+    const expectedSize = Number(size) || 0;
 
     if (expectedSize && stat.size !== expectedSize) {
-      throw new HttpError(400, 'Uploaded video size does not match. Please upload the video again.');
+      throw new HttpError(400, `Uploaded ${label.toLowerCase()} size does not match. Please upload it again.`);
     }
 
     return {
       path: assembledPath,
-      originalname: normalizeText(mediaOriginalName) || 'uploaded-video.mp4',
-      mimetype: normalizeMediaLibraryMimeType(mediaMimeType, mediaOriginalName),
+      originalname: normalizeText(originalName) || `uploaded-${label.toLowerCase()}`,
+      mimetype: normalizeMediaLibraryMimeType(mimeType, originalName),
       size: stat.size,
     };
   } catch (error) {
@@ -1251,32 +1251,54 @@ async function completeChunkedMediaAsset({
   mediaSize,
   mediaMetadata,
   thumbnail,
+  thumbnailUploadId,
+  thumbnailOriginalName,
+  thumbnailMimeType,
+  thumbnailSize,
+  thumbnailMetadata,
   actor,
   req,
 }) {
   const normalizedUploadId = sanitizeMediaUploadId(uploadId);
+  const normalizedThumbnailUploadId = normalizeText(thumbnailUploadId) ? sanitizeMediaUploadId(thumbnailUploadId) : '';
   let uploadedMedia = null;
+  let uploadedThumbnail = null;
 
   try {
     uploadedMedia = assembleMediaUploadChunks({
       uploadId: normalizedUploadId,
       actor,
-      mediaOriginalName,
-      mediaMimeType,
-      mediaSize,
+      originalName: mediaOriginalName,
+      mimeType: mediaMimeType,
+      size: mediaSize,
+      label: 'Media',
     });
+    uploadedThumbnail = normalizedThumbnailUploadId
+      ? assembleMediaUploadChunks({
+          uploadId: normalizedThumbnailUploadId,
+          actor,
+          originalName: thumbnailOriginalName,
+          mimeType: thumbnailMimeType,
+          size: thumbnailSize,
+          label: 'Thumbnail',
+        })
+      : null;
 
     return await createMediaAsset({
       name,
       thumbnail,
       uploadedMedia,
+      uploadedThumbnail,
       mediaMetadata,
+      thumbnailMetadata,
       actor,
       req,
     });
   } finally {
     cleanupMediaChunkSession(normalizedUploadId);
+    cleanupMediaChunkSession(normalizedThumbnailUploadId);
     cleanupUploadedMediaFile(uploadedMedia);
+    cleanupUploadedMediaFile(uploadedThumbnail);
   }
 }
 

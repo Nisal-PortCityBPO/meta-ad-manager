@@ -85,6 +85,11 @@ const completeChunkedMediaAsset = asyncHandler(async (req, res) => {
     mediaSize: req.body.mediaSize,
     mediaMetadata: req.body.mediaMetadata,
     thumbnail: req.body.thumbnail,
+    thumbnailUploadId: req.body.thumbnailUploadId,
+    thumbnailOriginalName: req.body.thumbnailOriginalName,
+    thumbnailMimeType: req.body.thumbnailMimeType,
+    thumbnailSize: req.body.thumbnailSize,
+    thumbnailMetadata: req.body.thumbnailMetadata,
     actor: req.user,
     req,
   });

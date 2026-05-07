@@ -98,6 +98,11 @@ const requestWithUploadProgress = (path, payload, { onUploadProgress } = {}) =>
         return;
       }
 
+      if (xhr.status === 413) {
+        reject(new Error('Upload request is still too large for the server/proxy. The app now uses smaller chunks, so refresh and try again.'));
+        return;
+      }
+
       reject(new Error(data.message || 'Request failed'));
     };
 
