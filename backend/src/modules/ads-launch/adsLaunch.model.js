@@ -103,6 +103,11 @@ const launchTemplateConfigSchema = new mongoose.Schema(
       default: '',
       trim: true,
     },
+    urlParameters: {
+      type: String,
+      default: '',
+      trim: true,
+    },
     scheduleStart: {
       type: String,
       default: '',
@@ -144,9 +149,14 @@ const launchTemplateConfigSchema = new mongoose.Schema(
         default: 'AD_SET',
         trim: true,
       },
+      dynamicCreative: {
+        type: String,
+        default: 'ON',
+        trim: true,
+      },
       audienceAgeMin: {
         type: String,
-        default: '18',
+        default: '21',
         trim: true,
       },
       audienceAgeMax: {

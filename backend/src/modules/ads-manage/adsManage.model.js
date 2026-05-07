@@ -197,6 +197,11 @@ const launchDetailsSchema = new mongoose.Schema(
       default: '',
       trim: true,
     },
+    urlParameters: {
+      type: String,
+      default: '',
+      trim: true,
+    },
     scheduleStart: {
       type: String,
       default: '',

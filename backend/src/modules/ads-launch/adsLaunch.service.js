@@ -74,7 +74,8 @@ const DEFAULT_STATIC_DEFAULTS = Object.freeze({
   specialAdCategories: 'NONE',
   placements: 'ADVANTAGE_PLUS',
   budgetLevel: 'AD_SET',
-  audienceAgeMin: '18',
+  dynamicCreative: 'ON',
+  audienceAgeMin: '21',
   audienceAgeMax: '65',
   genderTargeting: 'ALL',
   billingEvent: 'IMPRESSIONS',
@@ -88,6 +89,108 @@ function isSuperAdmin(user) {
 
 function normalizeText(value) {
   return typeof value === 'string' ? value.trim() : '';
+}
+
+function normalizeUrlParameters(value) {
+  return normalizeText(value)
+    .replace(/^[?&]+/, '')
+    .split('&')
+    .map((segment) => segment.trim())
+    .filter(Boolean)
+    .map((segment) => {
+      const separatorIndex = segment.indexOf('=');
+
+      if (separatorIndex === -1) {
+        return segment;
+      }
+
+      const key = segment.slice(0, separatorIndex).trim();
+      const parameterValue = segment.slice(separatorIndex + 1).trim();
+      return `${key}=${parameterValue}`;
+    })
+    .join('&');
+}
+
+function getUrlParameterValidationError(value) {
+  const normalizedValue = normalizeUrlParameters(value);
+
+  if (!normalizedValue) {
+    return '';
+  }
+
+  const seenKeys = new Set();
+
+  for (const segment of normalizedValue.split('&')) {
+    const separatorIndex = segment.indexOf('=');
+
+    if (separatorIndex === -1) {
+      return `URL parameter "${segment}" must use key=value format`;
+    }
+
+    const key = segment.slice(0, separatorIndex).trim();
+    const parameterValue = segment.slice(separatorIndex + 1).trim();
+
+    if (!key || !parameterValue) {
+      return 'URL parameters must use key=value format and cannot have blank values';
+    }
+
+    if (!/^[A-Za-z0-9_.~-]+$/.test(key)) {
+      return `URL parameter key "${key}" can only use letters, numbers, dot, underscore, dash, or tilde`;
+    }
+
+    if (/\s/.test(key) || /\s/.test(parameterValue)) {
+      return 'URL parameter keys and values cannot contain spaces. Use underscores or Meta dynamic values instead.';
+    }
+
+    if (seenKeys.has(key)) {
+      return `URL parameter "${key}" is duplicated`;
+    }
+
+    seenKeys.add(key);
+  }
+
+  return '';
+}
+
+function parseHttpUrl(value) {
+  const normalizedValue = normalizeText(value);
+
+  if (!normalizedValue) {
+    return null;
+  }
+
+  const candidate = /^[a-z][a-z\d+\-.]*:\/\//i.test(normalizedValue) ? normalizedValue : `https://${normalizedValue}`;
+
+  try {
+    const url = new URL(candidate);
+
+    if (!['http:', 'https:'].includes(url.protocol) || !url.hostname || !url.hostname.includes('.')) {
+      return null;
+    }
+
+    url.username = '';
+    url.password = '';
+    url.hash = '';
+    return url;
+  } catch {
+    return null;
+  }
+}
+
+function normalizeDestinationUrl(value) {
+  const url = parseHttpUrl(value);
+  return url ? url.toString() : '';
+}
+
+function normalizeDisplayUrl(value) {
+  const url = parseHttpUrl(value);
+
+  if (!url) {
+    return '';
+  }
+
+  const path = url.pathname && url.pathname !== '/' ? url.pathname.replace(/\/+$/, '') : '';
+  return `${url.hostname}${path}`;
 }
 
 function dedupeStrings(values) {
@@ -124,6 +227,7 @@ function sanitizeTemplateConfig(input = {}) {
     description: normalizeText(input.description),
     websiteUrl: normalizeText(input.websiteUrl),
     displayUrl: normalizeText(input.displayUrl),
+    urlParameters: normalizeUrlParameters(input.urlParameters),
     scheduleStart: normalizeText(input.scheduleStart),
     scheduleEnd: normalizeText(input.scheduleEnd),
     callToAction: normalizeText(input.callToAction),
@@ -134,6 +238,7 @@ function sanitizeTemplateConfig(input = {}) {
         normalizeText(staticDefaults.specialAdCategories) || DEFAULT_STATIC_DEFAULTS.specialAdCategories,
       placements: normalizeText(staticDefaults.placements) || DEFAULT_STATIC_DEFAULTS.placements,
       budgetLevel: normalizeText(staticDefaults.budgetLevel) || DEFAULT_STATIC_DEFAULTS.budgetLevel,
+      dynamicCreative: normalizeText(staticDefaults.dynamicCreative) || DEFAULT_STATIC_DEFAULTS.dynamicCreative,
       audienceAgeMin: normalizeText(staticDefaults.audienceAgeMin) || DEFAULT_STATIC_DEFAULTS.audienceAgeMin,
       audienceAgeMax: normalizeText(staticDefaults.audienceAgeMax) || DEFAULT_STATIC_DEFAULTS.audienceAgeMax,
       genderTargeting: normalizeText(staticDefaults.genderTargeting) || DEFAULT_STATIC_DEFAULTS.genderTargeting,
@@ -260,6 +365,16 @@ function resolveBudgetLevel(value) {
   }
 
   return budgetLevel;
+}
+
+function resolveDynamicCreative(value) {
+  const dynamicCreative = normalizeText(value) || DEFAULT_STATIC_DEFAULTS.dynamicCreative;
+
+  if (!['ON', 'OFF'].includes(dynamicCreative)) {
+    throw new HttpError(400, 'Dynamic creative must be On or Off');
+  }
+
+  return dynamicCreative === 'ON';
 }
 
 function usesCampaignBudget(staticDefaults = {}) {
@@ -702,6 +817,7 @@ function normalizeOptionalScheduleTime(value, label) {
 
 function ensurePublishPayload(payload) {
   const staticDefaults = payload.staticDefaults || {};
+  const rawDisplayUrl = normalizeText(payload.displayUrl);
   const countries = sanitizeCountries({
     countries: payload.countries,
     country: payload.country,
@@ -723,8 +839,9 @@ function ensurePublishPayload(payload) {
     headline: normalizeText(payload.headline),
     primaryText: normalizeText(payload.primaryText),
     description: normalizeText(payload.description),
-    websiteUrl: normalizeText(payload.websiteUrl),
-    displayUrl: normalizeText(payload.displayUrl),
+    websiteUrl: normalizeDestinationUrl(payload.websiteUrl),
+    displayUrl: normalizeDisplayUrl(payload.displayUrl),
+    urlParameters: normalizeUrlParameters(payload.urlParameters),
     scheduleStart: normalizeOptionalScheduleTime(payload.scheduleStart, 'Schedule start'),
     scheduleEnd: normalizeOptionalScheduleTime(payload.scheduleEnd, 'Schedule end'),
     callToAction: normalizeText(payload.callToAction),
@@ -747,6 +864,7 @@ function ensurePublishPayload(payload) {
         normalizeText(staticDefaults.specialAdCategories) || DEFAULT_STATIC_DEFAULTS.specialAdCategories,
       placements: normalizeText(staticDefaults.placements) || DEFAULT_STATIC_DEFAULTS.placements,
       budgetLevel: normalizeText(staticDefaults.budgetLevel) || DEFAULT_STATIC_DEFAULTS.budgetLevel,
+      dynamicCreative: normalizeText(staticDefaults.dynamicCreative) || DEFAULT_STATIC_DEFAULTS.dynamicCreative,
       audienceAgeMin: normalizeText(staticDefaults.audienceAgeMin) || DEFAULT_STATIC_DEFAULTS.audienceAgeMin,
       audienceAgeMax: normalizeText(staticDefaults.audienceAgeMax) || DEFAULT_STATIC_DEFAULTS.audienceAgeMax,
       genderTargeting: normalizeText(staticDefaults.genderTargeting) || DEFAULT_STATIC_DEFAULTS.genderTargeting,
@@ -794,11 +912,25 @@ function ensurePublishPayload(payload) {
   }
 
   if (!cleaned.websiteUrl) {
-    throw new HttpError(400, 'Destination URL is required');
+    throw new HttpError(400, 'Destination URL must be a valid http or https URL');
   }
 
-  if (cleaned.scheduleStart && new Date(cleaned.scheduleStart) <= new Date()) {
-    throw new HttpError(400, 'Schedule start must be in the future');
+  if (rawDisplayUrl && !cleaned.displayUrl) {
+    throw new HttpError(400, 'Display URL must be a valid domain or http/https URL, for example example.com or https://example.com');
+  }
+
+  const urlParameterError = getUrlParameterValidationError(cleaned.urlParameters);
+  if (urlParameterError) {
+    throw new HttpError(400, urlParameterError);
+  }
+
+  if ((cleaned.scheduleStart && !cleaned.scheduleEnd) || (!cleaned.scheduleStart && cleaned.scheduleEnd)) {
+    throw new HttpError(400, 'Schedule start and schedule end must both be set, or both left empty');
+  }
+
+  const minimumScheduleStart = new Date(Date.now() + 5 * 60 * 1000);
+  if (cleaned.scheduleStart && new Date(cleaned.scheduleStart) < minimumScheduleStart) {
+    throw new HttpError(400, 'Schedule start must be at least 5 minutes in the future');
   }
 
   if (cleaned.scheduleStart && cleaned.scheduleEnd && new Date(cleaned.scheduleEnd) <= new Date(cleaned.scheduleStart)) {
@@ -935,7 +1067,7 @@ async function createAdSet({
   };
 
   if (!isSpecialAdCategory) {
-    targeting.age_min = Number.isFinite(ageMin) ? ageMin : 18;
+    targeting.age_min = Number.isFinite(ageMin) ? ageMin : 21;
     targeting.age_max = Number.isFinite(ageMax) ? ageMax : 65;
 
     if ((staticDefaults.genderTargeting || DEFAULT_STATIC_DEFAULTS.genderTargeting) === 'MALE') {
@@ -957,6 +1089,7 @@ async function createAdSet({
     optimization_goal: settings.optimizationGoal,
     status: staticDefaults.campaignStatus || DEFAULT_STATIC_DEFAULTS.campaignStatus,
     targeting,
+    is_dynamic_creative: resolveDynamicCreative(staticDefaults.dynamicCreative),
   };
 
   if (!campaignBudget) {
@@ -988,6 +1121,121 @@ async function createAdSet({
   });
 }
 
+function buildDynamicAssetFeedSpec({
+  websiteUrl,
+  displayUrl,
+  primaryText,
+  headline,
+  description,
+  callToAction,
+  uploadedImage = null,
+  uploadedVideo = null,
+  uploadedThumbnail = null,
+}) {
+  const linkUrl = {
+    website_url: websiteUrl,
+  };
+
+  if (displayUrl) {
+    linkUrl.display_url = displayUrl;
+  }
+
+  const assetFeedSpec = {
+    ad_formats: [uploadedVideo ? 'SINGLE_VIDEO' : 'SINGLE_IMAGE'],
+    bodies: [{ text: primaryText }],
+    titles: [{ text: headline }],
+    link_urls: [linkUrl],
+    call_to_action_types: [callToAction],
+    optimization_type: 'REGULAR',
+  };
+
+  if (description) {
+    assetFeedSpec.descriptions = [{ text: description }];
+  }
+
+  if (uploadedVideo) {
+    assetFeedSpec.videos = [
+      {
+        video_id: uploadedVideo.id,
+        thumbnail_hash: uploadedThumbnail?.hash,
+      },
+    ];
+  } else {
+    assetFeedSpec.images = [
+      {
+        hash: uploadedImage.hash,
+      },
+    ];
+  }
+
+  return assetFeedSpec;
+}
+
+function hasDisplayUrlInCreativeParams(params = {}) {
+  return Boolean(
+    params.asset_feed_spec?.link_urls?.some((linkUrl) => linkUrl?.display_url) ||
+      params.object_story_spec?.link_data?.caption
+  );
+}
+
+function stripDisplayUrlFromCreativeParams(params = {}) {
+  const nextParams = {
+    ...params,
+  };
+
+  if (nextParams.asset_feed_spec?.link_urls) {
+    nextParams.asset_feed_spec = {
+      ...nextParams.asset_feed_spec,
+      link_urls: nextParams.asset_feed_spec.link_urls.map((linkUrl) => {
+        const nextLinkUrl = {
+          ...linkUrl,
+        };
+        delete nextLinkUrl.display_url;
+        return nextLinkUrl;
+      }),
+    };
+  }
+
+  if (nextParams.object_story_spec?.link_data?.caption) {
+    const nextLinkData = {
+      ...nextParams.object_story_spec.link_data,
+    };
+    delete nextLinkData.caption;
+
+    nextParams.object_story_spec = {
+      ...nextParams.object_story_spec,
+      link_data: nextLinkData,
+    };
+  }
+
+  return nextParams;
+}
+
+function isDisplayUrlMetaError(error) {
+  const message = String(error?.message || '').toLowerCase();
+  return message.includes('display url') || message.includes('display_url') || message.includes('caption');
+}
+
+async function postCreativeToMeta({ token, adAccountId, params }) {
+  try {
+    return await postToMeta({
+      token,
+      path: `${adAccountId}/adcreatives`,
+      params,
+    });
+  } catch (error) {
+    if (!hasDisplayUrlInCreativeParams(params) || !isDisplayUrlMetaError(error)) {
+      throw error;
+    }
+
+    return postToMeta({
+      token,
+      path: `${adAccountId}/adcreatives`,
+      params: stripDisplayUrlFromCreativeParams(params),
+    });
+  }
+}
+
 async function createAdCreative({
   token,
   adAccountId,
@@ -995,15 +1243,19 @@ async function createAdCreative({
   pageId,
   websiteUrl,
   displayUrl,
+  urlParameters,
   primaryText,
   headline,
   description,
   callToAction,
   media,
   thumbnail,
+  staticDefaults,
   progress,
   progressContext,
 }) {
+  const dynamicCreative = resolveDynamicCreative(staticDefaults.dynamicCreative);
+
   if (String(media.type || '').startsWith('video/')) {
     const uploadedVideo = await runPublishStep(
       'Video upload',
@@ -1036,28 +1288,47 @@ async function createAdCreative({
     return runPublishStep(
       'Creative creation',
       () =>
-        postToMeta({
+        postCreativeToMeta({
           token,
-          path: `${adAccountId}/adcreatives`,
-          params: {
-            name,
-            object_story_spec: {
-              page_id: pageId,
-              video_data: {
-                video_id: uploadedVideo.id,
-                title: headline,
-                message: primaryText,
-                link_description: description || undefined,
-                image_hash: uploadedThumbnail?.hash,
-                call_to_action: {
-                  type: callToAction,
-                  value: {
-                    link: websiteUrl,
+          adAccountId,
+          params: dynamicCreative
+            ? {
+                name,
+                url_tags: urlParameters || undefined,
+                object_story_spec: {
+                  page_id: pageId,
+                },
+                asset_feed_spec: buildDynamicAssetFeedSpec({
+                  websiteUrl,
+                  displayUrl,
+                  primaryText,
+                  headline,
+                  description,
+                  callToAction,
+                  uploadedVideo,
+                  uploadedThumbnail,
+                }),
+              }
+            : {
+                name,
+                url_tags: urlParameters || undefined,
+                object_story_spec: {
+                  page_id: pageId,
+                  video_data: {
+                    video_id: uploadedVideo.id,
+                    title: headline,
+                    message: primaryText,
+                    link_description: description || undefined,
+                    image_hash: uploadedThumbnail?.hash,
+                    call_to_action: {
+                      type: callToAction,
+                      value: {
+                        link: websiteUrl,
+                      },
+                    },
                   },
                 },
               },
-            },
-          },
         }),
       progress,
       progressContext,
@@ -1079,32 +1350,50 @@ async function createAdCreative({
   );
 
   return runPublishStep(
-    'Creative creation',
-    () =>
-      postToMeta({
-        token,
-        path: `${adAccountId}/adcreatives`,
-        params: {
-          name,
-          object_story_spec: {
-            page_id: pageId,
-            link_data: {
-              link: websiteUrl,
-              caption: displayUrl || undefined,
-              message: primaryText,
-              name: headline,
-              description: description || undefined,
-              image_hash: uploadedImage.hash,
-              call_to_action: {
-                type: callToAction,
-                value: {
-                  link: websiteUrl,
+      'Creative creation',
+      () =>
+        postCreativeToMeta({
+          token,
+          adAccountId,
+          params: dynamicCreative
+            ? {
+                name,
+                url_tags: urlParameters || undefined,
+                object_story_spec: {
+                  page_id: pageId,
+                },
+                asset_feed_spec: buildDynamicAssetFeedSpec({
+                  websiteUrl,
+                  displayUrl,
+                  primaryText,
+                  headline,
+                  description,
+                  callToAction,
+                  uploadedImage,
+                }),
+              }
+            : {
+                name,
+                url_tags: urlParameters || undefined,
+                object_story_spec: {
+                  page_id: pageId,
+                  link_data: {
+                    link: websiteUrl,
+                    caption: displayUrl || undefined,
+                    message: primaryText,
+                    name: headline,
+                    description: description || undefined,
+                    image_hash: uploadedImage.hash,
+                    call_to_action: {
+                      type: callToAction,
+                      value: {
+                        link: websiteUrl,
+                      },
+                    },
+                  },
                 },
               },
-            },
-          },
-        },
-      }),
+        }),
     progress,
     progressContext,
     'creative'
@@ -1339,12 +1628,14 @@ async function publishLaunch({ payload, actor, req, onProgress = null }) {
         pageId: launch.pageId,
         websiteUrl: launch.websiteUrl,
         displayUrl: launch.displayUrl,
+        urlParameters: launch.urlParameters,
         primaryText: launch.primaryText,
         headline: launch.headline,
         description: launch.description,
         callToAction: launch.callToAction,
         media: creativeAssets.media,
         thumbnail: creativeAssets.thumbnail,
+        staticDefaults: launch.staticDefaults,
         progress,
         progressContext,
       });

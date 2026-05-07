@@ -57,6 +57,43 @@ const callToActionOptions = [
   { value: 'APPLY_NOW', label: 'Apply Now' },
 ];
 
+const urlParameterMacroOptions = [
+  { value: '{{site_source_name}}', label: 'Source platform' },
+  { value: '{{placement}}', label: 'Placement' },
+  { value: '{{campaign.name}}', label: 'Campaign name' },
+  { value: '{{campaign.id}}', label: 'Campaign ID' },
+  { value: '{{adset.name}}', label: 'Ad set name' },
+  { value: '{{adset.id}}', label: 'Ad set ID' },
+  { value: '{{ad.name}}', label: 'Ad name' },
+  { value: '{{ad.id}}', label: 'Ad ID' },
+];
+
+const urlParameterBuilderRows = [
+  { key: 'utm_source', label: 'Source', placeholder: '{{site_source_name}}' },
+  { key: 'utm_medium', label: 'Medium', placeholder: 'paid_social' },
+  { key: 'utm_campaign', label: 'Campaign', placeholder: '{{campaign.name}}' },
+  { key: 'utm_content', label: 'Content', placeholder: '{{ad.name}}' },
+  { key: 'utm_term', label: 'Term', placeholder: '{{adset.name}}' },
+  { key: 'placement', label: 'Placement', placeholder: '{{placement}}' },
+];
+
+const urlParameterPresets = [
+  {
+    label: 'GA4 recommended',
+    value:
+      'utm_source={{site_source_name}}&utm_medium=paid_social&utm_campaign={{campaign.name}}&utm_content={{ad.name}}&utm_term={{adset.name}}',
+  },
+  {
+    label: 'Full Meta detail',
+    value:
+      'utm_source={{site_source_name}}&utm_medium=paid_social&utm_campaign={{campaign.name}}&utm_content={{ad.name}}&utm_term={{adset.name}}&campaign_id={{campaign.id}}&adset_id={{adset.id}}&ad_id={{ad.id}}&placement={{placement}}',
+  },
+  {
+    label: 'Simple Meta',
+    value: 'utm_source=meta&utm_medium=paid_social&utm_campaign={{campaign.name}}&utm_content={{ad.name}}',
+  },
+];
+
 const staticDefaultOptions = {
   buyingType: [
     { value: 'AUCTION', label: 'Auction' },
@@ -80,6 +117,10 @@ const staticDefaultOptions = {
     { value: 'AD_SET', label: 'Ad set budget' },
     { value: 'CAMPAIGN', label: 'Campaign budget' },
   ],
+  dynamicCreative: [
+    { value: 'ON', label: 'On' },
+    { value: 'OFF', label: 'Off' },
+  ],
   genderTargeting: [
     { value: 'ALL', label: 'All genders' },
     { value: 'MALE', label: 'Male' },
@@ -101,7 +142,8 @@ const defaultStaticDefaults = {
   specialAdCategories: 'NONE',
   placements: 'ADVANTAGE_PLUS',
   budgetLevel: 'AD_SET',
-  audienceAgeMin: '18',
+  dynamicCreative: 'ON',
+  audienceAgeMin: '21',
   audienceAgeMax: '65',
   genderTargeting: 'ALL',
   billingEvent: 'IMPRESSIONS',
@@ -124,6 +166,7 @@ const emptyForm = {
   description: '',
   websiteUrl: '',
   displayUrl: '',
+  urlParameters: '',
   scheduleStart: '',
   scheduleEnd: '',
   callToAction: 'LEARN_MORE',
@@ -174,6 +217,174 @@ const formatDateTime = (value) => {
     dateStyle: 'medium',
     timeStyle: 'short',
   }).format(new Date(value));
+};
+
+const SCHEDULE_MIN_LEAD_MINUTES = 5;
+
+const getLocalDateTimeInputValue = (date) => {
+  const localDate = new Date(date.getTime() - date.getTimezoneOffset() * 60000);
+  return localDate.toISOString().slice(0, 16);
+};
+
+const getMinimumScheduleStartValue = () => getLocalDateTimeInputValue(new Date(Date.now() + SCHEDULE_MIN_LEAD_MINUTES * 60 * 1000));
+
+const parseHttpUrl = (value) => {
+  const normalizedValue = String(value || '').trim();
+
+  if (!normalizedValue) {
+    return null;
+  }
+
+  const candidate = /^[a-z][a-z\d+\-.]*:\/\//i.test(normalizedValue) ? normalizedValue : `https://${normalizedValue}`;
+
+  try {
+    const url = new URL(candidate);
+    return ['http:', 'https:'].includes(url.protocol) && url.hostname.includes('.') ? url : null;
+  } catch {
+    return null;
+  }
+};
+
+const normalizeUrlParameterString = (value) =>
+  String(value || '')
+    .trim()
+    .replace(/^[?&]+/, '')
+    .split('&')
+    .map((segment) => segment.trim())
+    .filter(Boolean)
+    .map((segment) => {
+      const separatorIndex = segment.indexOf('=');
+
+      if (separatorIndex === -1) {
+        return segment;
+      }
+
+      const key = segment.slice(0, separatorIndex).trim();
+      const parameterValue = segment.slice(separatorIndex + 1).trim();
+      return `${key}=${parameterValue}`;
+    })
+    .join('&');
+
+const parseUrlParameterEntries = (value) => {
+  const normalizedValue = normalizeUrlParameterString(value);
+
+  if (!normalizedValue) {
+    return [];
+  }
+
+  return normalizedValue.split('&').map((segment) => {
+    const separatorIndex = segment.indexOf('=');
+
+    if (separatorIndex === -1) {
+      return {
+        key: segment.trim(),
+        value: '',
+      };
+    }
+
+    return {
+      key: segment.slice(0, separatorIndex).trim(),
+      value: segment.slice(separatorIndex + 1).trim(),
+    };
+  });
+};
+
+const getUrlParameterEntryValue = (entries, key) => entries.find((entry) => entry.key === key)?.value || '';
+
+const orderUrlParameterEntries = (entries) => {
+  const order = new Map(urlParameterBuilderRows.map((row, index) => [row.key, index]));
+
+  return [...entries].sort((first, second) => {
+    const firstOrder = order.has(first.key) ? order.get(first.key) : Number.MAX_SAFE_INTEGER;
+    const secondOrder = order.has(second.key) ? order.get(second.key) : Number.MAX_SAFE_INTEGER;
+
+    if (firstOrder !== secondOrder) {
+      return firstOrder - secondOrder;
+    }
+
+    return first.key.localeCompare(second.key);
+  });
+};
+
+const stringifyUrlParameterEntries = (entries) =>
+  orderUrlParameterEntries(entries)
+    .filter((entry) => entry.key.trim() && entry.value.trim())
+    .map((entry) => `${entry.key.trim()}=${entry.value.trim()}`)
+    .join('&');
+
+const getUrlParameterValidationError = (value) => {
+  const entries = parseUrlParameterEntries(value);
+
+  if (!entries.length) {
+    return '';
+  }
+
+  const seenKeys = new Set();
+
+  for (const entry of entries) {
+    if (!entry.key || !entry.value) {
+      return 'URL parameters must use key=value format and cannot have blank values';
+    }
+
+    if (!/^[A-Za-z0-9_.~-]+$/.test(entry.key)) {
+      return `URL parameter key "${entry.key}" can only use letters, numbers, dot, underscore, dash, or tilde`;
+    }
+
+    if (/\s/.test(entry.key) || /\s/.test(entry.value)) {
+      return 'URL parameter keys and values cannot contain spaces. Use underscores or Meta dynamic values instead.';
+    }
+
+    if (seenKeys.has(entry.key)) {
+      return `URL parameter "${entry.key}" is duplicated`;
+    }
+
+    seenKeys.add(entry.key);
+  }
+
+  return '';
+};
+
+const getLaunchValidationError = (form) => {
+  if (form.displayUrl.trim() && !parseHttpUrl(form.displayUrl)) {
+    return 'Display URL must be a valid domain or URL, for example example.com or https://example.com';
+  }
+
+  const urlParameterError = getUrlParameterValidationError(form.urlParameters);
+  if (urlParameterError) {
+    return urlParameterError;
+  }
+
+  if ((form.scheduleStart && !form.scheduleEnd) || (!form.scheduleStart && form.scheduleEnd)) {
+    return 'Schedule start and schedule end must both be set, or both left empty';
+  }
+
+  if (form.scheduleStart) {
+    const scheduleStart = new Date(form.scheduleStart);
+    const minimumStart = new Date(Date.now() + SCHEDULE_MIN_LEAD_MINUTES * 60 * 1000);
+
+    if (Number.isNaN(scheduleStart.getTime())) {
+      return 'Schedule start must be a valid date and time';
+    }
+
+    if (scheduleStart < minimumStart) {
+      return `Schedule start must be at least ${SCHEDULE_MIN_LEAD_MINUTES} minutes in the future`;
+    }
+  }
+
+  if (form.scheduleEnd) {
+    const scheduleStart = new Date(form.scheduleStart);
+    const scheduleEnd = new Date(form.scheduleEnd);
+
+    if (Number.isNaN(scheduleEnd.getTime())) {
+      return 'Schedule end must be a valid date and time';
+    }
+
+    if (scheduleEnd <= scheduleStart) {
+      return 'Schedule end must be after schedule start';
+    }
+  }
+
+  return '';
 };
 
 const readFileAsDataUrl = (file) =>
@@ -270,6 +481,10 @@ const AdsLaunchPage = () => {
   const [latestPublish, setLatestPublish] = useState(null);
   const [templatePage, setTemplatePage] = useState(1);
   const [templatePreview, setTemplatePreview] = useState(null);
+  const [urlParameterDraft, setUrlParameterDraft] = useState({
+    key: '',
+    value: '',
+  });
   const [mediaFile, setMediaFile] = useState(null);
   const [thumbnailFile, setThumbnailFile] = useState(null);
   const [savedMediaAsset, setSavedMediaAsset] = useState(null);
@@ -374,6 +589,7 @@ const AdsLaunchPage = () => {
       ),
     [form.countries]
   );
+  const urlParameterEntries = useMemo(() => parseUrlParameterEntries(form.urlParameters), [form.urlParameters]);
   const availableCountryOptions = useMemo(
     () => countryOptions.filter((country) => !(form.countries || []).includes(country.value)),
     [form.countries]
@@ -410,6 +626,7 @@ const AdsLaunchPage = () => {
   );
   const canPublish = Boolean(canGenerate && activeMediaAsset && (!isVideoAsset || activeThumbnailAsset));
   const publishBusy = publishing || publishInProgress;
+  const minimumScheduleStartValue = getMinimumScheduleStartValue();
 
   useEffect(() => {
     if (!mediaFile) {
@@ -577,6 +794,42 @@ const AdsLaunchPage = () => {
       ...current,
       [field]: value,
     }));
+  };
+
+  const updateUrlParameter = (key, value) => {
+    const normalizedKey = key.trim();
+    const normalizedValue = value.trim();
+    const nextEntries = parseUrlParameterEntries(form.urlParameters).filter((entry) => entry.key !== normalizedKey);
+
+    if (normalizedKey && normalizedValue) {
+      nextEntries.push({
+        key: normalizedKey,
+        value: normalizedValue,
+      });
+    }
+
+    updateField('urlParameters', stringifyUrlParameterEntries(nextEntries));
+  };
+
+  const applyUrlParameterPreset = (value) => {
+    updateField('urlParameters', normalizeUrlParameterString(value));
+  };
+
+  const addCustomUrlParameter = () => {
+    const key = urlParameterDraft.key.trim();
+    const value = urlParameterDraft.value.trim();
+    const validationError = getUrlParameterValidationError(`${key}=${value}`);
+
+    if (validationError) {
+      toast.error(validationError);
+      return;
+    }
+
+    updateUrlParameter(key, value);
+    setUrlParameterDraft({
+      key: '',
+      value: '',
+    });
   };
 
   const addCountry = (countryCode) => {
@@ -820,6 +1073,7 @@ const AdsLaunchPage = () => {
       description: form.description.trim(),
       websiteUrl: form.websiteUrl.trim(),
       displayUrl: form.displayUrl.trim(),
+      urlParameters: form.urlParameters.trim(),
       scheduleStart: form.scheduleStart,
       scheduleEnd: form.scheduleEnd,
       callToAction: form.callToAction,
@@ -973,6 +1227,12 @@ const AdsLaunchPage = () => {
   const handlePublish = async () => {
     if (publishBusy) {
       toast.error('A publish is already processing. Open Notifications to watch the live process.');
+      return;
+    }
+
+    const validationError = getLaunchValidationError(form);
+    if (validationError) {
+      toast.error(validationError);
       return;
     }
 
@@ -1141,7 +1401,7 @@ const AdsLaunchPage = () => {
               </div>
             </div>
 
-            <div className="grid gap-4 xl:grid-cols-5">
+            <div className="grid gap-4 xl:grid-cols-6">
               <div className="space-y-2">
                 <FieldLabel htmlFor="brand-id">Brand</FieldLabel>
                 <select
@@ -1197,6 +1457,22 @@ const AdsLaunchPage = () => {
                   {objectiveOptions.map((objective) => (
                     <option key={objective.value} value={objective.value}>
                       {objective.label}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div className="space-y-2">
+                <FieldLabel htmlFor="dynamic-creative">Dynamic creative</FieldLabel>
+                <select
+                  id="dynamic-creative"
+                  value={form.staticDefaults.dynamicCreative}
+                  onChange={(event) => updateStaticDefault('dynamicCreative', event.target.value)}
+                  className="h-12 w-full rounded-xl border border-sky-100 bg-white px-4 outline-none transition focus:border-sky-400 focus:ring-4 focus:ring-sky-100"
+                >
+                  {staticDefaultOptions.dynamicCreative.map((option) => (
+                    <option key={option.value} value={option.value}>
+                      {option.label}
                     </option>
                   ))}
                 </select>
@@ -1431,9 +1707,129 @@ const AdsLaunchPage = () => {
                   value={form.displayUrl}
                   onChange={(event) => updateField('displayUrl', event.target.value)}
                   className="h-12 w-full rounded-xl border border-sky-100 bg-white px-4 outline-none transition focus:border-sky-400 focus:ring-4 focus:ring-sky-100"
-                  placeholder="example.com"
+                  placeholder="https://example.com"
                 />
-                <p className="text-xs font-semibold text-slate-400">Optional URL text shown on the creative. Leave blank to let Meta decide.</p>
+                <p className="text-xs font-semibold text-slate-400">
+                  Optional. Use a real domain or URL. Invalid Display URLs are blocked before Meta publish.
+                </p>
+              </div>
+
+              <div className="space-y-4 rounded-2xl border border-sky-100 bg-white p-4 xl:col-span-2">
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  <div>
+                    <FieldLabel htmlFor="url-parameters">URL parameter builder</FieldLabel>
+                    <p className="mt-1 text-xs font-semibold text-slate-400">
+                      Build clean tracking tags for Meta `url_tags`. Use presets, dynamic values, or edit the raw string.
+                    </p>
+                  </div>
+                  {form.urlParameters ? (
+                    <button
+                      type="button"
+                      onClick={() => updateField('urlParameters', '')}
+                      className="h-9 rounded-lg border border-red-100 bg-white px-3 text-xs font-black uppercase tracking-[0.14em] text-red-600 transition hover:bg-red-50"
+                    >
+                      Clear
+                    </button>
+                  ) : null}
+                </div>
+
+                <div className="flex flex-wrap gap-2">
+                  {urlParameterPresets.map((preset) => (
+                    <button
+                      key={preset.label}
+                      type="button"
+                      onClick={() => applyUrlParameterPreset(preset.value)}
+                      className="rounded-full border border-sky-100 bg-sky-50 px-3 py-2 text-xs font-black text-sky-700 transition hover:border-sky-300 hover:bg-sky-100"
+                    >
+                      {preset.label}
+                    </button>
+                  ))}
+                </div>
+
+                <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+                  {urlParameterBuilderRows.map((row) => (
+                    <div key={row.key} className="rounded-xl border border-sky-100 bg-sky-50/50 p-3">
+                      <div className="flex items-center justify-between gap-2">
+                        <label htmlFor={`url-param-${row.key}`} className="text-xs font-black uppercase tracking-[0.14em] text-sky-700">
+                          {row.label}
+                        </label>
+                        <span className="text-[11px] font-bold text-slate-400">{row.key}</span>
+                      </div>
+                      <input
+                        id={`url-param-${row.key}`}
+                        value={getUrlParameterEntryValue(urlParameterEntries, row.key)}
+                        onChange={(event) => updateUrlParameter(row.key, event.target.value)}
+                        className="mt-2 h-10 w-full rounded-lg border border-sky-100 bg-white px-3 text-sm font-semibold outline-none transition focus:border-sky-400 focus:ring-4 focus:ring-sky-100"
+                        placeholder={row.placeholder}
+                      />
+                      <select
+                        value=""
+                        onChange={(event) => {
+                          if (event.target.value) {
+                            updateUrlParameter(row.key, event.target.value);
+                          }
+                        }}
+                        className="mt-2 h-9 w-full rounded-lg border border-sky-100 bg-white px-2 text-xs font-bold text-slate-600 outline-none transition focus:border-sky-400 focus:ring-4 focus:ring-sky-100"
+                      >
+                        <option value="">Insert dynamic value</option>
+                        {urlParameterMacroOptions.map((macro) => (
+                          <option key={macro.value} value={macro.value}>
+                            {macro.label}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  ))}
+                </div>
+
+                <div className="grid gap-3 rounded-xl border border-dashed border-sky-200 bg-white p-3 md:grid-cols-[minmax(130px,0.55fr)_minmax(180px,1fr)_auto]">
+                  <input
+                    value={urlParameterDraft.key}
+                    onChange={(event) =>
+                      setUrlParameterDraft((current) => ({
+                        ...current,
+                        key: event.target.value,
+                      }))
+                    }
+                    className="h-10 rounded-lg border border-sky-100 bg-white px-3 text-sm font-semibold outline-none transition focus:border-sky-400 focus:ring-4 focus:ring-sky-100"
+                    placeholder="custom_key"
+                  />
+                  <input
+                    value={urlParameterDraft.value}
+                    onChange={(event) =>
+                      setUrlParameterDraft((current) => ({
+                        ...current,
+                        value: event.target.value,
+                      }))
+                    }
+                    className="h-10 rounded-lg border border-sky-100 bg-white px-3 text-sm font-semibold outline-none transition focus:border-sky-400 focus:ring-4 focus:ring-sky-100"
+                    placeholder="custom_value or {{ad.id}}"
+                  />
+                  <button
+                    type="button"
+                    onClick={addCustomUrlParameter}
+                    className="h-10 rounded-lg bg-slate-950 px-4 text-sm font-black text-white transition hover:bg-slate-800"
+                  >
+                    Add
+                  </button>
+                </div>
+
+                <div className="space-y-2">
+                  <textarea
+                    id="url-parameters"
+                    value={form.urlParameters}
+                    onChange={(event) => updateField('urlParameters', normalizeUrlParameterString(event.target.value))}
+                    className="min-h-20 w-full rounded-xl border border-sky-100 bg-white px-4 py-3 font-mono text-sm outline-none transition focus:border-sky-400 focus:ring-4 focus:ring-sky-100"
+                    placeholder="utm_source={{site_source_name}}&utm_campaign={{campaign.name}}"
+                  />
+                  <div className="rounded-xl bg-slate-950 px-4 py-3 text-xs font-semibold text-slate-100">
+                    <span className="text-slate-400">Preview: </span>
+                    {form.urlParameters ? `?${form.urlParameters}` : 'No URL parameters added'}
+                  </div>
+                  <p className="text-xs font-semibold text-slate-400">
+                    Dynamic values supported: {urlParameterMacroOptions.map((macro) => macro.value).join(', ')}
+                  </p>
+                </div>
               </div>
             </div>
 
@@ -1444,10 +1840,13 @@ const AdsLaunchPage = () => {
                   id="schedule-start"
                   type="datetime-local"
                   value={form.scheduleStart}
+                  min={minimumScheduleStartValue}
                   onChange={(event) => updateField('scheduleStart', event.target.value)}
                   className="h-12 w-full rounded-xl border border-sky-100 bg-white px-4 outline-none transition focus:border-sky-400 focus:ring-4 focus:ring-sky-100"
                 />
-                <p className="text-xs font-semibold text-slate-400">Optional. Sent to Meta as ad set start time.</p>
+                <p className="text-xs font-semibold text-slate-400">
+                  Optional. If scheduling, start and end are both required and start must be at least 5 minutes ahead.
+                </p>
               </div>
 
               <div className="space-y-2">
@@ -1456,7 +1855,7 @@ const AdsLaunchPage = () => {
                   id="schedule-end"
                   type="datetime-local"
                   value={form.scheduleEnd}
-                  min={form.scheduleStart || undefined}
+                  min={form.scheduleStart || minimumScheduleStartValue}
                   onChange={(event) => updateField('scheduleEnd', event.target.value)}
                   className="h-12 w-full rounded-xl border border-sky-100 bg-white px-4 outline-none transition focus:border-sky-400 focus:ring-4 focus:ring-sky-100"
                 />
@@ -1787,6 +2186,22 @@ const AdsLaunchPage = () => {
                   </select>
                 </div>
 
+                <div className="space-y-2">
+                  <FieldLabel htmlFor="default-dynamic-creative">Dynamic creative</FieldLabel>
+                  <select
+                    id="default-dynamic-creative"
+                    value={form.staticDefaults.dynamicCreative}
+                    onChange={(event) => updateStaticDefault('dynamicCreative', event.target.value)}
+                    className="h-12 w-full rounded-xl border border-sky-100 bg-white px-4 outline-none transition focus:border-sky-400 focus:ring-4 focus:ring-sky-100"
+                  >
+                    {staticDefaultOptions.dynamicCreative.map((option) => (
+                      <option key={option.value} value={option.value}>
+                        {option.label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
                 <div className="space-y-2 md:col-span-2">
                   <FieldLabel htmlFor="default-age-min">Audience age</FieldLabel>
                   <div className="grid gap-3 sm:grid-cols-2">
@@ -1891,6 +2306,12 @@ const AdsLaunchPage = () => {
                   <span className="text-sm font-semibold text-slate-500">Budget level</span>
                   <span className="text-right text-sm font-black text-slate-950">
                     {getOptionLabel(staticDefaultOptions.budgetLevel, form.staticDefaults.budgetLevel)}
+                  </span>
+                </div>
+                <div className="flex items-start justify-between gap-3 rounded-xl bg-sky-50/70 px-4 py-3">
+                  <span className="text-sm font-semibold text-slate-500">Dynamic creative</span>
+                  <span className="text-right text-sm font-black text-slate-950">
+                    {getOptionLabel(staticDefaultOptions.dynamicCreative, form.staticDefaults.dynamicCreative)}
                   </span>
                 </div>
                 <div className="flex items-start justify-between gap-3 rounded-xl bg-sky-50/70 px-4 py-3">

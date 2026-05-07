@@ -373,6 +373,7 @@ async function recordPublishedCampaign({ token, launch, account, names, campaign
           description: launch.description,
           websiteUrl: launch.websiteUrl,
           displayUrl: launch.displayUrl,
+          urlParameters: launch.urlParameters || '',
           scheduleStart: launch.scheduleStart || '',
           scheduleEnd: launch.scheduleEnd || '',
           callToAction: launch.callToAction,
