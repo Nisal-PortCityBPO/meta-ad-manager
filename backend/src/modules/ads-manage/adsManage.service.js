@@ -102,7 +102,7 @@ function buildMetaErrorMessage(path, payload) {
 }
 
 async function recordApiCall(token) {
-  await tokenService.recordTokenApiCall(token.id);
+  await tokenService.recordTokenApiCall(token.id, token.tokenType);
 }
 
 async function postToMeta({ token, path, params = {} }) {

@@ -5,7 +5,6 @@ import {
   Building2,
   ChevronLeft,
   ChevronRight,
-  DownloadCloud,
   Edit3,
   Filter,
   Handshake,
@@ -18,7 +17,6 @@ import {
 import DashboardHeader from '../components/DashboardHeader';
 import DashboardPanel from '../components/DashboardPanel';
 import { businessDataApi } from '../api/businessDataApi';
-import { useMetaSync } from '../context/MetaSyncContext';
 import { useBusinessData } from '../hooks/useBusinessData';
 import { useDashboard } from '../hooks/useDashboard';
 
@@ -237,37 +235,7 @@ const SocialAccountsTable = ({
   onFilterChange,
   onLimitChange,
   onPageChange,
-  saving,
-  syncingAccountId,
-  onAssign,
-  onSync,
 }) => {
-  const [editingAccount, setEditingAccount] = useState(null);
-  const [assignment, setAssignment] = useState({
-    brandId: '',
-    agencyId: '',
-  });
-
-  const startEdit = (account) => {
-    setEditingAccount(account);
-    setAssignment({
-      brandId: account.brand?.id || '',
-      agencyId: account.agency?.id || '',
-    });
-  };
-
-  const cancelEdit = () => {
-    setEditingAccount(null);
-    setAssignment({ brandId: '', agencyId: '' });
-  };
-
-  const saveAssignment = async (account) => {
-    const saved = await onAssign(account, assignment);
-    if (saved) {
-      cancelEdit();
-    }
-  };
-
   return (
     <DashboardPanel
       title="Social accounts"
@@ -275,7 +243,7 @@ const SocialAccountsTable = ({
     >
       <div className="mb-4 flex flex-col justify-between gap-3 sm:flex-row sm:items-center">
         <p className="text-sm leading-6 text-slate-500">
-          Assign each Meta social account to one brand and one agency. Business profiles fetched under that account inherit the same assignment automatically.
+          Social accounts are fetched from saved Meta Connections. Brand and agency ownership comes from the connection settings.
         </p>
       </div>
 
@@ -402,7 +370,7 @@ const SocialAccountsTable = ({
             <table className="min-w-full divide-y divide-sky-50">
               <thead className="bg-sky-50/70">
                 <tr>
-                  {['Social account', 'API token', 'AdsPower Profile', 'Business profiles', 'Brand', 'Agency', 'Last synced', 'Actions'].map((heading) => (
+                  {['Social account', 'API token', 'AdsPower Profile', 'Business profiles', 'Brand', 'Agency', 'Last synced'].map((heading) => (
                     <th key={heading} className="px-5 py-4 text-left text-xs font-black uppercase tracking-[0.16em] text-sky-700">
                       {heading}
                     </th>
@@ -411,9 +379,6 @@ const SocialAccountsTable = ({
               </thead>
               <tbody className="divide-y divide-sky-50">
                 {socialAccounts.map((account) => {
-                  const isEditing = editingAccount?.id === account.id;
-                  const isSyncing = syncingAccountId === account.id;
-
                   return (
                     <tr key={account.id} className="align-middle">
                       <td className="px-5 py-4">
@@ -447,20 +412,7 @@ const SocialAccountsTable = ({
                         </span>
                       </td>
                       <td className="px-5 py-4">
-                        {isEditing ? (
-                          <select
-                            value={assignment.brandId}
-                            onChange={(event) => setAssignment((current) => ({ ...current, brandId: event.target.value }))}
-                            className="h-10 min-w-44 rounded-xl border border-sky-100 bg-white px-3 text-sm outline-none focus:border-sky-400 focus:ring-4 focus:ring-sky-100"
-                          >
-                            <option value="">No brand</option>
-                            {brands.map((brand) => (
-                              <option key={brand.id} value={brand.id}>
-                                {brand.name}
-                              </option>
-                            ))}
-                          </select>
-                        ) : account.brand ? (
+                        {account.brand ? (
                           <span className="inline-flex items-center gap-2 rounded-full bg-sky-50 px-3 py-1 text-xs font-black text-slate-700">
                             <span className="h-2.5 w-2.5 rounded-full" style={{ backgroundColor: account.brand.color }} />
                             {account.brand.name}
@@ -470,20 +422,7 @@ const SocialAccountsTable = ({
                         )}
                       </td>
                       <td className="px-5 py-4">
-                        {isEditing ? (
-                          <select
-                            value={assignment.agencyId}
-                            onChange={(event) => setAssignment((current) => ({ ...current, agencyId: event.target.value }))}
-                            className="h-10 min-w-44 rounded-xl border border-sky-100 bg-white px-3 text-sm outline-none focus:border-sky-400 focus:ring-4 focus:ring-sky-100"
-                          >
-                            <option value="">No agency</option>
-                            {agencies.map((agency) => (
-                              <option key={agency.id} value={agency.id}>
-                                {agency.name}
-                              </option>
-                            ))}
-                          </select>
-                        ) : account.agency ? (
+                        {account.agency ? (
                           <span className="inline-flex items-center gap-2 rounded-full bg-sky-50 px-3 py-1 text-xs font-black text-slate-700">
                             <Handshake size={13} strokeWidth={2.4} className="text-teal-600" />
                             {account.agency.name}
@@ -495,48 +434,6 @@ const SocialAccountsTable = ({
                       <td className="px-5 py-4 text-sm font-semibold text-slate-500">
                         {formatDate(account.lastSyncedAt)}
                       </td>
-                      <td className="px-5 py-4">
-                        {isEditing ? (
-                          <div className="flex gap-2">
-                            <button
-                              type="button"
-                              onClick={() => saveAssignment(account)}
-                              disabled={saving}
-                              className="h-10 rounded-xl bg-sky-600 px-3 text-sm font-bold text-white transition hover:bg-sky-700 disabled:opacity-70"
-                            >
-                              Save
-                            </button>
-                            <button
-                              type="button"
-                              onClick={cancelEdit}
-                              className="h-10 rounded-xl border border-sky-100 bg-white px-3 text-sm font-bold text-slate-600 transition hover:bg-sky-50"
-                            >
-                              Cancel
-                            </button>
-                          </div>
-                        ) : (
-                          <div className="flex gap-2">
-                            <button
-                              type="button"
-                              onClick={() => onSync(account)}
-                              disabled={saving || isSyncing || !account.sourceTokenId}
-                              className="flex h-10 items-center gap-2 rounded-xl bg-sky-600 px-3 text-sm font-bold text-white transition hover:bg-sky-700 disabled:cursor-not-allowed disabled:opacity-60"
-                              title={account.sourceTokenId ? 'Fetch latest Meta data for this social account' : 'No saved token for this social account'}
-                            >
-                              <DownloadCloud size={16} strokeWidth={2.2} />
-                              {isSyncing ? 'Fetching' : 'Fetch'}
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => startEdit(account)}
-                              className="flex h-10 items-center gap-2 rounded-xl border border-sky-100 bg-white px-3 text-sm font-bold text-slate-700 transition hover:bg-sky-50"
-                            >
-                              <Edit3 size={16} strokeWidth={2.2} />
-                              Edit
-                            </button>
-                          </div>
-                        )}
-                      </td>
                     </tr>
                   );
                 })}
@@ -545,7 +442,7 @@ const SocialAccountsTable = ({
           </div>
         </div>
       ) : (
-        <EmptyState>No social account data yet. Fetch profiles from Token Management to save the token's main social account and connected business profiles.</EmptyState>
+        <EmptyState>No social account data yet. Save an active Meta Connection first, then fetch data from Meta Connection.</EmptyState>
       )}
     </DashboardPanel>
   );
@@ -578,7 +475,6 @@ const DashboardPage = () => {
     ...socialAccountFilters,
   });
   const [savingBusinessData, setSavingBusinessData] = useState(false);
-  const { startSocialAccountSync, syncingAccountId } = useMetaSync();
   const refreshAllRef = useRef(null);
   const metrics = dashboard?.metrics || {};
 
@@ -721,25 +617,6 @@ const DashboardPage = () => {
     }
   };
 
-  const assignSocialAccount = async (account, assignment) => {
-    setSavingBusinessData(true);
-    try {
-      const data = await businessDataApi.updateSocialAccount(account.id, assignment);
-      toast.success(data.message);
-      await loadBusinessData({ showLoading: false });
-      return true;
-    } catch (requestError) {
-      toast.error(requestError.message);
-      return false;
-    } finally {
-      setSavingBusinessData(false);
-    }
-  };
-
-  const syncSocialAccount = async (account) => {
-    startSocialAccountSync(account);
-  };
-
   return (
     <div>
       <DashboardHeader
@@ -779,15 +656,11 @@ const DashboardPage = () => {
         limit={socialAccountLimit}
         loading={businessDataLoading}
         pagination={socialAccountPagination}
-        saving={savingBusinessData}
-        syncingAccountId={syncingAccountId}
         socialAccounts={socialAccounts}
         onClearFilters={clearSocialAccountFilters}
         onFilterChange={updateSocialAccountFilter}
         onLimitChange={updateSocialAccountLimit}
         onPageChange={setSocialAccountPage}
-        onAssign={assignSocialAccount}
-        onSync={syncSocialAccount}
       />
 
       <div className="mt-4 grid gap-4 xl:grid-cols-2">

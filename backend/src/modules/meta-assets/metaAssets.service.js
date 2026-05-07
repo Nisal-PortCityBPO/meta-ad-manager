@@ -75,18 +75,19 @@ async function fetchGraphCollection({ token, path, fields, limit = 100 }) {
     await waitForMetaApiPacing();
 
     const response = await fetch(nextUrl);
-    await tokenService.recordTokenApiCall(token.id);
+    await tokenService.recordTokenApiCall(token.id, token.tokenType);
     const payload = await response.json();
 
     if (!response.ok) {
       await tokenService.markTokenBlockedFromMetaError({
         tokenId: token.id,
         payload,
+        tokenType: token.tokenType,
       });
       throw new HttpError(400, payload.error?.message || `Meta API request failed for ${token.label}`);
     }
 
-    await tokenService.markTokenConnected({ tokenId: token.id });
+    await tokenService.markTokenConnected({ tokenId: token.id, tokenType: token.tokenType });
 
     if (Array.isArray(payload.data)) {
       items.push(...payload.data);

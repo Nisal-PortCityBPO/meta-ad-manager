@@ -3,6 +3,7 @@ import {
   BriefcaseBusiness,
   ChevronDown,
   ChevronRight,
+  DownloadCloud,
   FileText,
   KeyRound,
   Layers3,
@@ -14,6 +15,8 @@ import {
 import DashboardHeader from '../../dashboard/components/DashboardHeader';
 import DashboardPanel from '../../dashboard/components/DashboardPanel';
 import { businessDataApi } from '../../dashboard/api/businessDataApi';
+import { useMetaSync } from '../../dashboard/context/MetaSyncContext';
+import { getMetaKeyTypeLabel, META_KEY_TYPES, useMetaKeySettings } from '../../settings/MetaKeySettingsContext';
 
 const currencyFormatter = new Intl.NumberFormat('en-US', {
   style: 'currency',
@@ -280,6 +283,9 @@ const AdLeafRow = ({ ad, campaignCurrency, depth = 5 }) => (
           <p className="truncate text-sm font-black text-slate-950">
             {ad.title || ad.name || 'Unnamed ad'}
           </p>
+          <p className="mt-1 text-[10px] font-black uppercase tracking-[0.14em] text-slate-500">
+            Ad
+          </p>
           <p className="mt-1 truncate text-xs font-semibold text-slate-400">
             ID: {getDisplayId(ad)}
           </p>
@@ -306,6 +312,8 @@ const EmptyState = ({ children }) => (
 );
 
 const RoadmapPage = () => {
+  const { startSocialAccountSync, syncingAccountId } = useMetaSync();
+  const { fetchTokenType } = useMetaKeySettings();
   const [brands, setBrands] = useState([]);
   const [selectedBrandId, setSelectedBrandId] = useState('');
   const [accountSearch, setAccountSearch] = useState('');
@@ -385,6 +393,7 @@ const RoadmapPage = () => {
   const filteredAccounts = selectedAccounts.filter((account) =>
     socialAccountMatchesSearch(account, normalizeSearch(accountSearch))
   );
+  const selectedFetchKeyLabel = getMetaKeyTypeLabel(fetchTokenType);
 
   const resetExpandedTree = () => {
     setExpandedAccountId(null);
@@ -434,7 +443,7 @@ const RoadmapPage = () => {
     <>
       <DashboardHeader
         title="Roadmap"
-        description="Browse the hierarchy saved in our database: brand, social account, business profile, ad account, campaign, ad set, and ads. This page only reads internal backend data and never starts a Meta API sync."
+        description="Browse saved hierarchy data by brand, social account, business profile, ad account, campaign, ad set, and ads. Fetch refreshes the selected social account using the Settings key."
         action={
           <button
             type="button"
@@ -518,6 +527,13 @@ const RoadmapPage = () => {
                   const accountKey = getEntityKey(account, accountIndex, 'account');
                   const profiles = Array.isArray(account.businessProfiles) ? account.businessProfiles : [];
                   const isAccountOpen = expandedAccountId === accountKey;
+                  const isAccountSyncing = syncingAccountId === account.id;
+                  const canFetchAccount =
+                    account.sourceTokenId &&
+                    account.sourceTokenStatus !== 'DEACTIVE' &&
+                    (fetchTokenType === META_KEY_TYPES.SYSTEM_USER
+                      ? account.systemUserAccessTokenStatus !== 'DEACTIVE'
+                      : account.profileAccessTokenStatus !== 'DEACTIVE');
 
                   return (
                     <div
@@ -538,6 +554,23 @@ const RoadmapPage = () => {
                       >
                         <MetricBadge label="Token" value={account.sourceTokenLabel || 'Not set'} tone="indigo" />
                         <StatusPill status={getStatus(account.connectionStatus, account.status)} />
+                        <button
+                          type="button"
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            void startSocialAccountSync(account);
+                          }}
+                          disabled={isAccountSyncing || !canFetchAccount}
+                          className="flex h-9 w-9 items-center justify-center rounded-full border border-sky-100 bg-white text-sky-700 transition hover:bg-sky-50 disabled:cursor-not-allowed disabled:opacity-50"
+                          title={
+                            canFetchAccount
+                              ? `Fetch ${account.sourceTokenLabel || 'Meta connection'} with ${selectedFetchKeyLabel}`
+                              : `No active ${selectedFetchKeyLabel} for this social account`
+                          }
+                          aria-label={`Fetch ${account.name || 'social account'}`}
+                        >
+                          <DownloadCloud size={16} strokeWidth={2.3} className={isAccountSyncing ? 'animate-pulse' : ''} />
+                        </button>
                       </TreeRow>
 
                       {isAccountOpen ? (
@@ -555,7 +588,8 @@ const RoadmapPage = () => {
                                     icon={BriefcaseBusiness}
                                     isOpen={isProfileOpen}
                                     onClick={() => toggleProfile(profileKey)}
-                                    subtitle={`ID: ${getDisplayId(profile)}`}
+                                    secondaryText={`ID: ${getDisplayId(profile)}`}
+                                    subtitle="Business profile"
                                     title={profile.name || 'Unnamed business profile'}
                                   >
                                     <MetricBadge label="Ad accounts" value={adAccounts.length || Number(profile.adAccountCount) || 0} tone="sky" />
@@ -578,7 +612,8 @@ const RoadmapPage = () => {
                                                 icon={KeyRound}
                                                 isOpen={isAdAccountOpen}
                                                 onClick={() => toggleAdAccount(adAccountKey)}
-                                                subtitle={`ID: ${getDisplayId(adAccount)}`}
+                                                secondaryText={`ID: ${getDisplayId(adAccount)}`}
+                                                subtitle="Ad account"
                                                 title={adAccount.name || 'Unnamed ad account'}
                                               >
                                                 <MetricBadge label="Campaigns" value={campaigns.length || Number(adAccount.campaignCount) || 0} tone="emerald" />
@@ -602,7 +637,8 @@ const RoadmapPage = () => {
                                                             icon={Megaphone}
                                                             isOpen={isCampaignOpen}
                                                             onClick={() => toggleCampaign(campaignKey)}
-                                                            subtitle={`ID: ${getDisplayId(campaign)}`}
+                                                            secondaryText={`ID: ${getDisplayId(campaign)}`}
+                                                            subtitle="Campaign"
                                                             title={campaign.name || 'Unnamed campaign'}
                                                           >
                                                             <MetricBadge
@@ -629,7 +665,8 @@ const RoadmapPage = () => {
                                                                         icon={Layers3}
                                                                         isOpen={isAdSetOpen}
                                                                         onClick={() => toggleAdSet(adSetKey)}
-                                                                        subtitle={`ID: ${getDisplayId(adSet)}`}
+                                                                        secondaryText={`ID: ${getDisplayId(adSet)}`}
+                                                                        subtitle="Ad set"
                                                                         title={adSet.name || 'Unnamed ad set'}
                                                                       >
                                                                         <MetricBadge

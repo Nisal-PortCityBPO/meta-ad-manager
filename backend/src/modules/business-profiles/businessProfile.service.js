@@ -185,18 +185,19 @@ async function requestMetaApi(path, token, { fields, limit } = {}) {
   await waitForMetaApiPacing();
 
   const response = await fetch(url);
-  await tokenService.recordTokenApiCall(token.id);
+  await tokenService.recordTokenApiCall(token.id, token.tokenType);
   const payload = await response.json();
 
   if (!response.ok) {
     await tokenService.markTokenBlockedFromMetaError({
       tokenId: token.id,
       payload,
+      tokenType: token.tokenType,
     });
     throw new HttpError(400, getMetaErrorMessage(payload, `Meta API request failed for ${token.label}`));
   }
 
-  await tokenService.markTokenConnected({ tokenId: token.id });
+  await tokenService.markTokenConnected({ tokenId: token.id, tokenType: token.tokenType });
 
   return payload;
 }
@@ -213,6 +214,31 @@ async function fetchSocialAccountAndBusinessesForToken(token) {
       profileImageUrl: payload.picture?.data?.url || null,
     },
     metaProfiles: Array.isArray(payload.businesses?.data) ? payload.businesses.data : [],
+  };
+}
+
+async function getExistingSocialAccountScopeForSystemUserToken(requestedSocialAccount) {
+  const existingProfiles = await BusinessProfile.find({ socialAccount: requestedSocialAccount._id })
+    .select('metaBusinessId name')
+    .sort({ name: 1 });
+
+  if (!existingProfiles.length) {
+    throw new HttpError(
+      400,
+      'Use the Profile Access Token once before using the System User token for this social account'
+    );
+  }
+
+  return {
+    metaSocialAccount: {
+      id: requestedSocialAccount.metaAccountId,
+      name: requestedSocialAccount.name,
+      profileImageUrl: requestedSocialAccount.profileImageUrl || null,
+    },
+    metaProfiles: existingProfiles.map((profile) => ({
+      id: profile.metaBusinessId,
+      name: profile.name,
+    })),
   };
 }
 
@@ -1036,7 +1062,7 @@ async function upsertMetaProfile(metaProfile, token, syncedAt, socialAccount) {
   return 'updated';
 }
 
-async function resolveSyncScope({ tokenId = null, socialAccountId = null } = {}) {
+async function resolveSyncScope({ tokenId = null, socialAccountId = null, tokenType } = {}) {
   if (socialAccountId && !mongoose.Types.ObjectId.isValid(socialAccountId)) {
     throw new HttpError(400, 'Invalid social account');
   }
@@ -1046,7 +1072,7 @@ async function resolveSyncScope({ tokenId = null, socialAccountId = null } = {})
   }
 
   if (!socialAccountId) {
-    const activeTokens = await tokenService.listActiveTokensWithSecrets({ tokenId });
+    const activeTokens = await tokenService.listActiveTokensWithSecrets({ tokenId, tokenType });
 
     return {
       activeTokens,
@@ -1066,7 +1092,10 @@ async function resolveSyncScope({ tokenId = null, socialAccountId = null } = {})
   }
 
   const resolvedTokenId = requestedSocialAccount.sourceToken.toString();
-  const activeTokens = await tokenService.listActiveTokensWithSecrets({ tokenId: resolvedTokenId });
+  const activeTokens = await tokenService.listActiveTokensWithSecrets({
+    tokenId: resolvedTokenId,
+    tokenType,
+  });
 
   return {
     activeTokens,
@@ -1075,12 +1104,12 @@ async function resolveSyncScope({ tokenId = null, socialAccountId = null } = {})
   };
 }
 
-async function syncBusinessProfiles({ actor, req, tokenId = null, socialAccountId = null }) {
+async function syncBusinessProfiles({ actor, req, tokenId = null, socialAccountId = null, tokenType = null }) {
   const {
     activeTokens,
     requestedSocialAccount,
     tokenId: resolvedTokenId,
-  } = await resolveSyncScope({ tokenId, socialAccountId });
+  } = await resolveSyncScope({ tokenId, socialAccountId, tokenType });
 
   if (!activeTokens.length) {
     throw new HttpError(
@@ -1109,8 +1138,17 @@ async function syncBusinessProfiles({ actor, req, tokenId = null, socialAccountI
 
   for (const token of activeTokens) {
     try {
-      summary.apiCalls += 1;
-      const { metaSocialAccount, metaProfiles } = await fetchSocialAccountAndBusinessesForToken(token);
+      const usesExistingSocialScope =
+        requestedSocialAccount && token.tokenType === tokenService.TOKEN_USAGE_TYPES.SYSTEM_USER;
+      let metaSocialAccount;
+      let metaProfiles;
+
+      if (usesExistingSocialScope) {
+        ({ metaSocialAccount, metaProfiles } = await getExistingSocialAccountScopeForSystemUserToken(requestedSocialAccount));
+      } else {
+        summary.apiCalls += 1;
+        ({ metaSocialAccount, metaProfiles } = await fetchSocialAccountAndBusinessesForToken(token));
+      }
 
       if (requestedSocialAccount && metaSocialAccount.id !== requestedSocialAccount.metaAccountId) {
         throw new HttpError(
@@ -1160,6 +1198,7 @@ async function syncBusinessProfiles({ actor, req, tokenId = null, socialAccountI
     metadata: {
       ...summary,
       tokenId: resolvedTokenId,
+      tokenType,
       socialAccountId,
     },
     req,

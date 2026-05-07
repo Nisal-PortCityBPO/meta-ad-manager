@@ -19,7 +19,7 @@ async function listBrands() {
     Brand.find().sort({ name: 1 }),
     SocialAccount.find({ brand: { $ne: null } })
       .populate('agency', 'name')
-      .populate('sourceToken', 'label adsPowerProfile connectionStatus connectionMessage lastConnectionCheckedAt')
+      .populate('sourceToken', 'label adsPowerProfile status profileAccessTokenStatus systemUserAccessTokenStatus connectionStatus connectionMessage lastConnectionCheckedAt')
       .sort({ name: 1 }),
   ]);
   const accountIds = socialAccounts.map((account) => account._id);
@@ -107,6 +107,9 @@ async function listBrands() {
       sourceTokenId: account.sourceToken?._id?.toString?.() || account.sourceToken?.toString?.() || null,
       sourceTokenLabel: account.sourceToken?.label || account.sourceTokenLabel,
       adsPowerProfile: account.sourceToken?.adsPowerProfile || '',
+      sourceTokenStatus: account.sourceToken?.status || 'ACTIVE',
+      profileAccessTokenStatus: account.sourceToken?.profileAccessTokenStatus || 'ACTIVE',
+      systemUserAccessTokenStatus: account.sourceToken?.systemUserAccessTokenStatus || 'ACTIVE',
       connectionStatus: account.sourceToken?.connectionStatus || 'UNKNOWN',
       connectionMessage: account.sourceToken?.connectionMessage || null,
       lastConnectionCheckedAt: account.sourceToken?.lastConnectionCheckedAt || null,
