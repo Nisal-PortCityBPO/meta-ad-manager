@@ -1,0 +1,14 @@
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: meta-account-manager:latest
+    container_name: meta-account-manager
+    restart: unless-stopped
+    env_file:
+      - ./backend/.env
+    ports:
+      - "${PORT:-4000}:4000"
+    volumes:
+      - ./backend/storage:/app/backend/storage
