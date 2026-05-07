@@ -1,7 +1,11 @@
 const HttpError = require('../../app/utils/httpError');
 const { decryptSecret, encryptSecret, maskSecret } = require('../../app/utils/tokenCrypto');
 const { writeActivityLog } = require('../activity-logs/activityLog.service');
-const { Token, TOKEN_STATUSES } = require('./token.model');
+const {
+  Token,
+  TOKEN_CONNECTION_STATUSES,
+  TOKEN_STATUSES,
+} = require('./token.model');
 
 function validateTokenPayload({ label, purpose, accessToken }, { requireAccessToken = true } = {}) {
   if (!label?.trim()) {
@@ -23,13 +27,62 @@ function validateStatus(status) {
   }
 }
 
+const BLOCKING_META_ERROR_CODES = new Set([102, 190]);
+const BLOCKING_META_ERROR_SUBCODES = new Set([458, 459, 460, 463, 467, 490, 492, 493, 494, 495]);
+
+function isTokenActive(status) {
+  return status === TOKEN_STATUSES.ACTIVE || status === 'BLOCKED';
+}
+
+function isBlockingMetaError(payload = {}) {
+  const error = payload.error || {};
+  const code = Number(error.code);
+  const subcode = Number(error.error_subcode);
+  const message = [error.message, error.error_user_msg]
+    .filter(Boolean)
+    .join(' ')
+    .toLowerCase();
+
+  if (BLOCKING_META_ERROR_CODES.has(code) || BLOCKING_META_ERROR_SUBCODES.has(subcode)) {
+    return true;
+  }
+
+  return [
+    'access token has expired',
+    'access token is invalid',
+    'api access blocked',
+    'api access has been blocked',
+    'api access is blocked',
+    'invalid access token',
+    'invalid oauth',
+    'temporarily blocked',
+    'session has expired',
+    'session is invalid',
+    'token has expired',
+  ].some((pattern) => message.includes(pattern));
+}
+
+function getBlockedConnectionStatus(payload = {}) {
+  const error = payload.error || {};
+  const message = [error.message, error.error_user_msg]
+    .filter(Boolean)
+    .join(' ')
+    .toLowerCase();
+
+  if (message.includes('disabled') || message.includes('deactivated')) {
+    return TOKEN_CONNECTION_STATUSES.DISABLED;
+  }
+
+  return TOKEN_CONNECTION_STATUSES.BLOCKED;
+}
+
 async function listTokens() {
   const tokens = await Token.find().sort({ createdAt: -1 });
   return tokens.map((token) => token.toSafeObject());
 }
 
 async function listActiveTokensWithSecrets({ tokenId } = {}) {
-  const query = { status: TOKEN_STATUSES.ACTIVE };
+  const query = { status: { $in: [TOKEN_STATUSES.ACTIVE, 'BLOCKED'] } };
 
   if (tokenId) {
     query._id = tokenId;
@@ -90,6 +143,9 @@ async function updateToken({ tokenId, label, purpose, accessToken, status, actor
   if (accessToken?.trim()) {
     token.encryptedAccessToken = encryptSecret(accessToken.trim());
     token.maskedAccessToken = maskSecret(accessToken.trim());
+    token.connectionStatus = TOKEN_CONNECTION_STATUSES.UNKNOWN;
+    token.connectionMessage = null;
+    token.lastConnectionCheckedAt = null;
   }
 
   await token.save();
@@ -142,14 +198,79 @@ async function recordTokenApiCall(tokenId) {
   return token.toSafeObject();
 }
 
+async function updateTokenConnection({ tokenId, connectionStatus, message = null, actor = null, req = null }) {
+  const token = await Token.findById(tokenId);
+  if (!token) {
+    return null;
+  }
+
+  const statusChanged = token.connectionStatus !== connectionStatus;
+
+  token.connectionStatus = connectionStatus;
+  token.connectionMessage = message;
+  token.lastConnectionCheckedAt = new Date();
+  token.updatedBy = actor?._id || token.updatedBy;
+  await token.save();
+
+  if (statusChanged) {
+    await writeActivityLog({
+      user: actor,
+      action: `META_TOKEN_CONNECTION_${connectionStatus}`,
+      entity: 'Token',
+      entityId: token._id.toString(),
+      metadata: {
+        label: token.label,
+        message,
+      },
+      req,
+    });
+  }
+
+  return token.toSafeObject();
+}
+
+async function markTokenConnected({ tokenId, actor = null, req = null }) {
+  return updateTokenConnection({
+    tokenId,
+    connectionStatus: TOKEN_CONNECTION_STATUSES.CONNECTED,
+    message: 'Meta API request completed successfully',
+    actor,
+    req,
+  });
+}
+
+async function markTokenBlocked({ tokenId, reason, actor = null, req = null, connectionStatus = TOKEN_CONNECTION_STATUSES.BLOCKED }) {
+  return updateTokenConnection({
+    tokenId,
+    connectionStatus,
+    message: reason,
+    actor,
+    req,
+  });
+}
+
+async function markTokenBlockedFromMetaError({ tokenId, payload, actor = null, req = null }) {
+  if (!isBlockingMetaError(payload)) {
+    return null;
+  }
+
+  return markTokenBlocked({
+    tokenId,
+    reason: payload?.error?.message || 'Meta reported this token as blocked or invalid',
+    connectionStatus: getBlockedConnectionStatus(payload),
+    actor,
+    req,
+  });
+}
+
 async function getDecryptedAccessToken(tokenId) {
   const token = await Token.findById(tokenId);
   if (!token) {
     throw new HttpError(404, 'Token not found');
   }
 
-  if (token.status !== TOKEN_STATUSES.ACTIVE) {
-    throw new HttpError(400, 'Token is blocked');
+  if (!isTokenActive(token.status)) {
+    throw new HttpError(400, 'Token is deactive');
   }
 
   return decryptSecret(token.encryptedAccessToken);
@@ -161,8 +282,8 @@ async function getActiveTokenWithSecret(tokenId) {
     throw new HttpError(404, 'Token not found');
   }
 
-  if (token.status !== TOKEN_STATUSES.ACTIVE) {
-    throw new HttpError(400, 'Token is blocked');
+  if (!isTokenActive(token.status)) {
+    throw new HttpError(400, 'Token is deactive');
   }
 
   return {
@@ -179,6 +300,9 @@ module.exports = {
   getDecryptedAccessToken,
   listActiveTokensWithSecrets,
   listTokens,
+  markTokenConnected,
+  markTokenBlocked,
+  markTokenBlockedFromMetaError,
   recordTokenApiCall,
   updateToken,
 };

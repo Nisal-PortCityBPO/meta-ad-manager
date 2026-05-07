@@ -45,6 +45,12 @@ export const businessDataApi = {
       method: 'DELETE',
     }),
   getBusinessProfiles: (params) => apiRequest(`/business-profiles${toQueryString(params)}`),
+  getSocialAccounts: (params) => apiRequest(`/social-accounts${toQueryString(params)}`),
+  updateSocialAccount: (id, payload) =>
+    apiRequest(`/social-accounts/${id}`, {
+      method: 'PUT',
+      body: payload,
+    }),
   syncBusinessProfiles: () =>
     apiRequest('/business-profiles/sync', {
       method: 'POST',

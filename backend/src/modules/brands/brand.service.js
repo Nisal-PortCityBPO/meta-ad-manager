@@ -1,6 +1,7 @@
 const HttpError = require('../../app/utils/httpError');
 const { writeActivityLog } = require('../activity-logs/activityLog.service');
 const { BusinessProfile } = require('../business-profiles/businessProfile.model');
+const SocialAccount = require('../social-accounts/socialAccount.model');
 const Brand = require('./brand.model');
 
 function validateBrand({ name, color }) {
@@ -14,87 +15,116 @@ function validateBrand({ name, color }) {
 }
 
 async function listBrands() {
-  const [brands, agencyAssignments] = await Promise.all([
+  const [brands, socialAccounts] = await Promise.all([
     Brand.find().sort({ name: 1 }),
-    BusinessProfile.aggregate([
-      {
-        $match: {
-          brand: { $ne: null },
-          agency: { $ne: null },
-        },
-      },
-      {
-        $group: {
-          _id: {
-            brand: '$brand',
-            agency: '$agency',
-          },
-          profileCount: { $sum: 1 },
-          profiles: {
-            $push: {
-              id: '$_id',
-              name: '$name',
-              metaBusinessId: '$metaBusinessId',
-              metaStatus: '$metaStatus',
-              sourceTokenLabel: '$sourceTokenLabel',
-            },
-          },
-        },
-      },
-      {
-        $lookup: {
-          from: 'agencies',
-          localField: '_id.agency',
-          foreignField: '_id',
-          as: 'agency',
-        },
-      },
-      {
-        $group: {
-          _id: '$_id.brand',
-          agencyCount: { $sum: 1 },
-          agencies: {
-            $push: {
-              id: '$_id.agency',
-              name: { $arrayElemAt: ['$agency.name', 0] },
-              profileCount: '$profileCount',
-              profiles: '$profiles',
-            },
-          },
-        },
-      },
-    ]),
+    SocialAccount.find({ brand: { $ne: null } })
+      .populate('agency', 'name')
+      .populate('sourceToken', 'label connectionStatus connectionMessage lastConnectionCheckedAt')
+      .sort({ name: 1 }),
   ]);
-  const countByBrand = new Map(
-    agencyAssignments.map((item) => [item._id.toString(), item.agencyCount])
-  );
-  const agenciesByBrand = new Map(
-    agencyAssignments.map((item) => [
-      item._id.toString(),
-      item.agencies
-        .filter((agency) => agency.name)
-        .map((agency) => ({
-          id: agency.id.toString(),
-          name: agency.name,
-          profileCount: agency.profileCount || 0,
-          businessProfiles: (agency.profiles || [])
-            .map((profile) => ({
-              id: profile.id.toString(),
-              name: profile.name,
-              metaBusinessId: profile.metaBusinessId,
-              metaStatus: profile.metaStatus,
-              sourceTokenLabel: profile.sourceTokenLabel,
-            }))
-            .sort((first, second) => first.name.localeCompare(second.name)),
-        }))
-        .sort((first, second) => first.name.localeCompare(second.name)),
-    ])
-  );
+  const accountIds = socialAccounts.map((account) => account._id);
+  const profiles = accountIds.length
+    ? await BusinessProfile.find({ socialAccount: { $in: accountIds } })
+        .select(
+          'name metaBusinessId metaStatus metaStatusReason sourceTokenLabel socialAccount adAccountCount facebookPageCount campaignCount totalSpend spendCurrency assetMetricsStatus assetMetricsSyncedAt adAccounts lastSyncedAt lastStatusCheckedAt'
+        )
+        .sort({ name: 1 })
+    : [];
+  const profilesByAccount = new Map();
+
+  profiles.forEach((profile) => {
+    const accountId = profile.socialAccount?.toString();
+    if (!accountId) {
+      return;
+    }
+
+    if (!profilesByAccount.has(accountId)) {
+      profilesByAccount.set(accountId, []);
+    }
+
+    profilesByAccount.get(accountId).push({
+      id: profile._id.toString(),
+      name: profile.name,
+      metaBusinessId: profile.metaBusinessId,
+      metaStatus: profile.metaStatus,
+      metaStatusReason: profile.metaStatusReason,
+      sourceTokenLabel: profile.sourceTokenLabel,
+      adAccountCount: profile.adAccountCount || 0,
+      facebookPageCount: profile.facebookPageCount || 0,
+      campaignCount: profile.campaignCount || 0,
+      totalSpend: profile.totalSpend || 0,
+      spendCurrency: profile.spendCurrency || null,
+      assetMetricsStatus: profile.assetMetricsStatus || 'UNKNOWN',
+      assetMetricsSyncedAt: profile.assetMetricsSyncedAt,
+      adAccounts: Array.isArray(profile.adAccounts)
+        ? profile.adAccounts.map((account) => ({
+            id: account.id,
+            accountId: account.accountId,
+            name: account.name,
+            currency: account.currency,
+            connectionStatus: account.connectionStatus || 'UNKNOWN',
+            statusCode: account.statusCode,
+            statusLabel: account.statusLabel || 'Unknown',
+            campaignCount: account.campaignCount || 0,
+            totalSpend: account.totalSpend || 0,
+          }))
+        : [],
+      lastSyncedAt: profile.lastSyncedAt,
+      lastStatusCheckedAt: profile.lastStatusCheckedAt,
+    });
+  });
+
+  const socialAccountsByBrand = new Map();
+  const agenciesByBrand = new Map();
+
+  socialAccounts.forEach((account) => {
+    const brandId = account.brand?.toString();
+    if (!brandId) {
+      return;
+    }
+
+    if (!socialAccountsByBrand.has(brandId)) {
+      socialAccountsByBrand.set(brandId, []);
+      agenciesByBrand.set(brandId, new Map());
+    }
+
+    const accountProfiles = profilesByAccount.get(account._id.toString()) || [];
+
+    if (account.agency) {
+      agenciesByBrand.get(brandId).set(account.agency._id.toString(), {
+        id: account.agency._id.toString(),
+        name: account.agency.name,
+      });
+    }
+
+    socialAccountsByBrand.get(brandId).push({
+      id: account._id.toString(),
+      metaAccountId: account.metaAccountId,
+      name: account.name,
+      profileImageUrl: account.profileImageUrl,
+      sourceTokenLabel: account.sourceToken?.label || account.sourceTokenLabel,
+      connectionStatus: account.sourceToken?.connectionStatus || 'UNKNOWN',
+      connectionMessage: account.sourceToken?.connectionMessage || null,
+      lastConnectionCheckedAt: account.sourceToken?.lastConnectionCheckedAt || null,
+      agency: account.agency
+        ? {
+            id: account.agency._id.toString(),
+            name: account.agency.name,
+          }
+        : null,
+      profileCount: accountProfiles.length,
+      businessProfiles: accountProfiles,
+      lastSyncedAt: account.lastSyncedAt,
+    });
+  });
 
   return brands.map((brand) => ({
     ...brand.toSafeObject(),
-    agencyCount: countByBrand.get(brand._id.toString()) || 0,
-    assignedAgencies: agenciesByBrand.get(brand._id.toString()) || [],
+    socialAccountCount: socialAccountsByBrand.get(brand._id.toString())?.length || 0,
+    agencyCount: agenciesByBrand.get(brand._id.toString())?.size || 0,
+    assignedAgencies: Array.from(agenciesByBrand.get(brand._id.toString())?.values() || [])
+      .sort((first, second) => first.name.localeCompare(second.name)),
+    assignedSocialAccounts: socialAccountsByBrand.get(brand._id.toString()) || [],
   }));
 }
 

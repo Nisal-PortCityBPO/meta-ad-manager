@@ -14,18 +14,35 @@ const defaultProfileFilterOptions = {
   tokenLabels: [],
 };
 
-export const useBusinessData = (profileQuery = {}) => {
-  const { agencyId, brandId, limit, page, search, tokenLabel } = profileQuery;
+const defaultSocialAccountPagination = {
+  page: 1,
+  limit: 5,
+  total: 0,
+  totalPages: 1,
+  hasPrevious: false,
+  hasNext: false,
+};
+
+const defaultSocialAccountFilterOptions = {
+  tokenLabels: [],
+};
+
+export const useBusinessData = (socialAccountQuery = {}) => {
+  const { agencyId, brandId, limit, page, search, tokenLabel } = socialAccountQuery;
   const [brands, setBrands] = useState([]);
   const [agencies, setAgencies] = useState([]);
   const [profiles, setProfiles] = useState([]);
+  const [socialAccounts, setSocialAccounts] = useState([]);
   const [profilePagination, setProfilePagination] = useState(defaultProfilePagination);
   const [profileFilterOptions, setProfileFilterOptions] = useState(defaultProfileFilterOptions);
+  const [socialAccountPagination, setSocialAccountPagination] = useState(defaultSocialAccountPagination);
+  const [socialAccountFilterOptions, setSocialAccountFilterOptions] = useState(defaultSocialAccountFilterOptions);
   const [loading, setLoading] = useState(true);
   const [errors, setErrors] = useState({
     brands: '',
     agencies: '',
     profiles: '',
+    socialAccounts: '',
   });
 
   const error = Object.values(errors).filter(Boolean).join(' ');
@@ -52,10 +69,11 @@ export const useBusinessData = (profileQuery = {}) => {
       setLoading(true);
     }
 
-    const [brandResult, agencyResult, profileResult] = await Promise.allSettled([
+    const [brandResult, agencyResult, profileResult, socialAccountResult] = await Promise.allSettled([
       businessDataApi.getBrands(),
       businessDataApi.getAgencies(),
       businessDataApi.getBusinessProfiles({ agencyId, brandId, limit, page, search, tokenLabel }),
+      businessDataApi.getSocialAccounts({ agencyId, brandId, limit, page, search, tokenLabel }),
     ]);
 
     setDataResult('brands', brandResult, setBrands, 'brands');
@@ -63,6 +81,10 @@ export const useBusinessData = (profileQuery = {}) => {
     setDataResult('profiles', profileResult, setProfiles, 'profiles', (data) => {
       setProfilePagination(data.pagination || defaultProfilePagination);
       setProfileFilterOptions(data.filterOptions || defaultProfileFilterOptions);
+    });
+    setDataResult('socialAccounts', socialAccountResult, setSocialAccounts, 'socialAccounts', (data) => {
+      setSocialAccountPagination(data.pagination || defaultSocialAccountPagination);
+      setSocialAccountFilterOptions(data.filterOptions || defaultSocialAccountFilterOptions);
     });
 
     if (showLoading) {
@@ -77,14 +99,19 @@ export const useBusinessData = (profileQuery = {}) => {
       businessDataApi.getBrands(),
       businessDataApi.getAgencies(),
       businessDataApi.getBusinessProfiles({ agencyId, brandId, limit, page, search, tokenLabel }),
+      businessDataApi.getSocialAccounts({ agencyId, brandId, limit, page, search, tokenLabel }),
     ])
-      .then(([brandResult, agencyResult, profileResult]) => {
+      .then(([brandResult, agencyResult, profileResult, socialAccountResult]) => {
         if (isMounted) {
           setDataResult('brands', brandResult, setBrands, 'brands');
           setDataResult('agencies', agencyResult, setAgencies, 'agencies');
           setDataResult('profiles', profileResult, setProfiles, 'profiles', (data) => {
             setProfilePagination(data.pagination || defaultProfilePagination);
             setProfileFilterOptions(data.filterOptions || defaultProfileFilterOptions);
+          });
+          setDataResult('socialAccounts', socialAccountResult, setSocialAccounts, 'socialAccounts', (data) => {
+            setSocialAccountPagination(data.pagination || defaultSocialAccountPagination);
+            setSocialAccountFilterOptions(data.filterOptions || defaultSocialAccountFilterOptions);
           });
         }
       })
@@ -115,8 +142,12 @@ export const useBusinessData = (profileQuery = {}) => {
     profileFilterOptions,
     profilePagination,
     profiles,
+    socialAccountFilterOptions,
+    socialAccountPagination,
+    socialAccounts,
     setAgencies,
     setBrands,
     setProfiles,
+    setSocialAccounts,
   };
 };
