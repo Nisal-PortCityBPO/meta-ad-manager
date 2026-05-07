@@ -874,9 +874,9 @@ const DynamicAdsLaunchPage = () => {
 
       {templatesError ? <p className="mb-4 rounded-xl bg-red-50 px-4 py-3 text-sm font-semibold text-red-700">{templatesError}</p> : null}
 
-      <div className="grid gap-4 2xl:grid-cols-[280px_minmax(0,1fr)]">
+      <div className="space-y-4">
         <DashboardPanel title="Launch scope">
-          <div className="space-y-4">
+          <div className="grid gap-3 xl:grid-cols-[minmax(180px,1fr)_minmax(180px,1fr)_minmax(220px,1.1fr)_auto_minmax(220px,1.1fr)] xl:items-end">
             <div className="space-y-2">
               <FieldLabel htmlFor="dynamic-brand">Brand</FieldLabel>
               <select id="dynamic-brand" value={brandId} onChange={(event) => handleBrandChange(event.target.value)} disabled={brandsLoading} className="h-12 w-full rounded-xl border border-sky-100 px-4 outline-none focus:border-sky-400 focus:ring-4 focus:ring-sky-100">
@@ -897,12 +897,13 @@ const DynamicAdsLaunchPage = () => {
                 <option value="">No shared page</option>
                 {pages.map((page) => <option key={page.id} value={page.id}>{page.name}</option>)}
               </select>
-              <p className="text-xs font-semibold text-slate-400">Optional. Each ad account row can override this page.</p>
             </div>
-            <button type="button" onClick={loadRowPixels} disabled={!tokenId || !scopedAdAccounts.length} className="h-10 rounded-xl border border-sky-100 bg-white px-4 text-sm font-bold text-slate-700 transition hover:bg-sky-50 disabled:opacity-50">
+            <button type="button" onClick={loadRowPixels} disabled={!tokenId || !scopedAdAccounts.length} className="h-12 rounded-xl border border-sky-100 bg-white px-4 text-sm font-bold text-slate-700 transition hover:bg-sky-50 disabled:opacity-50">
               {loadingPixels ? 'Loading pixels...' : 'Load account pixels'}
             </button>
-            <p className="text-xs font-semibold text-slate-400">Pixels are selected per ad account row. Leave blank when that campaign template does not need pixel tracking.</p>
+            <p className="rounded-xl bg-sky-50 px-3 py-2 text-xs font-semibold leading-5 text-slate-500">
+              Shared page is optional. Each row can override page and pixel before publishing.
+            </p>
           </div>
         </DashboardPanel>
 
