@@ -78,6 +78,10 @@ function registerApiRoutes(app) {
 }
 
 async function registerFrontend(app, hmrServer) {
+  if (!fs.existsSync(frontendRoot)) {
+    return;
+  }
+
   if (process.env.NODE_ENV === 'production') {
     app.use(express.static(frontendDist));
     app.use((req, res) => {

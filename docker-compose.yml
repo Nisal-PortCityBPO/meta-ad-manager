@@ -1,26 +1,14 @@
 services:
-  backend:
-    build:
-      context: ./backend
-      dockerfile: Dockerfile
-    image: meta-account-manager-backend:latest
-    container_name: meta-account-manager-backend
+  app:
+    image: ghcr.io/nisal-portcitybpo/meta-account-manager:latest
+    container_name: meta-account-manager
     restart: unless-stopped
-    env_file:
-      - ./backend/.env
-    expose:
-      - "4000"
-    volumes:
-      - ./backend/storage:/app/storage
-
-  frontend:
-    build:
-      context: ./frontend
-      dockerfile: Dockerfile
-    image: meta-account-manager-frontend:latest
-    container_name: meta-account-manager-frontend
-    restart: unless-stopped
-    depends_on:
-      - backend
     ports:
-      - "${PORT:-8080}:80"
+      - "4000:4000"
+    env_file:
+      - .env.meta
+    networks:
+      - shared
+networks:
+  shared:
+    external: true
