@@ -64,7 +64,16 @@ const readPublishStream = async (response, onProgress) => {
 };
 
 export const adsLaunchApi = {
-  getTemplates: () => apiRequest('/ads-launch/templates'),
+  getTemplates: (params = {}) => {
+    const query = new URLSearchParams();
+
+    if (params.templateType) {
+      query.set('templateType', params.templateType);
+    }
+
+    const queryString = query.toString();
+    return apiRequest(`/ads-launch/templates${queryString ? `?${queryString}` : ''}`);
+  },
   createTemplate: (payload) =>
     apiRequest('/ads-launch/templates', {
       method: 'POST',

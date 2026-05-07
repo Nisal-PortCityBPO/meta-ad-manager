@@ -1,5 +1,11 @@
 const mongoose = require('mongoose');
 
+const LAUNCH_TEMPLATE_TYPES = Object.freeze({
+  FULL: 'FULL',
+  CAMPAIGN: 'CAMPAIGN',
+  MEDIA: 'MEDIA',
+});
+
 const launchTemplateAssetSchema = new mongoose.Schema(
   {
     name: {
@@ -31,6 +37,11 @@ const launchTemplateAssetSchema = new mongoose.Schema(
 const launchTemplateConfigSchema = new mongoose.Schema(
   {
     launchLabel: {
+      type: String,
+      default: '',
+      trim: true,
+    },
+    brandId: {
       type: String,
       default: '',
       trim: true,
@@ -73,6 +84,11 @@ const launchTemplateConfigSchema = new mongoose.Schema(
       default: '',
       trim: true,
     },
+    websiteEvent: {
+      type: String,
+      default: '',
+      trim: true,
+    },
     headline: {
       type: String,
       default: '',
@@ -94,6 +110,11 @@ const launchTemplateConfigSchema = new mongoose.Schema(
       trim: true,
     },
     displayUrl: {
+      type: String,
+      default: '',
+      trim: true,
+    },
+    urlParameters: {
       type: String,
       default: '',
       trim: true,
@@ -139,9 +160,14 @@ const launchTemplateConfigSchema = new mongoose.Schema(
         default: 'AD_SET',
         trim: true,
       },
+      dynamicCreative: {
+        type: String,
+        default: 'ON',
+        trim: true,
+      },
       audienceAgeMin: {
         type: String,
-        default: '18',
+        default: '21',
         trim: true,
       },
       audienceAgeMax: {
@@ -173,6 +199,11 @@ const launchTemplateConfigSchema = new mongoose.Schema(
 
 const launchTemplateSnapshotSchema = new mongoose.Schema(
   {
+    brandName: {
+      type: String,
+      default: '',
+      trim: true,
+    },
     tokenLabel: {
       type: String,
       default: '',
@@ -224,6 +255,12 @@ const launchTemplateSchema = new mongoose.Schema(
       required: true,
       trim: true,
     },
+    templateType: {
+      type: String,
+      enum: Object.values(LAUNCH_TEMPLATE_TYPES),
+      default: LAUNCH_TEMPLATE_TYPES.FULL,
+      trim: true,
+    },
     config: {
       type: launchTemplateConfigSchema,
       default: () => ({}),
@@ -269,8 +306,10 @@ launchTemplateSchema.methods.toSafeObject = function toSafeObject() {
   return {
     id: this._id.toString(),
     name: this.name,
+    templateType: this.templateType || LAUNCH_TEMPLATE_TYPES.FULL,
     config: this.config,
     snapshot: {
+      brandName: this.snapshot?.brandName || '',
       tokenLabel: this.snapshot?.tokenLabel || '',
       pageName: this.snapshot?.pageName || '',
       pixelName: this.snapshot?.pixelName || '',
@@ -295,3 +334,4 @@ const LaunchTemplate =
   mongoose.models.LaunchTemplate || mongoose.model('LaunchTemplate', launchTemplateSchema);
 
 module.exports = LaunchTemplate;
+module.exports.LAUNCH_TEMPLATE_TYPES = LAUNCH_TEMPLATE_TYPES;

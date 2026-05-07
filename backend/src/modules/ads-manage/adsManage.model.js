@@ -140,6 +140,16 @@ const launchDetailsSchema = new mongoose.Schema(
       default: '',
       trim: true,
     },
+    brandId: {
+      type: String,
+      default: '',
+      trim: true,
+    },
+    brandName: {
+      type: String,
+      default: '',
+      trim: true,
+    },
     countries: {
       type: [String],
       default: [],
@@ -162,6 +172,11 @@ const launchDetailsSchema = new mongoose.Schema(
       type: metaIdSchema,
       default: () => ({}),
     },
+    websiteEvent: {
+      type: String,
+      default: '',
+      trim: true,
+    },
     headline: {
       type: String,
       default: '',
@@ -183,6 +198,11 @@ const launchDetailsSchema = new mongoose.Schema(
       trim: true,
     },
     displayUrl: {
+      type: String,
+      default: '',
+      trim: true,
+    },
+    urlParameters: {
       type: String,
       default: '',
       trim: true,
