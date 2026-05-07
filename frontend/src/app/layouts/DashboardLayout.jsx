@@ -7,6 +7,7 @@ import brandLogo from '../../assets/200m-logo.png';
 const navItemsConfig = [
   { to: '/dashboard', label: 'Dashboard', icon: LayoutDashboard },
   { to: '/overview', label: 'Overview', icon: BarChart3 },
+  { to: '/ads-launch', label: 'Ads Launch', icon: Megaphone, roles: [USER_ROLES.SUPER_ADMIN, USER_ROLES.ADMIN] },
   { to: '/tokens', label: 'Token Management', icon: KeyRound, roles: [USER_ROLES.SUPER_ADMIN, USER_ROLES.ADMIN] },
   { to: '/users', label: 'Users', icon: Users, roles: [USER_ROLES.SUPER_ADMIN] },
   { to: '/activity-logs', label: 'Activity Logs', icon: ClipboardList, roles: [USER_ROLES.SUPER_ADMIN] },
