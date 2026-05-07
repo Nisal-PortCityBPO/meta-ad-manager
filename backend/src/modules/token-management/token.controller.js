@@ -10,6 +10,7 @@ const createToken = asyncHandler(async (req, res) => {
   const token = await tokenService.createToken({
     label: req.body.label,
     purpose: req.body.purpose,
+    adsPowerProfile: req.body.adsPowerProfile,
     accessToken: req.body.accessToken,
     status: req.body.status,
     actor: req.user,
@@ -27,6 +28,7 @@ const updateToken = asyncHandler(async (req, res) => {
     tokenId: req.params.id,
     label: req.body.label,
     purpose: req.body.purpose,
+    adsPowerProfile: req.body.adsPowerProfile,
     accessToken: req.body.accessToken,
     status: req.body.status,
     actor: req.user,

@@ -1,29 +1,23 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   ArrowLeft,
   BadgeDollarSign,
   BriefcaseBusiness,
   ChevronDown,
   CircleCheck,
+  DownloadCloud,
   FileText,
   KeyRound,
   Megaphone,
   Radio,
   ShieldAlert,
   Users,
+  X,
 } from 'lucide-react';
 import DashboardHeader from '../../dashboard/components/DashboardHeader';
 import DashboardPanel from '../../dashboard/components/DashboardPanel';
 import { businessDataApi } from '../../dashboard/api/businessDataApi';
-
-const hardcodedBrandStats = {
-  A200M: { adSpend: '$12,480', campaigns: 18 },
-  ASIA100: { adSpend: '$8,920', campaigns: 11 },
-  ASIA200: { adSpend: '$15,340', campaigns: 23 },
-  ASIA300: { adSpend: '$6,175', campaigns: 9 },
-};
-
-const fallbackStats = { adSpend: '$3,500', campaigns: 5 };
+import { useMetaSync } from '../../dashboard/context/MetaSyncContext';
 
 const profileStatusStyles = {
   CONNECTED: 'bg-emerald-50 text-emerald-700',
@@ -44,6 +38,23 @@ const adAccountStatusStyles = {
   UNKNOWN: 'bg-slate-100 text-slate-600',
 };
 
+const deliveryStatusStyles = {
+  ACTIVE: 'bg-emerald-50 text-emerald-700',
+  PAUSED: 'bg-amber-50 text-amber-700',
+  CAMPAIGN_PAUSED: 'bg-amber-50 text-amber-700',
+  ADSET_PAUSED: 'bg-amber-50 text-amber-700',
+  PENDING_REVIEW: 'bg-amber-50 text-amber-700',
+  PREAPPROVED: 'bg-amber-50 text-amber-700',
+  BLOCKED: 'bg-red-50 text-red-700',
+  DISAPPROVED: 'bg-red-50 text-red-700',
+  WITH_ISSUES: 'bg-red-50 text-red-700',
+  DISABLED: 'bg-red-50 text-red-700',
+  DELETED: 'bg-red-50 text-red-700',
+  ARCHIVED: 'bg-slate-100 text-slate-600',
+  IN_PROCESS: 'bg-sky-50 text-sky-700',
+  UNKNOWN: 'bg-slate-100 text-slate-600',
+};
+
 const statusLabels = {
   CONNECTED: 'Connected',
   BLOCKED: 'Blocked',
@@ -54,18 +65,22 @@ const statusLabels = {
 const currencyFormatter = new Intl.NumberFormat('en-US', {
   style: 'currency',
   currency: 'USD',
-  maximumFractionDigits: 0,
+  maximumFractionDigits: 2,
 });
 
 const formatCurrencyAmount = (amount, currency = 'USD') => {
+  const numericAmount = Number(amount) || 0;
+  const hasCents = Math.abs(numericAmount % 1) > 0.005;
+
   try {
     return new Intl.NumberFormat('en-US', {
       style: 'currency',
       currency,
-      maximumFractionDigits: 0,
-    }).format(Number(amount) || 0);
+      minimumFractionDigits: hasCents ? 2 : 0,
+      maximumFractionDigits: 2,
+    }).format(numericAmount);
   } catch {
-    return currencyFormatter.format(Number(amount) || 0);
+    return currencyFormatter.format(numericAmount);
   }
 };
 
@@ -73,37 +88,96 @@ const socialAccountLabel = (count) => `${count} ${count === 1 ? 'social account'
 const profileLabel = (count) => `${count} ${count === 1 ? 'profile' : 'profiles'}`;
 const agencyLabel = (count) => `${count} ${count === 1 ? 'agency' : 'agencies'}`;
 
-const getBrandStats = (brand) => hardcodedBrandStats[brand.name] || fallbackStats;
+const getSpendLabel = (amount, currencies = []) => {
+  const uniqueCurrencies = Array.from(new Set(currencies.filter(Boolean)));
 
-const numberFromText = (value = '') =>
-  value.split('').reduce((total, character) => total + character.charCodeAt(0), 0);
+  if (uniqueCurrencies.length === 1) {
+    return formatCurrencyAmount(amount, uniqueCurrencies[0]);
+  }
 
-const getSocialAccountStats = (account, index = 0) => {
-  const seed = numberFromText(`${account.id}${account.name}`) + index * 67;
+  return uniqueCurrencies.length > 1 ? `${currencyFormatter.format(amount)} mixed` : currencyFormatter.format(amount);
+};
+
+const getSocialAccountStats = (account) => {
+  const profiles = account.businessProfiles || [];
+  const totalSpend = profiles.reduce((total, profile) => total + (Number(profile.totalSpend) || 0), 0);
+  const campaigns = profiles.reduce((total, profile) => total + (Number(profile.campaignCount) || 0), 0);
+  const currencies = profiles.map((profile) => profile.spendCurrency).filter((currency) => currency && currency !== 'MIXED');
 
   return {
-    adSpend: currencyFormatter.format(2400 + (seed % 11800)),
-    campaigns: 4 + (seed % 17),
+    adSpend: getSpendLabel(totalSpend, currencies),
+    campaigns,
   };
 };
 
-const getBusinessProfileStats = (profile, index = 0) => {
+const getBrandStats = (brand) => {
+  const accounts = brand.assignedSocialAccounts || [];
+  const stats = accounts.map((account) => getSocialAccountStats(account));
+  const totalSpend = accounts.flatMap((account) => account.businessProfiles || [])
+    .reduce((total, profile) => total + (Number(profile.totalSpend) || 0), 0);
+  const currencies = accounts.flatMap((account) => account.businessProfiles || [])
+    .map((profile) => profile.spendCurrency)
+    .filter((currency) => currency && currency !== 'MIXED');
+
+  return {
+    adSpend: getSpendLabel(totalSpend, currencies),
+    campaigns: stats.reduce((total, item) => total + item.campaigns, 0),
+  };
+};
+
+const getBusinessProfileStats = (profile) => {
+  const adAccounts = Array.isArray(profile.adAccounts) ? profile.adAccounts : [];
+  const adSetCount = adAccounts.reduce(
+    (total, account) =>
+      total +
+      (Array.isArray(account.campaigns)
+        ? account.campaigns.reduce(
+            (campaignTotal, campaign) =>
+              campaignTotal +
+              (Array.isArray(campaign.adSets)
+                ? campaign.adSets.length
+                : Number(campaign.adSetCount) || 0),
+            0
+          )
+        : 0),
+    0
+  );
+  const adCount = adAccounts.reduce(
+    (total, account) =>
+      total +
+      (Array.isArray(account.campaigns)
+        ? account.campaigns.reduce(
+            (campaignTotal, campaign) =>
+              campaignTotal +
+              (Array.isArray(campaign.adSets)
+                ? campaign.adSets.reduce(
+                    (adSetTotal, adSet) =>
+                      adSetTotal + (Array.isArray(adSet.ads) ? adSet.ads.length : Number(adSet.adCount) || 0),
+                    0
+                  )
+                : 0),
+            0
+          )
+        : 0),
+    0
+  );
+
   if (profile.assetMetricsStatus === 'SYNCED') {
     return {
       adAccountCount: profile.adAccountCount || 0,
-      facebookPageCount: profile.facebookPageCount || 0,
+      adSetCount,
+      adCount,
       campaignCount: profile.campaignCount || 0,
       spend: formatProfileSpend(profile),
     };
   }
 
-  const seed = numberFromText(`${profile.id}${profile.name}`) + index * 43;
-
   return {
-    adAccountCount: 1 + (seed % 6),
-    facebookPageCount: 1 + (seed % 4),
-    campaignCount: 5 + (seed % 22),
-    spend: currencyFormatter.format(1800 + (seed % 9400)),
+    adAccountCount: 0,
+    adSetCount: 0,
+    adCount: 0,
+    campaignCount: 0,
+    spend: currencyFormatter.format(0),
   };
 };
 
@@ -130,29 +204,7 @@ const formatProfileSpend = (profile) => {
     : currencyFormatter.format(amount);
 };
 
-const getDemoAdAccounts = (profile, profileIndex = 0) => {
-  const profileStats = getBusinessProfileStats(profile, profileIndex);
-  const count = Math.max(profileStats.adAccountCount || 0, 3);
-  const seed = numberFromText(`${profile.id}${profile.name}`) + profileIndex * 59;
-
-  return Array.from({ length: count }).map((_, index) => {
-    const isBlocked = (seed + index * 7) % 5 === 0;
-
-    return {
-      id: `demo-ad-account-${profile.id}-${index}`,
-      accountId: `${100000 + seed + index * 113}`,
-      name: `${profile.name} Ad Account ${index + 1}`,
-      currency: 'USD',
-      connectionStatus: isBlocked ? 'BLOCKED' : 'ACTIVE',
-      statusLabel: isBlocked ? 'Blocked' : 'Active',
-      campaignCount: 2 + ((seed + index * 3) % 12),
-      totalSpend: 850 + ((seed + index * 211) % 6200),
-      isDemo: true,
-    };
-  });
-};
-
-const getBusinessProfileAdAccounts = (profile, profileIndex = 0) => {
+const getBusinessProfileAdAccounts = (profile) => {
   if (Array.isArray(profile.adAccounts) && profile.adAccounts.length) {
     return profile.adAccounts.map((account) => ({
       ...account,
@@ -161,10 +213,160 @@ const getBusinessProfileAdAccounts = (profile, profileIndex = 0) => {
     }));
   }
 
-  return getDemoAdAccounts(profile, profileIndex);
+  return [];
 };
 
 const getAdAccountKey = (account) => account.id || account.accountId;
+
+const percentFormatter = new Intl.NumberFormat('en-US', {
+  maximumFractionDigits: 2,
+  minimumFractionDigits: 0,
+});
+
+const numberFormatter = new Intl.NumberFormat('en-US');
+
+const getRatio = (amount, count) => (count ? amount / count : 0);
+
+const getDeliveryStatusLabel = (status) => {
+  if (!status) {
+    return 'Unknown';
+  }
+
+  if (status === 'ACTIVE') {
+    return 'Active';
+  }
+
+  if (status === 'PAUSED') {
+    return 'Paused';
+  }
+
+  if (status === 'BLOCKED') {
+    return 'Blocked';
+  }
+
+  return status
+    .toLowerCase()
+    .split('_')
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(' ');
+};
+
+const normalizeStoredMetric = (value) => Number(value) || 0;
+
+const getStoredAdStatus = (status) => {
+  if (status === 'ACTIVE' || status === 'PAUSED' || status === 'BLOCKED') {
+    return status;
+  }
+
+  return status || 'UNKNOWN';
+};
+
+const getStoredAdHierarchy = (adAccount) => {
+  if (!Array.isArray(adAccount?.campaigns) || !adAccount.campaigns.length) {
+    return null;
+  }
+
+  const campaigns = [];
+  const adSets = [];
+  const ads = [];
+
+  adAccount.campaigns.forEach((campaign) => {
+    const campaignAdSets = Array.isArray(campaign.adSets) ? campaign.adSets : [];
+
+    campaigns.push({
+      id: campaign.id,
+      name: campaign.name || `Campaign ${campaign.id}`,
+      status: getStoredAdStatus(campaign.status),
+      spend: normalizeStoredMetric(campaign.spend ?? campaign.insights?.spend),
+      clicks: normalizeStoredMetric(campaign.clicks ?? campaign.insights?.clicks),
+      leads: normalizeStoredMetric(campaign.leads ?? campaign.insights?.leads),
+      cpr: normalizeStoredMetric(campaign.cpr ?? campaign.insights?.cpr ?? campaign.insights?.cpl),
+      adSetCount: normalizeStoredMetric(campaign.adSetCount || campaignAdSets.length),
+    });
+
+    campaignAdSets.forEach((adSet) => {
+      const adSetAds = Array.isArray(adSet.ads) ? adSet.ads : [];
+
+      adSets.push({
+        id: adSet.id,
+        campaignId: campaign.id,
+        campaignName: campaign.name || `Campaign ${campaign.id}`,
+        name: adSet.name || `Ad Set ${adSet.id}`,
+        status: getStoredAdStatus(adSet.status),
+        spend: normalizeStoredMetric(adSet.spend ?? adSet.insights?.spend),
+        clicks: normalizeStoredMetric(adSet.clicks ?? adSet.insights?.clicks),
+        leads: normalizeStoredMetric(adSet.leads ?? adSet.insights?.leads),
+        cpr: normalizeStoredMetric(adSet.cpr ?? adSet.insights?.cpr ?? adSet.insights?.cpl),
+        adCount: normalizeStoredMetric(adSet.adCount || adSetAds.length),
+      });
+
+      adSetAds.forEach((ad) => {
+        const insights = ad.insights || {};
+        const details = ad.details || {};
+        const media = ad.media || {};
+
+        ads.push({
+          id: ad.id,
+          adSetId: adSet.id,
+          adSetName: adSet.name || `Ad Set ${adSet.id}`,
+          campaignId: campaign.id,
+          campaignName: campaign.name || `Campaign ${campaign.id}`,
+          title: ad.title || ad.name || `Ad ${ad.id}`,
+          status: getStoredAdStatus(ad.status),
+          configuredStatus: ad.configuredStatus || null,
+          effectiveStatus: ad.effectiveStatus || null,
+          pageName: ad.pageName || details.page || 'Unknown page',
+          pageId: ad.pageId || details.pageId || null,
+          pageStatus: getStoredAdStatus(ad.pageStatus || details.pageStatus),
+          clicks: normalizeStoredMetric(ad.clicks ?? insights.clicks),
+          leads: normalizeStoredMetric(ad.leads ?? insights.leads),
+          cpr: normalizeStoredMetric(ad.cpr ?? insights.cpr ?? insights.cpl),
+          budget: normalizeStoredMetric(ad.budget),
+          spend: normalizeStoredMetric(ad.spend ?? insights.spend),
+          impressions: normalizeStoredMetric(ad.impressions ?? insights.impressions),
+          reach: normalizeStoredMetric(ad.reach ?? insights.reach),
+          ctr: normalizeStoredMetric(ad.ctr ?? insights.ctr),
+          cpc: normalizeStoredMetric(ad.cpc ?? insights.cpc),
+          cpl: normalizeStoredMetric(ad.cpl ?? insights.cpl ?? insights.cpr),
+          creativeId: ad.creativeId || details.creativeId || null,
+          videoId: ad.videoId || details.videoId || media.videoId || null,
+          imageHash: ad.imageHash || details.imageHash || media.imageHash || null,
+          storyId: ad.storyId || details.storyId || null,
+          mediaType: ad.mediaType || media.type || 'Image',
+          thumbnailUrl: media.thumbnailUrl || media.imageUrl || null,
+        });
+      });
+    });
+  });
+
+  return {
+    campaigns,
+    adSets,
+    ads,
+  };
+};
+
+const buildAdAccountHierarchy = (adAccount) => {
+  if (!adAccount) {
+    return {
+      campaigns: [],
+      adSets: [],
+      ads: [],
+    };
+  }
+
+  const storedHierarchy = getStoredAdHierarchy(adAccount);
+
+  if (storedHierarchy) {
+    return storedHierarchy;
+  }
+
+  return {
+    campaigns: [],
+    adSets: [],
+    ads: [],
+  };
+};
 
 const SocialAccountAvatar = ({ account, size = 'md' }) => {
   const [imageFailed, setImageFailed] = useState(false);
@@ -217,12 +419,12 @@ const BrandCard = ({ brand, onSelect }) => {
           </p>
         </div>
 
-        <div className="shrink-0 rounded-xl border border-sky-100 bg-sky-50 px-3 py-2 text-right">
+        <div className="min-w-max shrink-0 rounded-xl border border-sky-100 bg-sky-50 px-4 py-2 text-right">
           <p className="flex items-center justify-end gap-1 text-xs font-black uppercase tracking-[0.12em] text-sky-700">
             <BadgeDollarSign size={13} strokeWidth={2.2} />
             Spend
           </p>
-          <p className="mt-1 text-base font-black text-slate-950">{stats.adSpend}</p>
+          <p className="mt-1 whitespace-nowrap text-base font-black text-slate-950">{stats.adSpend}</p>
           <p className="mt-1 flex items-center justify-end gap-1 text-xs font-bold text-slate-500">
             <Megaphone size={13} strokeWidth={2.2} />
             {stats.campaigns} campaigns
@@ -337,7 +539,7 @@ const BrandTreeSidebar = ({ brands, onBack, onSelectAccount, onSelectBrand, sele
                       {socialAccountLabel(brand.socialAccountCount || 0)}
                     </p>
                   </div>
-                  <p className="shrink-0 text-xs font-black text-sky-700">{stats.adSpend}</p>
+                  <p className="max-w-28 shrink-0 break-words text-right text-xs font-black leading-tight text-sky-700">{stats.adSpend}</p>
                 </div>
               </button>
 
@@ -356,13 +558,13 @@ const BrandTreeSidebar = ({ brands, onBack, onSelectAccount, onSelectBrand, sele
   );
 };
 
-const SocialAccountTable = ({ accounts, onSelectAccount }) => (
+const SocialAccountTable = ({ accounts, onSelectAccount, onSyncAccount, syncingAccountId }) => (
   <div className="overflow-hidden rounded-2xl border border-sky-100 bg-white">
     <div className="overflow-x-auto">
       <table className="min-w-full divide-y divide-sky-50">
         <thead className="bg-sky-50/70">
           <tr>
-            {['Social account', 'Profiles', 'Agency', 'Connection', 'Spend', 'Campaigns'].map((heading) => (
+            {['Social account', 'AdsPower Profile', 'Profiles', 'Agency', 'Connection', 'Spend', 'Campaigns', 'Actions'].map((heading) => (
               <th key={heading} className="px-5 py-4 text-left text-xs font-black uppercase tracking-[0.16em] text-sky-700">
                 {heading}
               </th>
@@ -386,6 +588,9 @@ const SocialAccountTable = ({ accounts, onSelectAccount }) => (
                     {account.sourceTokenLabel || 'No token label'}
                   </p>
                 </td>
+                <td className="px-5 py-4 text-sm font-bold text-slate-700">
+                  {account.adsPowerProfile || <span className="font-semibold text-slate-400">Not set</span>}
+                </td>
                 <td className="px-5 py-4">
                   <span className="inline-flex items-center gap-2 rounded-full bg-amber-50 px-3 py-1 text-xs font-black text-amber-700">
                     <BriefcaseBusiness size={13} strokeWidth={2.4} />
@@ -401,8 +606,8 @@ const SocialAccountTable = ({ accounts, onSelectAccount }) => (
                   </span>
                 </td>
                 <td className="px-5 py-4">
-                  <div className="w-fit rounded-xl border border-sky-100 bg-sky-50 px-3 py-2">
-                    <p className="flex items-center gap-1 text-xs font-black text-sky-700">
+                  <div className="min-w-max rounded-xl border border-sky-100 bg-sky-50 px-3 py-2">
+                    <p className="flex items-center gap-1 whitespace-nowrap text-xs font-black text-sky-700">
                       <BadgeDollarSign size={13} strokeWidth={2.2} />
                       {stats.adSpend}
                     </p>
@@ -415,6 +620,21 @@ const SocialAccountTable = ({ accounts, onSelectAccount }) => (
                       {stats.campaigns}
                     </p>
                   </div>
+                </td>
+                <td className="px-5 py-4">
+                  <button
+                    type="button"
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      onSyncAccount(account);
+                    }}
+                    disabled={syncingAccountId === account.id || !account.sourceTokenId}
+                    className="flex h-10 items-center gap-2 rounded-xl bg-sky-600 px-3 text-sm font-bold text-white transition hover:bg-sky-700 disabled:cursor-not-allowed disabled:opacity-60"
+                    title={account.sourceTokenId ? 'Fetch latest Meta data for this social account' : 'No saved token for this social account'}
+                  >
+                    <DownloadCloud size={16} strokeWidth={2.2} />
+                    {syncingAccountId === account.id ? 'Fetching' : 'Fetch'}
+                  </button>
                 </td>
               </tr>
             );
@@ -445,21 +665,21 @@ const BusinessProfileCard = ({ index, onSelect, profile }) => {
       tone: 'border-amber-100 bg-amber-50 text-amber-700',
     },
     {
-      icon: FileText,
-      label: 'FB pages',
-      value: stats.facebookPageCount,
-      tone: 'border-sky-100 bg-sky-50 text-sky-700',
-    },
-    {
       icon: Megaphone,
       label: 'Campaigns',
       value: stats.campaignCount,
       tone: 'border-indigo-100 bg-indigo-50 text-indigo-700',
     },
     {
-      icon: BadgeDollarSign,
-      label: 'Spend',
-      value: stats.spend,
+      icon: Megaphone,
+      label: 'Ad Sets',
+      value: stats.adSetCount,
+      tone: 'border-sky-100 bg-sky-50 text-sky-700',
+    },
+    {
+      icon: FileText,
+      label: 'Ads',
+      value: stats.adCount,
       tone: 'border-emerald-100 bg-emerald-50 text-emerald-700',
     },
   ];
@@ -478,9 +698,12 @@ const BusinessProfileCard = ({ index, onSelect, profile }) => {
           </p>
           <p className="mt-2 text-xs font-semibold text-slate-500">Meta ID: {profile.metaBusinessId}</p>
         </div>
-        <span className={`shrink-0 rounded-full px-2.5 py-1 text-xs font-black ${profileStatusStyles[profile.metaStatus] || profileStatusStyles.UNKNOWN}`}>
-          {statusLabels[profile.metaStatus] || 'Unknown'}
-        </span>
+        <div className="shrink-0 text-right">
+          <span className={`inline-flex rounded-full px-2.5 py-1 text-xs font-black ${profileStatusStyles[profile.metaStatus] || profileStatusStyles.UNKNOWN}`}>
+            {statusLabels[profile.metaStatus] || 'Unknown'}
+          </span>
+          <p className="mt-2 max-w-32 break-words text-sm font-black leading-tight text-slate-950">{stats.spend}</p>
+        </div>
       </div>
 
       <div className="mt-4 grid gap-3 sm:grid-cols-2">
@@ -492,7 +715,7 @@ const BusinessProfileCard = ({ index, onSelect, profile }) => {
       <div className="mt-3 flex flex-wrap gap-x-4 gap-y-1 text-xs font-semibold text-slate-400">
         <span>Checked {formatDate(profile.lastStatusCheckedAt)}</span>
         <span>
-          Assets {profile.assetMetricsStatus === 'SYNCED' ? formatDate(profile.assetMetricsSyncedAt) : 'Using demo data'}
+          Assets {profile.assetMetricsStatus === 'SYNCED' ? formatDate(profile.assetMetricsSyncedAt) : 'Not fetched yet'}
         </span>
       </div>
     </button>
@@ -501,6 +724,14 @@ const BusinessProfileCard = ({ index, onSelect, profile }) => {
 
 const BusinessProfileDetailView = ({ onSelectAdAccount, selectedProfile, selectedProfileIndex }) => {
   const adAccounts = getBusinessProfileAdAccounts(selectedProfile, selectedProfileIndex);
+
+  if (!adAccounts.length) {
+    return (
+      <div className="rounded-2xl border border-dashed border-sky-100 bg-white px-5 py-10 text-center text-sm font-semibold text-slate-500 shadow-sm shadow-sky-50">
+        No real ad accounts are saved for this business profile yet. Use the social account Fetch action to pull Meta data.
+      </div>
+    );
+  }
 
   return (
     <div className="overflow-hidden rounded-2xl border border-sky-100 bg-white shadow-sm shadow-sky-50">
@@ -557,9 +788,359 @@ const BusinessProfileDetailView = ({ onSelectAdAccount, selectedProfile, selecte
   );
 };
 
-const AdAccountDetailView = () => (
-  <div className="min-h-full rounded-2xl border border-sky-100 bg-white shadow-sm shadow-sky-50" />
+const StatusPill = ({ status }) => (
+  <span className={`inline-flex rounded-full px-3 py-1 text-xs font-black ${deliveryStatusStyles[status] || deliveryStatusStyles.UNKNOWN}`}>
+    {getDeliveryStatusLabel(status)}
+  </span>
 );
+
+const AdAccountTabs = ({ activeTab, onChange }) => {
+  const tabs = [
+    { id: 'campaigns', label: 'Campaigns' },
+    { id: 'adSets', label: 'Ad Sets' },
+    { id: 'ads', label: 'Ads' },
+  ];
+
+  return (
+    <div className="flex flex-wrap gap-2 border-b border-sky-50 bg-white px-4 pt-4">
+      {tabs.map((tab) => (
+        <button
+          key={tab.id}
+          type="button"
+          onClick={() => onChange(tab.id)}
+          className={`rounded-t-xl px-4 py-2 text-sm font-black transition ${
+            activeTab === tab.id
+              ? 'bg-sky-50 text-sky-700'
+              : 'text-slate-500 hover:bg-sky-50/70 hover:text-sky-700'
+          }`}
+        >
+          {tab.label}
+        </button>
+      ))}
+    </div>
+  );
+};
+
+const MetricText = ({ children }) => (
+  <span className="text-sm font-black text-slate-800">{children}</span>
+);
+
+const EmptyAdHierarchyState = ({ selectedAdAccount }) => (
+  <div className="flex min-h-0 flex-1 items-center justify-center px-5 py-10 text-center">
+    <div className="max-w-md">
+      <Megaphone size={34} strokeWidth={1.9} className="mx-auto text-sky-500" />
+      <h3 className="mt-4 text-base font-black text-slate-950">No real ad hierarchy saved yet</h3>
+      <p className="mt-2 text-sm font-semibold leading-6 text-slate-500">
+        {selectedAdAccount?.name || 'This ad account'} has no stored campaigns, ad sets, or ads. Click Fetch on the related social account to sync real Meta data.
+      </p>
+    </div>
+  </div>
+);
+
+const CampaignsTable = ({ campaigns, onSelectCampaign }) => (
+  <div className="min-h-0 flex-1 overflow-auto">
+    <table className="min-w-full divide-y divide-sky-50">
+      <thead className="sticky top-0 z-10 bg-sky-50/95 backdrop-blur">
+        <tr>
+          {['Campaign', 'Status', 'Spending', 'Clicks', 'Leads', 'CPR', 'Ad Sets'].map((heading) => (
+            <th key={heading} className="px-5 py-4 text-left text-xs font-black uppercase tracking-[0.16em] text-sky-700">
+              {heading}
+            </th>
+          ))}
+        </tr>
+      </thead>
+      <tbody className="divide-y divide-sky-50">
+        {campaigns.map((campaign) => (
+          <tr
+            key={campaign.id}
+            onClick={() => onSelectCampaign(campaign)}
+            className="cursor-pointer align-middle transition hover:bg-sky-50/70"
+          >
+            <td className="px-5 py-4 font-black text-slate-950">{campaign.name}</td>
+            <td className="px-5 py-4"><StatusPill status={campaign.status} /></td>
+            <td className="px-5 py-4"><MetricText>{formatCurrencyAmount(campaign.spend)}</MetricText></td>
+            <td className="px-5 py-4"><MetricText>{numberFormatter.format(campaign.clicks)}</MetricText></td>
+            <td className="px-5 py-4"><MetricText>{numberFormatter.format(campaign.leads)}</MetricText></td>
+            <td className="px-5 py-4"><MetricText>{formatCurrencyAmount(campaign.cpr || getRatio(campaign.spend, campaign.leads))}</MetricText></td>
+            <td className="px-5 py-4"><MetricText>{campaign.adSetCount}</MetricText></td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  </div>
+);
+
+const AdSetsTable = ({ adSets, onSelectAdSet }) => (
+  <div className="min-h-0 flex-1 overflow-auto">
+    <table className="min-w-full divide-y divide-sky-50">
+      <thead className="sticky top-0 z-10 bg-sky-50/95 backdrop-blur">
+        <tr>
+          {['Ad Set', 'Status', 'Spending', 'Clicks', 'Leads', 'CPR', 'Ads'].map((heading) => (
+            <th key={heading} className="px-5 py-4 text-left text-xs font-black uppercase tracking-[0.16em] text-sky-700">
+              {heading}
+            </th>
+          ))}
+        </tr>
+      </thead>
+      <tbody className="divide-y divide-sky-50">
+        {adSets.map((adSet) => (
+          <tr
+            key={adSet.id}
+            onClick={() => onSelectAdSet(adSet)}
+            className="cursor-pointer align-middle transition hover:bg-sky-50/70"
+          >
+            <td className="px-5 py-4">
+              <p className="font-black text-slate-950">{adSet.name}</p>
+              <p className="mt-1 text-xs font-semibold text-slate-400">{adSet.campaignName}</p>
+            </td>
+            <td className="px-5 py-4"><StatusPill status={adSet.status} /></td>
+            <td className="px-5 py-4"><MetricText>{formatCurrencyAmount(adSet.spend)}</MetricText></td>
+            <td className="px-5 py-4"><MetricText>{numberFormatter.format(adSet.clicks)}</MetricText></td>
+            <td className="px-5 py-4"><MetricText>{numberFormatter.format(adSet.leads)}</MetricText></td>
+            <td className="px-5 py-4"><MetricText>{formatCurrencyAmount(adSet.cpr || getRatio(adSet.spend, adSet.leads))}</MetricText></td>
+            <td className="px-5 py-4"><MetricText>{adSet.adCount}</MetricText></td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  </div>
+);
+
+const AdsTable = ({ ads, onOpenAd }) => (
+  <div className="min-h-0 flex-1 overflow-auto">
+    <table className="min-w-full divide-y divide-sky-50">
+      <thead className="sticky top-0 z-10 bg-sky-50/95 backdrop-blur">
+        <tr>
+          {['Ad', 'Status', 'FB Page', 'Page Status', 'Clicks', 'CPR', 'Budget', 'Spending'].map((heading) => (
+            <th key={heading} className="px-5 py-4 text-left text-xs font-black uppercase tracking-[0.16em] text-sky-700">
+              {heading}
+            </th>
+          ))}
+        </tr>
+      </thead>
+      <tbody className="divide-y divide-sky-50">
+        {ads.map((ad) => (
+          <tr
+            key={ad.id}
+            onClick={() => onOpenAd(ad)}
+            className="cursor-pointer align-middle transition hover:bg-sky-50/70"
+          >
+            <td className="px-5 py-4">
+              <p className="font-black text-slate-950">{ad.title}</p>
+              <p className="mt-1 text-xs font-semibold text-slate-400">ID: {ad.id}</p>
+            </td>
+            <td className="px-5 py-4"><StatusPill status={ad.status} /></td>
+            <td className="px-5 py-4 font-bold text-slate-700">{ad.pageName}</td>
+            <td className="px-5 py-4"><StatusPill status={ad.pageStatus} /></td>
+            <td className="px-5 py-4"><MetricText>{numberFormatter.format(ad.clicks)}</MetricText></td>
+            <td className="px-5 py-4"><MetricText>{formatCurrencyAmount(ad.cpr || getRatio(ad.spend, ad.leads))}</MetricText></td>
+            <td className="px-5 py-4"><MetricText>{formatCurrencyAmount(ad.budget)}</MetricText></td>
+            <td className="px-5 py-4"><MetricText>{formatCurrencyAmount(ad.spend)}</MetricText></td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  </div>
+);
+
+const DetailItem = ({ label, value }) => (
+  <div className="rounded-xl border border-sky-50 bg-sky-50/60 px-3 py-2">
+    <p className="text-xs font-black uppercase tracking-[0.12em] text-sky-700">{label}</p>
+    <p className="mt-1 break-words text-sm font-bold text-slate-800">{value || '-'}</p>
+  </div>
+);
+
+const AdDetailsModal = ({ ad, context, onClose }) => {
+  if (!ad) {
+    return null;
+  }
+
+  const insights = [
+    ['Spend', formatCurrencyAmount(ad.spend)],
+    ['Impressions', numberFormatter.format(ad.impressions)],
+    ['Reach', numberFormatter.format(ad.reach)],
+    ['Clicks', numberFormatter.format(ad.clicks)],
+    ['Leads', numberFormatter.format(ad.leads)],
+    ['CTR', `${percentFormatter.format(ad.ctr)}%`],
+    ['CPC', formatCurrencyAmount(ad.cpc)],
+    ['CPL', formatCurrencyAmount(ad.cpl)],
+  ];
+
+  const details = [
+    ['Ad ID', ad.id],
+    ['Status', getDeliveryStatusLabel(ad.status)],
+    ['Effective Status', getDeliveryStatusLabel(ad.effectiveStatus)],
+    ['Configured Status', getDeliveryStatusLabel(ad.configuredStatus)],
+    ['Page', ad.pageName],
+    ['Page ID', ad.pageId],
+    ['Page Status', getDeliveryStatusLabel(ad.pageStatus)],
+    ['Creative ID', ad.creativeId],
+    ['Video ID', ad.videoId],
+    ['Image Hash', ad.imageHash],
+    ['Story ID', ad.storyId],
+  ];
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/40 p-4">
+      <div className="max-h-[90vh] w-full max-w-5xl overflow-y-auto rounded-2xl bg-white shadow-2xl shadow-slate-900/20">
+        <div className="sticky top-0 z-10 flex items-start justify-between gap-4 border-b border-sky-50 bg-white px-5 py-4">
+          <div className="min-w-0">
+            <p className="text-xs font-black uppercase tracking-[0.14em] text-sky-700">
+              {context.socialAccount} / {context.businessProfile} / {context.adAccount} / {ad.campaignName} / {ad.adSetName}
+            </p>
+            <h3 className="mt-2 truncate text-xl font-black text-slate-950">{ad.title}</h3>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-sky-100 text-slate-500 transition hover:bg-sky-50 hover:text-sky-700"
+            title="Close"
+          >
+            <X size={18} strokeWidth={2.3} />
+          </button>
+        </div>
+
+        <div className="grid gap-5 p-5 lg:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)]">
+          <div className="rounded-2xl border border-sky-100 bg-slate-950 p-4 text-white">
+            <div className="flex aspect-video items-center justify-center rounded-xl bg-slate-800">
+              {ad.thumbnailUrl ? (
+                <img
+                  src={ad.thumbnailUrl}
+                  alt=""
+                  className="h-full w-full rounded-xl object-contain"
+                  referrerPolicy="no-referrer"
+                />
+              ) : (
+                <div className="text-center">
+                  <FileText size={38} strokeWidth={1.8} className="mx-auto text-sky-300" />
+                  <p className="mt-3 text-sm font-black">{ad.mediaType} preview</p>
+                  <p className="mt-1 text-xs font-semibold text-slate-300">
+                    {ad.videoId ? `Thumbnail for ${ad.videoId}` : ad.imageHash}
+                  </p>
+                </div>
+              )}
+            </div>
+          </div>
+
+          <div className="space-y-5">
+            <section>
+              <h4 className="text-sm font-black uppercase tracking-[0.14em] text-sky-700">Insights</h4>
+              <div className="mt-3 grid gap-3 sm:grid-cols-2">
+                {insights.map(([label, value]) => (
+                  <DetailItem key={label} label={label} value={value} />
+                ))}
+              </div>
+            </section>
+
+            <section>
+              <h4 className="text-sm font-black uppercase tracking-[0.14em] text-sky-700">Ad Details</h4>
+              <div className="mt-3 grid gap-3 sm:grid-cols-2">
+                {details.map(([label, value]) => (
+                  <DetailItem key={label} label={label} value={value} />
+                ))}
+              </div>
+            </section>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+const AdAccountDetailView = ({ selectedAccount, selectedAdAccount, selectedProfile }) => {
+  const [activeTab, setActiveTab] = useState('campaigns');
+  const [selectedAd, setSelectedAd] = useState(null);
+  const [selectedCampaignId, setSelectedCampaignId] = useState(null);
+  const [selectedAdSetId, setSelectedAdSetId] = useState(null);
+  const hierarchy = buildAdAccountHierarchy(selectedAdAccount);
+  const selectedCampaign = hierarchy.campaigns.find((campaign) => campaign.id === selectedCampaignId);
+  const selectedAdSet = hierarchy.adSets.find((adSet) => adSet.id === selectedAdSetId);
+  const visibleAdSets = selectedCampaignId
+    ? hierarchy.adSets.filter((adSet) => adSet.campaignId === selectedCampaignId)
+    : hierarchy.adSets;
+  const visibleAds = selectedAdSetId
+    ? hierarchy.ads.filter((ad) => ad.adSetId === selectedAdSetId)
+    : selectedCampaignId
+      ? hierarchy.ads.filter((ad) => ad.campaignId === selectedCampaignId)
+      : hierarchy.ads;
+  const handleTabChange = (tabId) => {
+    setActiveTab(tabId);
+
+    if (tabId === 'campaigns') {
+      setSelectedCampaignId(null);
+      setSelectedAdSetId(null);
+    }
+
+    if (tabId === 'adSets') {
+      setSelectedAdSetId(null);
+    }
+  };
+  const selectCampaign = (campaign) => {
+    setSelectedCampaignId(campaign.id);
+    setSelectedAdSetId(null);
+    setActiveTab('adSets');
+  };
+  const selectAdSet = (adSet) => {
+    setSelectedCampaignId(adSet.campaignId);
+    setSelectedAdSetId(adSet.id);
+    setActiveTab('ads');
+  };
+
+  return (
+    <>
+      <div className="flex h-full min-h-[28rem] flex-col overflow-hidden rounded-2xl border border-sky-100 bg-white shadow-sm shadow-sky-50">
+        <AdAccountTabs activeTab={activeTab} onChange={handleTabChange} />
+
+        {selectedCampaign || selectedAdSet ? (
+          <div className="flex flex-wrap items-center gap-2 border-b border-sky-50 bg-sky-50/40 px-5 py-3">
+            {selectedCampaign ? (
+              <span className="inline-flex items-center gap-1.5 rounded-full bg-white px-3 py-1 text-xs font-black text-sky-700 ring-1 ring-sky-100">
+                Campaign: {selectedCampaign.name}
+              </span>
+            ) : null}
+            {selectedAdSet ? (
+              <span className="inline-flex items-center gap-1.5 rounded-full bg-white px-3 py-1 text-xs font-black text-indigo-700 ring-1 ring-indigo-100">
+                Ad set: {selectedAdSet.name}
+              </span>
+            ) : null}
+          </div>
+        ) : null}
+
+        {activeTab === 'campaigns' ? (
+          hierarchy.campaigns.length ? (
+            <CampaignsTable campaigns={hierarchy.campaigns} onSelectCampaign={selectCampaign} />
+          ) : (
+            <EmptyAdHierarchyState selectedAdAccount={selectedAdAccount} />
+          )
+        ) : null}
+        {activeTab === 'adSets' ? (
+          visibleAdSets.length ? (
+            <AdSetsTable adSets={visibleAdSets} onSelectAdSet={selectAdSet} />
+          ) : (
+            <EmptyAdHierarchyState selectedAdAccount={selectedAdAccount} />
+          )
+        ) : null}
+        {activeTab === 'ads' ? (
+          visibleAds.length ? (
+            <AdsTable ads={visibleAds} onOpenAd={setSelectedAd} />
+          ) : (
+            <EmptyAdHierarchyState selectedAdAccount={selectedAdAccount} />
+          )
+        ) : null}
+      </div>
+
+      <AdDetailsModal
+        ad={selectedAd}
+        context={{
+          socialAccount: selectedAccount.name,
+          businessProfile: selectedProfile.name,
+          adAccount: selectedAdAccount.name,
+        }}
+        onClose={() => setSelectedAd(null)}
+      />
+    </>
+  );
+};
 
 const SelectedBrandView = ({
   brand,
@@ -569,10 +1150,12 @@ const SelectedBrandView = ({
   onSelectAdAccount,
   onSelectBrand,
   onSelectProfile,
+  onSyncAccount,
   selectedAccountId,
   selectedAdAccountId,
   selectedBrandId,
   selectedProfileId,
+  syncingAccountId,
 }) => {
   const stats = getBrandStats(brand);
   const accounts = brand.assignedSocialAccounts || [];
@@ -706,24 +1289,24 @@ const SelectedBrandView = ({
               </label>
             ) : null}
 
-            <div className="grid grid-cols-2 gap-3 sm:w-72">
-              <div className="rounded-xl border border-sky-100 bg-sky-50 px-4 py-3">
+            <div className="grid w-full grid-cols-1 gap-3 sm:w-auto sm:min-w-[22rem] sm:grid-cols-[minmax(max-content,1.2fr)_minmax(8rem,0.8fr)] xl:max-w-[32rem]">
+              <div className="min-w-0 rounded-xl border border-sky-100 bg-sky-50 px-4 py-3">
                 <p className="flex items-center gap-1 text-xs font-black uppercase tracking-[0.12em] text-sky-700">
                   <BadgeDollarSign size={13} strokeWidth={2.2} />
                   Spend
                 </p>
-                <p className="mt-2 text-xl font-black text-slate-950">
+                <p className="mt-2 break-words text-xl font-black leading-tight text-slate-950">
                   {selectedAdAccount
                     ? formatCurrencyAmount(selectedAdAccount.totalSpend, selectedAdAccount.currency || 'USD')
                     : selectedProfileStats?.spend || selectedAccountStats?.adSpend || stats.adSpend}
                 </p>
               </div>
-              <div className="rounded-xl border border-indigo-100 bg-indigo-50 px-4 py-3">
+              <div className="min-w-0 rounded-xl border border-indigo-100 bg-indigo-50 px-4 py-3">
                 <p className="flex items-center gap-1 text-xs font-black uppercase tracking-[0.12em] text-indigo-700">
                   <Megaphone size={13} strokeWidth={2.2} />
                   Campaigns
                 </p>
-                <p className="mt-2 text-xl font-black text-slate-950">
+                <p className="mt-2 break-words text-xl font-black leading-tight text-slate-950">
                   {selectedAdAccount
                     ? selectedAdAccount.campaignCount || 0
                     : selectedProfileStats?.campaignCount || selectedAccountStats?.campaigns || stats.campaigns}
@@ -736,7 +1319,12 @@ const SelectedBrandView = ({
         <div className="mt-4 min-h-0 flex-1 overflow-y-auto pr-1">
           {selectedAccount ? (
             selectedAdAccount ? (
-              <AdAccountDetailView />
+              <AdAccountDetailView
+                key={getAdAccountKey(selectedAdAccount)}
+                selectedAccount={selectedAccount}
+                selectedAdAccount={selectedAdAccount}
+                selectedProfile={selectedProfile}
+              />
             ) : selectedProfile ? (
               <BusinessProfileDetailView
                 onSelectAdAccount={onSelectAdAccount}
@@ -760,7 +1348,12 @@ const SelectedBrandView = ({
               </p>
             )
           ) : accounts.length ? (
-            <SocialAccountTable accounts={accounts} onSelectAccount={onSelectAccount} />
+            <SocialAccountTable
+              accounts={accounts}
+              onSelectAccount={onSelectAccount}
+              onSyncAccount={onSyncAccount}
+              syncingAccountId={syncingAccountId}
+            />
           ) : (
             <p className="rounded-2xl border border-dashed border-sky-100 bg-white px-5 py-10 text-center text-sm font-semibold text-slate-500">
               No social accounts assigned to this brand yet.
@@ -780,6 +1373,8 @@ const OverviewPage = () => {
   const [selectedProfileId, setSelectedProfileId] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const loadOverviewRef = useRef(null);
+  const { startSocialAccountSync, syncingAccountId } = useMetaSync();
   const selectedBrand = brands.find((brand) => brand.id === selectedBrandId);
 
   const loadOverview = async () => {
@@ -794,6 +1389,19 @@ const OverviewPage = () => {
       setLoading(false);
     }
   };
+
+  useEffect(() => {
+    loadOverviewRef.current = loadOverview;
+  });
+
+  useEffect(() => {
+    const refreshAfterSync = () => {
+      loadOverviewRef.current?.();
+    };
+
+    window.addEventListener('meta-sync-completed', refreshAfterSync);
+    return () => window.removeEventListener('meta-sync-completed', refreshAfterSync);
+  }, []);
 
   const selectBrand = (brandId) => {
     setSelectedBrandId(brandId);
@@ -885,10 +1493,12 @@ const OverviewPage = () => {
             onSelectAdAccount={setSelectedAdAccountId}
             onSelectBrand={selectBrand}
             onSelectProfile={selectProfile}
+            onSyncAccount={startSocialAccountSync}
             selectedAccountId={selectedAccountId}
             selectedAdAccountId={selectedAdAccountId}
             selectedBrandId={selectedBrandId}
             selectedProfileId={selectedProfileId}
+            syncingAccountId={syncingAccountId}
           />
         </div>
       ) : brands.length ? (

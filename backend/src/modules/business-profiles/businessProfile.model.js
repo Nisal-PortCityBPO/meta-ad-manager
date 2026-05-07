@@ -144,6 +144,14 @@ const businessProfileSchema = new mongoose.Schema(
             default: 0,
             min: 0,
           },
+          campaigns: {
+            type: [mongoose.Schema.Types.Mixed],
+            default: [],
+          },
+          hierarchySyncedAt: {
+            type: Date,
+            default: null,
+          },
         },
       ],
       default: [],
@@ -217,6 +225,8 @@ businessProfileSchema.methods.toSafeObject = function toSafeObject() {
           statusLabel: account.statusLabel || 'Unknown',
           campaignCount: account.campaignCount || 0,
           totalSpend: account.totalSpend || 0,
+          campaigns: Array.isArray(account.campaigns) ? account.campaigns : [],
+          hierarchySyncedAt: account.hierarchySyncedAt || null,
         }))
       : [],
     socialAccount: socialAccountId || socialAccountName

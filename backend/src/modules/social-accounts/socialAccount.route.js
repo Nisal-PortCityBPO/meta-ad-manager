@@ -7,6 +7,7 @@ const router = express.Router();
 
 router.use(authenticate, authorize(USER_ROLES.SUPER_ADMIN, USER_ROLES.ADMIN));
 router.get('/', socialAccountController.getSocialAccounts);
+router.post('/:id/sync', socialAccountController.syncSocialAccount);
 router.put('/:id', socialAccountController.assignSocialAccount);
 
 module.exports = router;

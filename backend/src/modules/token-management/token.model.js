@@ -28,6 +28,11 @@ const tokenSchema = new mongoose.Schema(
       required: true,
       trim: true,
     },
+    adsPowerProfile: {
+      type: String,
+      default: '',
+      trim: true,
+    },
     encryptedAccessToken: {
       value: {
         type: String,
@@ -110,6 +115,7 @@ tokenSchema.methods.toSafeObject = function toSafeObject() {
     id: this._id.toString(),
     label: this.label,
     purpose: this.purpose,
+    adsPowerProfile: this.adsPowerProfile || '',
     accessToken: this.maskedAccessToken,
     status: normalizedStatus,
     connectionStatus: normalizedConnectionStatus,

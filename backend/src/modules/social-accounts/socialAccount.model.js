@@ -61,13 +61,17 @@ function getColor(doc) {
 
 socialAccountSchema.methods.toSafeObject = function toSafeObject({ profileCount = 0 } = {}) {
   const sourceTokenLabel = this.sourceToken?.label || this.sourceTokenLabel;
+  const sourceTokenId = this.sourceToken?._id?.toString?.() || this.sourceToken?.toString?.() || null;
+  const adsPowerProfile = this.sourceToken?.adsPowerProfile || '';
 
   return {
     id: this._id.toString(),
     metaAccountId: this.metaAccountId,
     name: this.name,
     profileImageUrl: this.profileImageUrl,
+    sourceTokenId,
     sourceTokenLabel,
+    adsPowerProfile,
     connectionStatus: this.sourceToken?.connectionStatus || 'UNKNOWN',
     connectionMessage: this.sourceToken?.connectionMessage || null,
     lastConnectionCheckedAt: this.sourceToken?.lastConnectionCheckedAt || null,

@@ -55,12 +55,11 @@ const AppRouter = () => {
       </Route>
 
       <Route element={<ProtectedRoute />}>
-        <Route element={<DashboardLayout />}>
-          <Route index element={<Navigate to="/dashboard" replace />} />
-          <Route path="/dashboard" element={<DashboardPage />} />
-          <Route path="/overview" element={<OverviewPage />} />
-          <Route path="/profile" element={<ProfilePage />} />
-          <Route path="/notifications" element={<NotificationsPage />} />
+          <Route element={<DashboardLayout />}>
+            <Route index element={<Navigate to="/dashboard" replace />} />
+            <Route path="/dashboard" element={<DashboardPage />} />
+            <Route path="/profile" element={<ProfilePage />} />
+            <Route path="/notifications" element={<NotificationsPage />} />
 
           <Route element={<RoleRoute roles={[USER_ROLES.SUPER_ADMIN, USER_ROLES.ADMIN]} />}>
             <Route path="/ads-launch" element={<AdsLaunchPage />} />
@@ -68,6 +67,7 @@ const AppRouter = () => {
           </Route>
 
           <Route element={<RoleRoute roles={[USER_ROLES.SUPER_ADMIN]} />}>
+            <Route path="/overview" element={<OverviewPage />} />
             <Route path="/ads-manage" element={<AdsManagePage />} />
             <Route path="/users" element={<UsersPage />} />
             <Route path="/activity-logs" element={<ActivityLogsPage />} />

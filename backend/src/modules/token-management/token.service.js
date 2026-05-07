@@ -93,17 +93,19 @@ async function listActiveTokensWithSecrets({ tokenId } = {}) {
   return tokens.map((token) => ({
     id: token._id.toString(),
     label: token.label,
+    adsPowerProfile: token.adsPowerProfile || '',
     accessToken: decryptSecret(token.encryptedAccessToken),
   }));
 }
 
-async function createToken({ label, purpose, accessToken, status = TOKEN_STATUSES.ACTIVE, actor, req }) {
+async function createToken({ label, purpose, adsPowerProfile = '', accessToken, status = TOKEN_STATUSES.ACTIVE, actor, req }) {
   validateTokenPayload({ label, purpose, accessToken });
   validateStatus(status);
 
   const token = await Token.create({
     label: label.trim(),
     purpose: purpose.trim(),
+    adsPowerProfile: adsPowerProfile.trim(),
     encryptedAccessToken: encryptSecret(accessToken.trim()),
     maskedAccessToken: maskSecret(accessToken.trim()),
     status,
@@ -126,7 +128,7 @@ async function createToken({ label, purpose, accessToken, status = TOKEN_STATUSE
   return token.toSafeObject();
 }
 
-async function updateToken({ tokenId, label, purpose, accessToken, status, actor, req }) {
+async function updateToken({ tokenId, label, purpose, adsPowerProfile = '', accessToken, status, actor, req }) {
   validateTokenPayload({ label, purpose, accessToken }, { requireAccessToken: false });
   validateStatus(status);
 
@@ -137,6 +139,7 @@ async function updateToken({ tokenId, label, purpose, accessToken, status, actor
 
   token.label = label.trim();
   token.purpose = purpose.trim();
+  token.adsPowerProfile = adsPowerProfile.trim();
   token.status = status;
   token.updatedBy = actor._id;
 
@@ -289,6 +292,7 @@ async function getActiveTokenWithSecret(tokenId) {
   return {
     id: token._id.toString(),
     label: token.label,
+    adsPowerProfile: token.adsPowerProfile || '',
     accessToken: decryptSecret(token.encryptedAccessToken),
   };
 }
