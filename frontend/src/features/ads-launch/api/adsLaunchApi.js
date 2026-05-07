@@ -119,6 +119,15 @@ const buildMediaUploadFormData = ({ name, mediaFile, mediaMetadata, thumbnailFil
   return formData;
 };
 
+const buildMediaChunkFormData = ({ uploadId, chunk, chunkIndex, totalChunks }) => {
+  const formData = new FormData();
+  formData.append('uploadId', uploadId);
+  formData.append('chunkIndex', String(chunkIndex));
+  formData.append('totalChunks', String(totalChunks));
+  formData.append('chunk', chunk, `chunk-${chunkIndex}`);
+  return formData;
+};
+
 export const adsLaunchApi = {
   getTemplates: (params = {}) => {
     const query = new URLSearchParams();
@@ -154,6 +163,13 @@ export const adsLaunchApi = {
     requestWithUploadProgress('/ads-launch/media', payload, options),
   uploadMediaAssetWithProgress: (payload, options = {}) =>
     requestWithUploadProgress('/ads-launch/media', buildMediaUploadFormData(payload), options),
+  uploadMediaChunkWithProgress: (payload, options = {}) =>
+    requestWithUploadProgress('/ads-launch/media/chunk', buildMediaChunkFormData(payload), options),
+  completeChunkedMediaUpload: (payload) =>
+    apiRequest('/ads-launch/media/complete', {
+      method: 'POST',
+      body: payload,
+    }),
   deleteMediaAsset: (id) =>
     apiRequest(`/ads-launch/media/${id}`, {
       method: 'DELETE',

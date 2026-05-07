@@ -14,6 +14,8 @@ async function startServer() {
 
   const app = createApiApp();
   const server = http.createServer(app);
+  server.requestTimeout = 0;
+  server.headersTimeout = 0;
   await attachFrontend(app, { hmrServer: server });
 
   server.listen(PORT, () => {

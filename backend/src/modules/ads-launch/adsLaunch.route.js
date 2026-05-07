@@ -31,6 +31,24 @@ const mediaUpload = multer({
   },
 });
 
+const mediaChunkUpload = multer({
+  storage: multer.diskStorage({
+    destination: (_req, _file, cb) => {
+      cb(null, MEDIA_UPLOAD_TEMP_DIR);
+    },
+    filename: (_req, file, cb) => {
+      const extension = path.extname(file.originalname || '');
+      const uniqueName = `${Date.now()}-${Math.round(Math.random() * 1e9)}${extension}`;
+      cb(null, uniqueName);
+    },
+  }),
+  limits: {
+    fileSize: 8 * 1024 * 1024,
+    files: 1,
+    fields: 8,
+  },
+});
+
 const handleMediaUpload = (req, res, next) => {
   mediaUpload.fields([
     { name: 'media', maxCount: 1 },
@@ -55,10 +73,28 @@ const handleMediaUpload = (req, res, next) => {
   });
 };
 
+const handleMediaChunkUpload = (req, res, next) => {
+  mediaChunkUpload.single('chunk')(req, res, (error) => {
+    if (!error) {
+      next();
+      return;
+    }
+
+    if (error.code === 'LIMIT_FILE_SIZE') {
+      next(new HttpError(400, 'Upload chunk is too large. Please try again with the current uploader.'));
+      return;
+    }
+
+    next(error);
+  });
+};
+
 router.use(authenticate, authorize(USER_ROLES.SUPER_ADMIN, USER_ROLES.ADMIN));
 
 router.get('/media', adsLaunchController.getMediaAssets);
 router.post('/media', handleMediaUpload, adsLaunchController.createMediaAsset);
+router.post('/media/chunk', handleMediaChunkUpload, adsLaunchController.uploadMediaChunk);
+router.post('/media/complete', adsLaunchController.completeChunkedMediaAsset);
 router.get('/media/:id/:assetKind', adsLaunchController.getMediaAsset);
 router.delete('/media/:id', adsLaunchController.deleteMediaAsset);
 router.get('/templates', adsLaunchController.getTemplates);

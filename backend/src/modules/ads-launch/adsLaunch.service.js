@@ -16,6 +16,7 @@ const GRAPH_API_BASE = `https://graph.facebook.com/${META_GRAPH_VERSION}`;
 const GRAPH_VIDEO_API_BASE = `https://graph-video.facebook.com/${META_GRAPH_VERSION}`;
 const TEMPLATE_ASSET_DIR = path.resolve(__dirname, '../../../storage/ads-launch-template-assets');
 const MEDIA_LIBRARY_ASSET_DIR = path.resolve(__dirname, '../../../storage/ads-launch-media-assets');
+const MEDIA_CHUNK_UPLOAD_DIR = path.resolve(__dirname, '../../../storage/ads-launch-media-chunks');
 const DEFAULT_VIDEO_READY_TIMEOUT_MS = 180000;
 const DEFAULT_VIDEO_READY_POLL_MS = 5000;
 const MAX_VIDEO_READY_TIMEOUT_MS = 600000;
@@ -818,6 +819,179 @@ function cleanupUploadedMediaFile(file) {
   }
 }
 
+function ensureMediaChunkUploadDir() {
+  fs.mkdirSync(MEDIA_CHUNK_UPLOAD_DIR, { recursive: true });
+}
+
+function sanitizeMediaUploadId(value) {
+  const uploadId = normalizeText(value);
+
+  if (!/^[a-zA-Z0-9_-]{12,80}$/.test(uploadId)) {
+    throw new HttpError(400, 'Upload session is invalid. Please select the video again.');
+  }
+
+  return uploadId;
+}
+
+function getMediaChunkSessionDir(uploadId) {
+  return path.join(MEDIA_CHUNK_UPLOAD_DIR, uploadId);
+}
+
+function readMediaChunkManifest(uploadId) {
+  const manifestPath = path.join(getMediaChunkSessionDir(uploadId), 'manifest.json');
+
+  if (!fs.existsSync(manifestPath)) {
+    return null;
+  }
+
+  try {
+    return JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+  } catch (error) {
+    throw new HttpError(400, 'Upload session is damaged. Please upload the video again.');
+  }
+}
+
+function writeMediaChunkManifest(uploadId, manifest) {
+  const sessionDir = getMediaChunkSessionDir(uploadId);
+  fs.mkdirSync(sessionDir, { recursive: true });
+  fs.writeFileSync(path.join(sessionDir, 'manifest.json'), JSON.stringify(manifest, null, 2));
+}
+
+function cleanupMediaChunkSession(uploadId) {
+  if (!uploadId) {
+    return;
+  }
+
+  try {
+    fs.rmSync(getMediaChunkSessionDir(uploadId), { recursive: true, force: true });
+  } catch (error) {
+    // Ignore cleanup failures for temporary chunk uploads.
+  }
+}
+
+async function saveMediaUploadChunk({ uploadId, chunkIndex, totalChunks, chunk, actor }) {
+  let normalizedUploadId = '';
+
+  try {
+    normalizedUploadId = sanitizeMediaUploadId(uploadId);
+  } catch (error) {
+    cleanupUploadedMediaFile(chunk);
+    throw error;
+  }
+
+  const normalizedChunkIndex = Number.parseInt(chunkIndex, 10);
+  const normalizedTotalChunks = Number.parseInt(totalChunks, 10);
+
+  if (!chunk?.path) {
+    throw new HttpError(400, 'Upload chunk is missing. Please try again.');
+  }
+
+  if (
+    !Number.isInteger(normalizedChunkIndex) ||
+    !Number.isInteger(normalizedTotalChunks) ||
+    normalizedChunkIndex < 0 ||
+    normalizedTotalChunks < 1 ||
+    normalizedChunkIndex >= normalizedTotalChunks
+  ) {
+    cleanupUploadedMediaFile(chunk);
+    throw new HttpError(400, 'Upload chunk number is invalid. Please upload the video again.');
+  }
+
+  ensureMediaChunkUploadDir();
+  const existingManifest = readMediaChunkManifest(normalizedUploadId);
+  const actorId = actor?._id?.toString?.() || '';
+
+  if (existingManifest?.actorId && existingManifest.actorId !== actorId) {
+    cleanupUploadedMediaFile(chunk);
+    throw new HttpError(403, 'Upload session belongs to another user');
+  }
+
+  const manifest = {
+    actorId,
+    totalChunks: normalizedTotalChunks,
+    updatedAt: new Date().toISOString(),
+  };
+  writeMediaChunkManifest(normalizedUploadId, manifest);
+
+  const sessionDir = getMediaChunkSessionDir(normalizedUploadId);
+  const chunkPath = path.join(sessionDir, `${normalizedChunkIndex}.part`);
+
+  try {
+    fs.renameSync(chunk.path, chunkPath);
+  } catch (error) {
+    cleanupUploadedMediaFile(chunk);
+    throw error;
+  }
+
+  const uploadedChunks = fs
+    .readdirSync(sessionDir)
+    .filter((filename) => filename.endsWith('.part')).length;
+
+  return {
+    message: 'Chunk uploaded',
+    uploadId: normalizedUploadId,
+    uploadedChunks,
+    totalChunks: normalizedTotalChunks,
+  };
+}
+
+function assembleMediaUploadChunks({ uploadId, actor, mediaOriginalName, mediaMimeType, mediaSize }) {
+  const normalizedUploadId = sanitizeMediaUploadId(uploadId);
+  const manifest = readMediaChunkManifest(normalizedUploadId);
+  const actorId = actor?._id?.toString?.() || '';
+
+  if (!manifest) {
+    throw new HttpError(400, 'Upload session was not found. Please upload the video again.');
+  }
+
+  if (manifest.actorId && manifest.actorId !== actorId) {
+    throw new HttpError(403, 'Upload session belongs to another user');
+  }
+
+  const totalChunks = Number.parseInt(manifest.totalChunks, 10);
+  if (!Number.isInteger(totalChunks) || totalChunks < 1) {
+    throw new HttpError(400, 'Upload session is incomplete. Please upload the video again.');
+  }
+
+  const extension = getAssetFileExtension(mediaOriginalName, mediaMimeType) || '.upload';
+  const assembledPath = path.join(MEDIA_LIBRARY_ASSET_DIR, `${normalizedUploadId}-assembled-${Date.now()}${extension}`);
+
+  ensureMediaLibraryAssetDir();
+
+  try {
+    if (fs.existsSync(assembledPath)) {
+      fs.rmSync(assembledPath, { force: true });
+    }
+
+    for (let index = 0; index < totalChunks; index += 1) {
+      const chunkPath = path.join(getMediaChunkSessionDir(normalizedUploadId), `${index}.part`);
+
+      if (!fs.existsSync(chunkPath)) {
+        throw new HttpError(400, `Upload is missing chunk ${index + 1}/${totalChunks}. Please upload the video again.`);
+      }
+
+      fs.appendFileSync(assembledPath, fs.readFileSync(chunkPath));
+    }
+
+    const stat = fs.statSync(assembledPath);
+    const expectedSize = Number(mediaSize) || 0;
+
+    if (expectedSize && stat.size !== expectedSize) {
+      throw new HttpError(400, 'Uploaded video size does not match. Please upload the video again.');
+    }
+
+    return {
+      path: assembledPath,
+      originalname: normalizeText(mediaOriginalName) || 'uploaded-video.mp4',
+      mimetype: normalizeMediaLibraryMimeType(mediaMimeType, mediaOriginalName),
+      size: stat.size,
+    };
+  } catch (error) {
+    cleanupUploadedMediaFile({ path: assembledPath });
+    throw error;
+  }
+}
+
 function deleteStoredMediaLibraryAsset(asset) {
   if (!asset?.storageKey) {
     return;
@@ -1067,6 +1241,43 @@ async function createMediaAsset({
 
   const populated = await AdsLaunchMedia.findById(mediaAsset._id).populate('createdBy', 'name email');
   return populated.toSafeObject();
+}
+
+async function completeChunkedMediaAsset({
+  name,
+  uploadId,
+  mediaOriginalName,
+  mediaMimeType,
+  mediaSize,
+  mediaMetadata,
+  thumbnail,
+  actor,
+  req,
+}) {
+  const normalizedUploadId = sanitizeMediaUploadId(uploadId);
+  let uploadedMedia = null;
+
+  try {
+    uploadedMedia = assembleMediaUploadChunks({
+      uploadId: normalizedUploadId,
+      actor,
+      mediaOriginalName,
+      mediaMimeType,
+      mediaSize,
+    });
+
+    return await createMediaAsset({
+      name,
+      thumbnail,
+      uploadedMedia,
+      mediaMetadata,
+      actor,
+      req,
+    });
+  } finally {
+    cleanupMediaChunkSession(normalizedUploadId);
+    cleanupUploadedMediaFile(uploadedMedia);
+  }
 }
 
 async function deleteMediaAsset({ mediaId, actor, req }) {
@@ -2731,6 +2942,7 @@ async function publishLaunch({ payload, actor, req, onProgress = null, tokenType
 }
 
 module.exports = {
+  completeChunkedMediaAsset,
   createMediaAsset,
   createTemplate,
   deleteMediaAsset,
@@ -2740,5 +2952,6 @@ module.exports = {
   listMediaAssets,
   listTemplates,
   publishLaunch,
+  saveMediaUploadChunk,
   updateTemplate,
 };

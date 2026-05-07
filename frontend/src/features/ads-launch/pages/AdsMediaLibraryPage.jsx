@@ -10,6 +10,7 @@ const MIN_ASPECT_RATIO = 0.56;
 const MAX_ASPECT_RATIO = 1.92;
 const MAX_IMAGE_BYTES = 30 * 1024 * 1024;
 const MAX_VIDEO_BYTES = 100 * 1024 * 1024;
+const VIDEO_CHUNK_BYTES = 5 * 1024 * 1024;
 const IMAGE_MIME_TYPES = new Set(['image/jpeg']);
 const VIDEO_MIME_TYPES = new Set(['video/mp4', 'video/quicktime']);
 const MIME_TYPE_BY_EXTENSION = {
@@ -151,6 +152,14 @@ const dataUrlToFile = (dataUrl, name, type) => {
   }
 
   return new File([bytes], name, { type });
+};
+
+const createUploadId = () => {
+  if (window.crypto?.randomUUID) {
+    return window.crypto.randomUUID().replace(/-/g, '');
+  }
+
+  return `${Date.now()}${Math.random().toString(36).slice(2, 14)}`;
 };
 
 const createVideoThumbnail = (file) =>
@@ -371,6 +380,52 @@ const AdsMediaLibraryPage = () => {
     }
   };
 
+  const uploadVideoInChunks = async ({ thumbnail }) => {
+    const uploadId = createUploadId();
+    const totalChunks = Math.ceil(selectedFile.size / VIDEO_CHUNK_BYTES);
+
+    for (let chunkIndex = 0; chunkIndex < totalChunks; chunkIndex += 1) {
+      const chunkStart = chunkIndex * VIDEO_CHUNK_BYTES;
+      const chunkEnd = Math.min(chunkStart + VIDEO_CHUNK_BYTES, selectedFile.size);
+      const chunk = selectedFile.slice(chunkStart, chunkEnd, selectedFile.type);
+
+      await adsLaunchApi.uploadMediaChunkWithProgress({
+        uploadId,
+        chunk,
+        chunkIndex,
+        totalChunks,
+      }, {
+        onUploadProgress: (chunkPercent) => {
+          const uploadedBytes = chunkStart + Math.round(chunk.size * (chunkPercent / 100));
+          const percent = Math.min(Math.round((uploadedBytes / selectedFile.size) * 100), 99);
+          setUploadProgress({
+            label: `Uploading video ${chunkIndex + 1}/${totalChunks}`,
+            percent,
+          });
+        },
+      });
+    }
+
+    setUploadProgress({
+      label: 'Saving video in media library',
+      percent: 100,
+    });
+
+    return adsLaunchApi.completeChunkedMediaUpload({
+      name: name.trim(),
+      uploadId,
+      mediaOriginalName: selectedFile.name,
+      mediaMimeType: selectedFile.type,
+      mediaSize: selectedFile.size,
+      mediaMetadata: {
+        width: fileDetails.width,
+        height: fileDetails.height,
+        duration: fileDetails.duration || 0,
+      },
+      thumbnail,
+    });
+  };
+
   const saveMediaAsset = async () => {
     if (!name.trim()) {
       toast.error('Give this media a library name');
@@ -401,8 +456,28 @@ const AdsMediaLibraryPage = () => {
       const thumbnailFile = generatedThumbnail
         ? dataUrlToFile(generatedThumbnail.dataUrl, generatedThumbnail.name, generatedThumbnail.type)
         : null;
+      const thumbnailPayload = generatedThumbnail
+        ? {
+            name: generatedThumbnail.name,
+            type: generatedThumbnail.type,
+            size: generatedThumbnail.size,
+            dataUrl: generatedThumbnail.dataUrl,
+            width: generatedThumbnail.width,
+            height: generatedThumbnail.height,
+            duration: generatedThumbnail.duration || 0,
+          }
+        : null;
+
+      if (selectedIsVideo) {
+        const data = await uploadVideoInChunks({ thumbnail: thumbnailPayload });
+        toast.success(data.message);
+        resetForm();
+        await loadMediaAssets();
+        return;
+      }
+
       setUploadProgress({
-        label: selectedIsVideo ? 'Uploading video to media library' : 'Uploading image to media library',
+        label: 'Uploading image to media library',
         percent: 0,
       });
       const data = await adsLaunchApi.uploadMediaAssetWithProgress({
@@ -424,7 +499,7 @@ const AdsMediaLibraryPage = () => {
       }, {
         onUploadProgress: (percent) =>
           setUploadProgress({
-            label: selectedIsVideo ? 'Uploading video to media library' : 'Uploading image to media library',
+            label: 'Uploading image to media library',
             percent,
           }),
       });

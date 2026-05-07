@@ -64,6 +64,37 @@ const createMediaAsset = asyncHandler(async (req, res) => {
   });
 });
 
+const uploadMediaChunk = asyncHandler(async (req, res) => {
+  const result = await adsLaunchService.saveMediaUploadChunk({
+    uploadId: req.body.uploadId,
+    chunkIndex: req.body.chunkIndex,
+    totalChunks: req.body.totalChunks,
+    chunk: req.file,
+    actor: req.user,
+  });
+
+  res.json(result);
+});
+
+const completeChunkedMediaAsset = asyncHandler(async (req, res) => {
+  const mediaAsset = await adsLaunchService.completeChunkedMediaAsset({
+    name: req.body.name,
+    uploadId: req.body.uploadId,
+    mediaOriginalName: req.body.mediaOriginalName,
+    mediaMimeType: req.body.mediaMimeType,
+    mediaSize: req.body.mediaSize,
+    mediaMetadata: req.body.mediaMetadata,
+    thumbnail: req.body.thumbnail,
+    actor: req.user,
+    req,
+  });
+
+  res.status(201).json({
+    message: 'Media saved successfully',
+    mediaAsset,
+  });
+});
+
 const deleteMediaAsset = asyncHandler(async (req, res) => {
   await adsLaunchService.deleteMediaAsset({
     mediaId: req.params.id,
@@ -172,6 +203,7 @@ const publishLaunchStream = async (req, res, next) => {
 };
 
 module.exports = {
+  completeChunkedMediaAsset,
   createMediaAsset,
   createTemplate,
   deleteMediaAsset,
@@ -182,5 +214,6 @@ module.exports = {
   getTemplateAsset,
   publishLaunch,
   publishLaunchStream,
+  uploadMediaChunk,
   updateTemplate,
 };
