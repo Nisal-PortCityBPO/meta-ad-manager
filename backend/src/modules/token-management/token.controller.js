@@ -11,7 +11,16 @@ const createToken = asyncHandler(async (req, res) => {
     label: req.body.label,
     purpose: req.body.purpose,
     adsPowerProfile: req.body.adsPowerProfile,
+    brandId: req.body.brandId,
+    agencyId: req.body.agencyId,
+    profileAccessToken: req.body.profileAccessToken,
     accessToken: req.body.accessToken,
+    systemUserAccessToken: req.body.systemUserAccessToken,
+    profileAccessTokenStatus: req.body.profileAccessTokenStatus,
+    systemUserAccessTokenStatus: req.body.systemUserAccessTokenStatus,
+    profilePerHourApiCallLimit: req.body.profilePerHourApiCallLimit,
+    systemUserPerHourApiCallLimit: req.body.systemUserPerHourApiCallLimit,
+    perHourApiCallLimit: req.body.perHourApiCallLimit,
     status: req.body.status,
     actor: req.user,
     req,
@@ -29,7 +38,16 @@ const updateToken = asyncHandler(async (req, res) => {
     label: req.body.label,
     purpose: req.body.purpose,
     adsPowerProfile: req.body.adsPowerProfile,
+    brandId: req.body.brandId,
+    agencyId: req.body.agencyId,
+    profileAccessToken: req.body.profileAccessToken,
     accessToken: req.body.accessToken,
+    systemUserAccessToken: req.body.systemUserAccessToken,
+    profileAccessTokenStatus: req.body.profileAccessTokenStatus,
+    systemUserAccessTokenStatus: req.body.systemUserAccessTokenStatus,
+    profilePerHourApiCallLimit: req.body.profilePerHourApiCallLimit,
+    systemUserPerHourApiCallLimit: req.body.systemUserPerHourApiCallLimit,
+    perHourApiCallLimit: req.body.perHourApiCallLimit,
     status: req.body.status,
     actor: req.user,
     req,
@@ -42,19 +60,20 @@ const updateToken = asyncHandler(async (req, res) => {
 });
 
 const deleteToken = asyncHandler(async (req, res) => {
-  await tokenService.deleteToken({
+  const deleted = await tokenService.deleteToken({
     tokenId: req.params.id,
     actor: req.user,
     req,
   });
 
   res.json({
-    message: 'Token deleted successfully',
+    message: 'Connection and associated saved data deleted successfully',
+    deleted,
   });
 });
 
 const recordApiCall = asyncHandler(async (req, res) => {
-  const token = await tokenService.recordTokenApiCall(req.params.id);
+  const token = await tokenService.recordTokenApiCall(req.params.id, req.body?.tokenType);
 
   res.json({
     message: 'API call recorded',

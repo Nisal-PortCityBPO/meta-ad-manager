@@ -26,6 +26,7 @@ import DashboardPanel from '../../dashboard/components/DashboardPanel';
 import { businessDataApi } from '../../dashboard/api/businessDataApi';
 import { useTokens } from '../../token-management/hooks/useTokens';
 import { usePublishProgress } from '../../notifications/PublishProgressContext';
+import { useMetaKeySettings } from '../../settings/MetaKeySettingsContext';
 import { adsLaunchApi } from '../api/adsLaunchApi';
 import { useLaunchTemplates } from '../hooks/useLaunchTemplates';
 import { useTokenMetaAssets } from '../hooks/useTokenMetaAssets';
@@ -516,6 +517,7 @@ const AdsLaunchPage = () => {
     isPublishing: publishInProgress,
     pushPublishEvent,
   } = usePublishProgress();
+  const { publishTokenType } = useMetaKeySettings();
 
   const [form, setForm] = useState(createEmptyForm);
   const [brands, setBrands] = useState([]);
@@ -1442,7 +1444,10 @@ const AdsLaunchPage = () => {
     beginPublish();
 
     try {
-      const payload = await buildPublishPayload();
+      const payload = {
+        ...(await buildPublishPayload()),
+        tokenType: publishTokenType,
+      };
       const data = await adsLaunchApi.publishLaunchStream(payload, {
         onProgress: pushPublishEvent,
       });

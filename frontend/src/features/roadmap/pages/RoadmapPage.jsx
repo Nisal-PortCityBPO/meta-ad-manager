@@ -3,6 +3,7 @@ import {
   BriefcaseBusiness,
   ChevronDown,
   ChevronRight,
+  DownloadCloud,
   FileText,
   KeyRound,
   Layers3,
@@ -14,6 +15,8 @@ import {
 import DashboardHeader from '../../dashboard/components/DashboardHeader';
 import DashboardPanel from '../../dashboard/components/DashboardPanel';
 import { businessDataApi } from '../../dashboard/api/businessDataApi';
+import { useMetaSync } from '../../dashboard/context/MetaSyncContext';
+import { getMetaKeyTypeLabel, META_KEY_TYPES, useMetaKeySettings } from '../../settings/MetaKeySettingsContext';
 
 const currencyFormatter = new Intl.NumberFormat('en-US', {
   style: 'currency',
@@ -104,22 +107,6 @@ const getCampaigns = (adAccount) => (Array.isArray(adAccount?.campaigns) ? adAcc
 const getAdSets = (campaign) => (Array.isArray(campaign?.adSets) ? campaign.adSets : []);
 const getAds = (adSet) => (Array.isArray(adSet?.ads) ? adSet.ads : []);
 
-const countAdSetsForCampaign = (campaign) =>
-  getAdSets(campaign).length || Number(campaign?.adSetCount) || 0;
-
-const countAdSetsForAdAccount = (adAccount) =>
-  getCampaigns(adAccount).reduce((total, campaign) => total + countAdSetsForCampaign(campaign), 0);
-
-const countCampaignsForProfile = (profile) => {
-  const adAccounts = Array.isArray(profile?.adAccounts) ? profile.adAccounts : [];
-  const campaignCount = adAccounts.reduce(
-    (total, account) => total + (getCampaigns(account).length || Number(account?.campaignCount) || 0),
-    0
-  );
-
-  return campaignCount || Number(profile?.campaignCount) || 0;
-};
-
 const getCurrency = (adAccount, fallback = 'USD') => adAccount?.currency || adAccount?.spendCurrency || fallback;
 
 const getMetric = (...values) => {
@@ -127,11 +114,11 @@ const getMetric = (...values) => {
   return hasValue(metric) ? metric : null;
 };
 
-const getCampaignBudget = (campaign, currency = 'USD') => {
+const getCampaignBudgetValue = (campaign) => {
   const directBudget = getMetric(campaign?.budget, campaign?.dailyBudget, campaign?.lifetimeBudget);
 
   if (hasValue(directBudget)) {
-    return formatCurrencyAmount(directBudget, currency);
+    return directBudget;
   }
 
   const adSetBudget = getAdSets(campaign).reduce(
@@ -139,8 +126,35 @@ const getCampaignBudget = (campaign, currency = 'USD') => {
     0
   );
 
-  return adSetBudget ? formatCurrencyAmount(adSetBudget, currency) : '-';
+  return adSetBudget || null;
 };
+
+const getCampaignBudget = (campaign, currency = 'USD') => {
+  const budget = getCampaignBudgetValue(campaign);
+
+  return hasValue(budget) ? formatCurrencyAmount(budget, currency) : '-';
+};
+
+const getAdSetBudget = (adSet, campaign, currency = 'USD') => {
+  const budget = getMetric(adSet?.budget, adSet?.dailyBudget, adSet?.lifetimeBudget, getCampaignBudgetValue(campaign));
+
+  return hasValue(budget) ? formatCurrencyAmount(budget, currency) : '-';
+};
+
+const getAdResults = (ad) =>
+  formatNumber(
+    getMetric(
+      ad?.results,
+      ad?.insights?.results,
+      ad?.websiteRegistrationCompleted,
+      ad?.completedRegistrationCount,
+      ad?.completeRegistrationCount,
+      ad?.registrations,
+      ad?.insights?.registrations,
+      ad?.leads,
+      ad?.insights?.leads
+    )
+  );
 
 const getStatus = (...values) =>
   values.find((value) => hasValue(value)) || 'UNKNOWN';
@@ -208,61 +222,69 @@ const TreeGroup = ({ children, className = '', depth }) => (
   </div>
 );
 
-const TreeRow = ({ depth = 0, icon: Icon, isOpen, isRoot = false, onClick, secondaryText, subtitle, title, children }) => (
-  <button
-    type="button"
-    onClick={onClick}
-    className={[
-      'group relative block w-full text-left transition',
-      isRoot
-        ? 'rounded-none bg-white p-4 hover:bg-sky-50/60'
-        : 'rounded-xl px-3 py-2.5 hover:bg-white',
-    ].join(' ')}
-    style={isRoot ? undefined : { paddingLeft: `${0.75 + depth * 1.5}rem` }}
-  >
-    {!isRoot ? (
-        <span
-          aria-hidden="true"
-          className="absolute top-1/2 h-[2px] w-5 rounded-full bg-slate-900"
-          style={{ left: getTreeLineLeft(depth) }}
-        />
-    ) : null}
+const TreeRow = ({ depth = 0, icon: Icon, isOpen, isRoot = false, onClick, secondaryText, subtitle, title, children }) => {
+  const rowTone = isRoot
+    ? isOpen
+      ? 'rounded-none bg-sky-50 p-4 ring-1 ring-inset ring-sky-200'
+      : 'rounded-none bg-white p-4 hover:bg-sky-50/60'
+    : isOpen
+      ? 'rounded-xl bg-sky-100/70 px-3 py-2.5 ring-1 ring-sky-200 shadow-sm shadow-sky-100'
+      : 'rounded-xl px-3 py-2.5 hover:bg-white';
 
-    <div className="relative grid grid-cols-[auto_minmax(0,1fr)] gap-3">
-      <span className="mt-1 flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-white text-slate-950 ring-2 ring-slate-200">
-        {isOpen ? <ChevronDown size={18} strokeWidth={2.4} /> : <ChevronRight size={18} strokeWidth={2.4} />}
-      </span>
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={['group relative block w-full text-left transition', rowTone].join(' ')}
+      style={isRoot ? undefined : { paddingLeft: `${0.75 + depth * 1.5}rem` }}
+    >
+      {!isRoot ? (
+          <span
+            aria-hidden="true"
+            className="absolute top-1/2 h-[2px] w-5 rounded-full bg-slate-900"
+            style={{ left: getTreeLineLeft(depth) }}
+          />
+      ) : null}
 
-      <div className="min-w-0">
-        <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
-          <div className="flex min-w-0 items-start gap-3">
-            <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-white text-sky-700 ring-2 ring-sky-100">
-              <Icon size={18} strokeWidth={2.3} />
-            </span>
-            <div className="min-w-0">
-              <p className="truncate text-sm font-black text-slate-950">{title}</p>
-              {subtitle ? (
-                <p className={`mt-1 text-xs font-semibold ${isRoot ? 'text-slate-500' : 'truncate text-slate-400'}`}>
-                  {subtitle}
-                </p>
-              ) : null}
-              {secondaryText ? (
-                <p className="mt-1 break-words text-xs font-semibold leading-5 text-slate-500">
-                  {secondaryText}
-                </p>
-              ) : null}
+      <div className="relative grid grid-cols-[auto_minmax(0,1fr)] gap-3">
+        <span className={`mt-1 flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-white text-slate-950 ring-2 ${isOpen ? 'ring-sky-300' : 'ring-slate-200'}`}>
+          {isOpen ? <ChevronDown size={18} strokeWidth={2.4} /> : <ChevronRight size={18} strokeWidth={2.4} />}
+        </span>
+
+        <div className="min-w-0">
+          <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
+            <div className="flex min-w-0 items-start gap-3">
+              <span className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-white text-sky-700 ring-2 ${isOpen ? 'ring-sky-300' : 'ring-sky-100'}`}>
+                <Icon size={18} strokeWidth={2.3} />
+              </span>
+              <div className="min-w-0">
+                <p className="truncate text-sm font-black text-slate-950">{title}</p>
+                {subtitle ? (
+                  <p className={`mt-1 text-xs font-semibold ${isRoot ? 'text-slate-500' : 'truncate text-slate-400'}`}>
+                    {subtitle}
+                  </p>
+                ) : null}
+                {secondaryText ? (
+                  <p className="mt-1 break-words text-xs font-semibold leading-5 text-slate-500">
+                    {secondaryText}
+                  </p>
+                ) : null}
+              </div>
             </div>
+            <div className="flex flex-wrap justify-end gap-2">{children}</div>
           </div>
-          <div className="flex flex-wrap justify-end gap-2">{children}</div>
         </div>
       </div>
-    </div>
-  </button>
-);
+    </button>
+  );
+};
 
-const AdLeafRow = ({ ad, campaignCurrency, depth = 5 }) => (
+const AdLeafRow = ({ ad, campaignCurrency, depth = 5, highlighted = false }) => (
   <div
-    className="relative rounded-xl px-3 py-2.5 transition hover:bg-white"
+    className={[
+      'relative rounded-xl px-3 py-2.5 transition hover:bg-white',
+      highlighted ? 'bg-sky-50/70 ring-1 ring-sky-100' : '',
+    ].join(' ')}
     style={{ paddingLeft: `${0.75 + depth * 1.5}rem` }}
   >
     <span
@@ -280,6 +302,9 @@ const AdLeafRow = ({ ad, campaignCurrency, depth = 5 }) => (
           <p className="truncate text-sm font-black text-slate-950">
             {ad.title || ad.name || 'Unnamed ad'}
           </p>
+          <p className="mt-1 text-[10px] font-black uppercase tracking-[0.14em] text-slate-500">
+            Ad
+          </p>
           <p className="mt-1 truncate text-xs font-semibold text-slate-400">
             ID: {getDisplayId(ad)}
           </p>
@@ -287,12 +312,16 @@ const AdLeafRow = ({ ad, campaignCurrency, depth = 5 }) => (
       </div>
       <div className="flex flex-wrap justify-end gap-2">
         <MetricBadge
+          label="Spending"
+          value={formatCurrencyAmount(getMetric(ad.spend, ad.insights?.spend), campaignCurrency)}
+          tone="emerald"
+        />
+        <MetricBadge
           label="CPR"
           value={formatCurrencyAmount(getMetric(ad.cpr, ad.insights?.cpr, ad.insights?.cpl), campaignCurrency)}
           tone="indigo"
         />
-        <MetricBadge label="Impressions" value={formatNumber(getMetric(ad.impressions, ad.insights?.impressions))} tone="sky" />
-        <MetricBadge label="Reach" value={formatNumber(getMetric(ad.reach, ad.insights?.reach))} tone="emerald" />
+        <MetricBadge label="Results" value={getAdResults(ad)} tone="amber" />
         <StatusPill status={getStatus(ad.status, ad.effectiveStatus)} />
       </div>
     </div>
@@ -306,6 +335,8 @@ const EmptyState = ({ children }) => (
 );
 
 const RoadmapPage = () => {
+  const { startSocialAccountSync, syncingAccountId } = useMetaSync();
+  const { fetchTokenType } = useMetaKeySettings();
   const [brands, setBrands] = useState([]);
   const [selectedBrandId, setSelectedBrandId] = useState('');
   const [accountSearch, setAccountSearch] = useState('');
@@ -385,6 +416,7 @@ const RoadmapPage = () => {
   const filteredAccounts = selectedAccounts.filter((account) =>
     socialAccountMatchesSearch(account, normalizeSearch(accountSearch))
   );
+  const selectedFetchKeyLabel = getMetaKeyTypeLabel(fetchTokenType);
 
   const resetExpandedTree = () => {
     setExpandedAccountId(null);
@@ -434,7 +466,7 @@ const RoadmapPage = () => {
     <>
       <DashboardHeader
         title="Roadmap"
-        description="Browse the hierarchy saved in our database: brand, social account, business profile, ad account, campaign, ad set, and ads. This page only reads internal backend data and never starts a Meta API sync."
+        description="Browse saved hierarchy data by brand, social account, business profile, ad account, campaign, ad set, and ads. Fetch refreshes the selected social account using the Settings key."
         action={
           <button
             type="button"
@@ -518,6 +550,13 @@ const RoadmapPage = () => {
                   const accountKey = getEntityKey(account, accountIndex, 'account');
                   const profiles = Array.isArray(account.businessProfiles) ? account.businessProfiles : [];
                   const isAccountOpen = expandedAccountId === accountKey;
+                  const isAccountSyncing = syncingAccountId === account.id;
+                  const canFetchAccount =
+                    account.sourceTokenId &&
+                    account.sourceTokenStatus !== 'DEACTIVE' &&
+                    (fetchTokenType === META_KEY_TYPES.SYSTEM_USER
+                      ? account.systemUserAccessTokenStatus !== 'DEACTIVE'
+                      : account.profileAccessTokenStatus !== 'DEACTIVE');
 
                   return (
                     <div
@@ -538,6 +577,23 @@ const RoadmapPage = () => {
                       >
                         <MetricBadge label="Token" value={account.sourceTokenLabel || 'Not set'} tone="indigo" />
                         <StatusPill status={getStatus(account.connectionStatus, account.status)} />
+                        <button
+                          type="button"
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            void startSocialAccountSync(account);
+                          }}
+                          disabled={isAccountSyncing || !canFetchAccount}
+                          className="flex h-9 w-9 items-center justify-center rounded-full border border-sky-100 bg-white text-sky-700 transition hover:bg-sky-50 disabled:cursor-not-allowed disabled:opacity-50"
+                          title={
+                            canFetchAccount
+                              ? `Fetch ${account.sourceTokenLabel || 'Meta connection'} with ${selectedFetchKeyLabel}`
+                              : `No active ${selectedFetchKeyLabel} for this social account`
+                          }
+                          aria-label={`Fetch ${account.name || 'social account'}`}
+                        >
+                          <DownloadCloud size={16} strokeWidth={2.3} className={isAccountSyncing ? 'animate-pulse' : ''} />
+                        </button>
                       </TreeRow>
 
                       {isAccountOpen ? (
@@ -555,11 +611,11 @@ const RoadmapPage = () => {
                                     icon={BriefcaseBusiness}
                                     isOpen={isProfileOpen}
                                     onClick={() => toggleProfile(profileKey)}
-                                    subtitle={`ID: ${getDisplayId(profile)}`}
+                                    secondaryText={`ID: ${getDisplayId(profile)}`}
+                                    subtitle="Business profile"
                                     title={profile.name || 'Unnamed business profile'}
                                   >
                                     <MetricBadge label="Ad accounts" value={adAccounts.length || Number(profile.adAccountCount) || 0} tone="sky" />
-                                    <MetricBadge label="Campaigns" value={countCampaignsForProfile(profile)} tone="emerald" />
                                     <StatusPill status={getStatus(profile.metaStatus, profile.assetMetricsStatus)} />
                                   </TreeRow>
 
@@ -578,11 +634,11 @@ const RoadmapPage = () => {
                                                 icon={KeyRound}
                                                 isOpen={isAdAccountOpen}
                                                 onClick={() => toggleAdAccount(adAccountKey)}
-                                                subtitle={`ID: ${getDisplayId(adAccount)}`}
+                                                secondaryText={`ID: ${getDisplayId(adAccount)}`}
+                                                subtitle="Ad account"
                                                 title={adAccount.name || 'Unnamed ad account'}
                                               >
                                                 <MetricBadge label="Campaigns" value={campaigns.length || Number(adAccount.campaignCount) || 0} tone="emerald" />
-                                                <MetricBadge label="Ad sets" value={countAdSetsForAdAccount(adAccount)} tone="amber" />
                                                 <StatusPill status={getStatus(adAccount.connectionStatus, adAccount.status, adAccount.statusLabel)} />
                                                   </TreeRow>
 
@@ -602,14 +658,10 @@ const RoadmapPage = () => {
                                                             icon={Megaphone}
                                                             isOpen={isCampaignOpen}
                                                             onClick={() => toggleCampaign(campaignKey)}
-                                                            subtitle={`ID: ${getDisplayId(campaign)}`}
+                                                            secondaryText={`ID: ${getDisplayId(campaign)}`}
+                                                            subtitle="Campaign"
                                                             title={campaign.name || 'Unnamed campaign'}
                                                           >
-                                                            <MetricBadge
-                                                              label="CPR"
-                                                              value={formatCurrencyAmount(getMetric(campaign.cpr, campaign.insights?.cpr, campaign.insights?.cpl), campaignCurrency)}
-                                                              tone="indigo"
-                                                            />
                                                             <MetricBadge label="Budget" value={getCampaignBudget(campaign, campaignCurrency)} tone="sky" />
                                                             <StatusPill status={getStatus(campaign.status, campaign.effectiveStatus)} />
                                                           </TreeRow>
@@ -629,29 +681,25 @@ const RoadmapPage = () => {
                                                                         icon={Layers3}
                                                                         isOpen={isAdSetOpen}
                                                                         onClick={() => toggleAdSet(adSetKey)}
-                                                                        subtitle={`ID: ${getDisplayId(adSet)}`}
+                                                                        secondaryText={`ID: ${getDisplayId(adSet)}`}
+                                                                        subtitle="Ad set"
                                                                         title={adSet.name || 'Unnamed ad set'}
                                                                       >
                                                                         <MetricBadge
-                                                                          label="CPR"
-                                                                          value={formatCurrencyAmount(getMetric(adSet.cpr, adSet.insights?.cpr, adSet.insights?.cpl), campaignCurrency)}
-                                                                          tone="indigo"
-                                                                        />
-                                                                        <MetricBadge
-                                                                          label="Spent"
-                                                                          value={formatCurrencyAmount(getMetric(adSet.spend, adSet.insights?.spend), campaignCurrency)}
-                                                                          tone="emerald"
+                                                                          label="Budget"
+                                                                          value={getAdSetBudget(adSet, campaign, campaignCurrency)}
+                                                                          tone="sky"
                                                                         />
                                                                         <StatusPill status={getStatus(adSet.status, adSet.effectiveStatus)} />
                                                                       </TreeRow>
 
                                                                       {isAdSetOpen ? (
                                                                         ads.length ? (
-                                                                          <TreeGroup depth={5}>
+                                                                          <TreeGroup depth={5} className="rounded-2xl bg-sky-50/60 px-2 py-2 ring-1 ring-sky-100">
                                                                             {ads.map((ad, adIndex) => {
                                                                               const adKey = getEntityKey(ad, adIndex, 'ad');
 
-                                                                              return <AdLeafRow key={adKey} ad={ad} campaignCurrency={campaignCurrency} />;
+                                                                              return <AdLeafRow key={adKey} ad={ad} campaignCurrency={campaignCurrency} highlighted />;
                                                                             })}
                                                                           </TreeGroup>
                                                                         ) : (

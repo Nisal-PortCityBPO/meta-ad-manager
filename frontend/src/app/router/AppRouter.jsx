@@ -68,6 +68,7 @@ const AppRouter = () => {
             <Route path="/ads-launch" element={<AdsLaunchPage />} />
             <Route path="/ads-templates" element={<AdsTemplateBuilderPage />} />
             <Route path="/dynamic-ads-launch" element={<DynamicAdsLaunchPage />} />
+            <Route path="/meta-connection" element={<TokenManagementPage />} />
             <Route path="/roadmap" element={<RoadmapPage />} />
             <Route path="/tokens" element={<TokenManagementPage />} />
           </Route>

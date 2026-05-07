@@ -27,6 +27,7 @@ const syncSocialAccount = asyncHandler(async (req, res) => {
     actor: req.user,
     req,
     socialAccountId: req.params.id,
+    tokenType: req.body?.tokenType,
   });
 
   res.json({

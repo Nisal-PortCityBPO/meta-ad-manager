@@ -11,6 +11,7 @@ const syncBusinessProfiles = asyncHandler(async (req, res) => {
     actor: req.user,
     req,
     tokenId: req.body?.tokenId,
+    tokenType: req.body?.tokenType,
     socialAccountId: req.body?.socialAccountId,
   });
 

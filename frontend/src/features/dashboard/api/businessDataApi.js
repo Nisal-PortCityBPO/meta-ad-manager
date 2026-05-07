@@ -51,13 +51,15 @@ export const businessDataApi = {
       method: 'PUT',
       body: payload,
     }),
-  syncSocialAccount: (id) =>
+  syncSocialAccount: (id, tokenType) =>
     apiRequest(`/social-accounts/${id}/sync`, {
       method: 'POST',
+      body: tokenType ? { tokenType } : {},
     }),
-  syncBusinessProfiles: () =>
+  syncBusinessProfiles: (tokenType) =>
     apiRequest('/business-profiles/sync', {
       method: 'POST',
+      body: tokenType ? { tokenType } : {},
     }),
   updateBusinessProfile: (id, payload) =>
     apiRequest(`/business-profiles/${id}`, {
