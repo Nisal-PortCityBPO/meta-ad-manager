@@ -1,6 +1,6 @@
 import { NavLink, Outlet, useNavigate } from 'react-router-dom';
 import toast from 'react-hot-toast';
-import { BarChart3, Bell, ClipboardList, KeyRound, LayoutDashboard, LogOut, UserCircle, Users } from 'lucide-react';
+import { BarChart3, Bell, ClipboardList, KeyRound, LayoutDashboard, LogOut, UserCircle, Users, Megaphone  } from 'lucide-react';
 import { USER_ROLES, useAuth } from '../../features/auth/hooks/useAuth';
 import brandLogo from '../../assets/200m-logo.png';
 
