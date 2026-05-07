@@ -75,6 +75,10 @@ const staticDefaultOptions = {
     { value: 'ADVANTAGE_PLUS', label: 'Advantage+ placements' },
     { value: 'MANUAL', label: 'Manual placements' },
   ],
+  budgetLevel: [
+    { value: 'AD_SET', label: 'Ad set budget' },
+    { value: 'CAMPAIGN', label: 'Campaign budget' },
+  ],
   genderTargeting: [
     { value: 'ALL', label: 'All genders' },
     { value: 'MALE', label: 'Male' },
@@ -95,6 +99,7 @@ const defaultStaticDefaults = {
   campaignStatus: 'PAUSED',
   specialAdCategories: 'NONE',
   placements: 'ADVANTAGE_PLUS',
+  budgetLevel: 'AD_SET',
   audienceAgeMin: '18',
   audienceAgeMax: '65',
   genderTargeting: 'ALL',
@@ -957,7 +962,7 @@ const AdsLaunchPage = () => {
               </div>
             </div>
 
-            <div className="grid gap-4 xl:grid-cols-3">
+            <div className="grid gap-4 xl:grid-cols-4">
               <div className="space-y-2">
                 <FieldLabel htmlFor="source-token">Source token</FieldLabel>
                 <select
@@ -994,7 +999,26 @@ const AdsLaunchPage = () => {
               </div>
 
               <div className="space-y-2">
-                <FieldLabel htmlFor="daily-budget">Daily budget</FieldLabel>
+                <FieldLabel htmlFor="budget-level">Budget level</FieldLabel>
+                <select
+                  id="budget-level"
+                  value={form.staticDefaults.budgetLevel}
+                  onChange={(event) => updateStaticDefault('budgetLevel', event.target.value)}
+                  className="h-12 w-full rounded-xl border border-sky-100 bg-white px-4 outline-none transition focus:border-sky-400 focus:ring-4 focus:ring-sky-100"
+                >
+                  {staticDefaultOptions.budgetLevel.map((option) => (
+                    <option key={option.value} value={option.value}>
+                      {option.label}
+                    </option>
+                  ))}
+                  <option value="AD" disabled>
+                    Ad budget is not supported by Meta
+                  </option>
+                </select>
+              </div>
+
+              <div className="space-y-2">
+                <FieldLabel htmlFor="daily-budget">Daily budget amount</FieldLabel>
                 <input
                   id="daily-budget"
                   type="number"
@@ -1005,6 +1029,9 @@ const AdsLaunchPage = () => {
                   className="h-12 w-full rounded-xl border border-sky-100 bg-white px-4 outline-none transition focus:border-sky-400 focus:ring-4 focus:ring-sky-100"
                   placeholder="15"
                 />
+                <p className="text-xs font-semibold text-slate-400">
+                  Applied to the selected {form.staticDefaults.budgetLevel === 'CAMPAIGN' ? 'campaign' : 'ad set'}.
+                </p>
               </div>
             </div>
 
@@ -1480,6 +1507,25 @@ const AdsLaunchPage = () => {
                   </select>
                 </div>
 
+                <div className="space-y-2">
+                  <FieldLabel htmlFor="default-budget-level">Budget level</FieldLabel>
+                  <select
+                    id="default-budget-level"
+                    value={form.staticDefaults.budgetLevel}
+                    onChange={(event) => updateStaticDefault('budgetLevel', event.target.value)}
+                    className="h-12 w-full rounded-xl border border-sky-100 bg-white px-4 outline-none transition focus:border-sky-400 focus:ring-4 focus:ring-sky-100"
+                  >
+                    {staticDefaultOptions.budgetLevel.map((option) => (
+                      <option key={option.value} value={option.value}>
+                        {option.label}
+                      </option>
+                    ))}
+                    <option value="AD" disabled>
+                      Ad budget is not supported by Meta
+                    </option>
+                  </select>
+                </div>
+
                 <div className="space-y-2 md:col-span-2">
                   <FieldLabel htmlFor="default-age-min">Audience age</FieldLabel>
                   <div className="grid gap-3 sm:grid-cols-2">
@@ -1578,6 +1624,12 @@ const AdsLaunchPage = () => {
                   <span className="text-sm font-semibold text-slate-500">Placements</span>
                   <span className="text-right text-sm font-black text-slate-950">
                     {getOptionLabel(staticDefaultOptions.placements, form.staticDefaults.placements)}
+                  </span>
+                </div>
+                <div className="flex items-start justify-between gap-3 rounded-xl bg-sky-50/70 px-4 py-3">
+                  <span className="text-sm font-semibold text-slate-500">Budget level</span>
+                  <span className="text-right text-sm font-black text-slate-950">
+                    {getOptionLabel(staticDefaultOptions.budgetLevel, form.staticDefaults.budgetLevel)}
                   </span>
                 </div>
                 <div className="flex items-start justify-between gap-3 rounded-xl bg-sky-50/70 px-4 py-3">

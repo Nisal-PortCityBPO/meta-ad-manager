@@ -73,6 +73,7 @@ const DEFAULT_STATIC_DEFAULTS = Object.freeze({
   campaignStatus: 'PAUSED',
   specialAdCategories: 'NONE',
   placements: 'ADVANTAGE_PLUS',
+  budgetLevel: 'AD_SET',
   audienceAgeMin: '18',
   audienceAgeMax: '65',
   genderTargeting: 'ALL',
@@ -128,6 +129,7 @@ function sanitizeTemplateConfig(input = {}) {
       specialAdCategories:
         normalizeText(staticDefaults.specialAdCategories) || DEFAULT_STATIC_DEFAULTS.specialAdCategories,
       placements: normalizeText(staticDefaults.placements) || DEFAULT_STATIC_DEFAULTS.placements,
+      budgetLevel: normalizeText(staticDefaults.budgetLevel) || DEFAULT_STATIC_DEFAULTS.budgetLevel,
       audienceAgeMin: normalizeText(staticDefaults.audienceAgeMin) || DEFAULT_STATIC_DEFAULTS.audienceAgeMin,
       audienceAgeMax: normalizeText(staticDefaults.audienceAgeMax) || DEFAULT_STATIC_DEFAULTS.audienceAgeMax,
       genderTargeting: normalizeText(staticDefaults.genderTargeting) || DEFAULT_STATIC_DEFAULTS.genderTargeting,
@@ -243,6 +245,20 @@ function resolveBuyingType(value) {
   }
 
   return buyingType;
+}
+
+function resolveBudgetLevel(value) {
+  const budgetLevel = normalizeText(value) || DEFAULT_STATIC_DEFAULTS.budgetLevel;
+
+  if (!['AD_SET', 'CAMPAIGN'].includes(budgetLevel)) {
+    throw new HttpError(400, 'Budget level must be ad set or campaign. Meta does not support ad-level budgets.');
+  }
+
+  return budgetLevel;
+}
+
+function usesCampaignBudget(staticDefaults = {}) {
+  return resolveBudgetLevel(staticDefaults.budgetLevel) === 'CAMPAIGN';
 }
 
 function resolveBillingEvent({ objective, billingEvent }) {
@@ -702,6 +718,7 @@ function ensurePublishPayload(payload) {
       specialAdCategories:
         normalizeText(staticDefaults.specialAdCategories) || DEFAULT_STATIC_DEFAULTS.specialAdCategories,
       placements: normalizeText(staticDefaults.placements) || DEFAULT_STATIC_DEFAULTS.placements,
+      budgetLevel: normalizeText(staticDefaults.budgetLevel) || DEFAULT_STATIC_DEFAULTS.budgetLevel,
       audienceAgeMin: normalizeText(staticDefaults.audienceAgeMin) || DEFAULT_STATIC_DEFAULTS.audienceAgeMin,
       audienceAgeMax: normalizeText(staticDefaults.audienceAgeMax) || DEFAULT_STATIC_DEFAULTS.audienceAgeMax,
       genderTargeting: normalizeText(staticDefaults.genderTargeting) || DEFAULT_STATIC_DEFAULTS.genderTargeting,
@@ -822,21 +839,29 @@ function getPublishStepCountPerAccount(media) {
   return String(media?.type || '').startsWith('video/') ? 6 : 5;
 }
 
-async function createCampaign({ token, adAccountId, name, objective, staticDefaults }) {
+async function createCampaign({ token, adAccountId, name, objective, dailyBudget, currency, staticDefaults }) {
   const specialAdCategories = getSpecialAdCategoriesValue(staticDefaults.specialAdCategories);
+  const campaignBudget = usesCampaignBudget(staticDefaults);
+  const params = {
+    name,
+    objective,
+    status: staticDefaults.campaignStatus || DEFAULT_STATIC_DEFAULTS.campaignStatus,
+    buying_type: resolveBuyingType(staticDefaults.buyingType),
+    special_ad_categories: specialAdCategories,
+    special_ad_category_country: specialAdCategories.length ? staticDefaults.countries : undefined,
+  };
+
+  if (campaignBudget) {
+    params.daily_budget = toMetaBudget(dailyBudget, currency);
+    params.bid_strategy = resolveBidStrategy(staticDefaults.bidStrategy);
+  } else {
+    params.is_adset_budget_sharing_enabled = false;
+  }
 
   return postToMeta({
     token,
     path: `${adAccountId}/campaigns`,
-    params: {
-      name,
-      objective,
-      status: staticDefaults.campaignStatus || DEFAULT_STATIC_DEFAULTS.campaignStatus,
-      buying_type: resolveBuyingType(staticDefaults.buyingType),
-      special_ad_categories: specialAdCategories,
-      special_ad_category_country: specialAdCategories.length ? staticDefaults.countries : undefined,
-      is_adset_budget_sharing_enabled: false,
-    },
+    params,
   });
 }
 
@@ -857,6 +882,7 @@ async function createAdSet({
   const ageMin = Number.parseInt(staticDefaults.audienceAgeMin, 10);
   const ageMax = Number.parseInt(staticDefaults.audienceAgeMax, 10);
   const isSpecialAdCategory = isSpecialAdCategoryCampaign(staticDefaults.specialAdCategories);
+  const campaignBudget = usesCampaignBudget(staticDefaults);
   const targeting = {
     geo_locations: {
       countries,
@@ -882,16 +908,19 @@ async function createAdSet({
   const params = {
     name,
     campaign_id: campaignId,
-    daily_budget: toMetaBudget(dailyBudget, currency),
     billing_event: resolveBillingEvent({
       objective,
       billingEvent: staticDefaults.billingEvent,
     }),
     optimization_goal: settings.optimizationGoal,
-    bid_strategy: resolveBidStrategy(staticDefaults.bidStrategy),
     status: staticDefaults.campaignStatus || DEFAULT_STATIC_DEFAULTS.campaignStatus,
     targeting,
   };
+
+  if (!campaignBudget) {
+    params.daily_budget = toMetaBudget(dailyBudget, currency);
+    params.bid_strategy = resolveBidStrategy(staticDefaults.bidStrategy);
+  }
 
   const promotedObject = settings.buildPromotedObject({ pageId, pixelId });
   if (promotedObject) {
@@ -1221,6 +1250,8 @@ async function publishLaunch({ payload, actor, req, onProgress = null }) {
           adAccountId,
           name: names.campaignName,
           objective: launch.objective,
+          dailyBudget: launch.dailyBudget,
+          currency: selectedAccount.currency,
           staticDefaults: launch.staticDefaults,
         }),
         progress,

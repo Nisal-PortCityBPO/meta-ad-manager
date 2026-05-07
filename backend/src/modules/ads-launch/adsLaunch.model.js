@@ -119,6 +119,11 @@ const launchTemplateConfigSchema = new mongoose.Schema(
         default: 'ADVANTAGE_PLUS',
         trim: true,
       },
+      budgetLevel: {
+        type: String,
+        default: 'AD_SET',
+        trim: true,
+      },
       audienceAgeMin: {
         type: String,
         default: '18',

@@ -301,6 +301,7 @@ async function rememberMetaActionFailure({ campaign, action, error, actor }) {
 
 async function recordPublishedCampaign({ token, launch, account, names, campaign, adSet, creative, ad, media, thumbnail, actor }) {
   const status = normalizeText(launch.staticDefaults?.campaignStatus) || 'PAUSED';
+  const budgetLevel = normalizeText(launch.staticDefaults?.budgetLevel) === 'CAMPAIGN' ? 'Campaign daily' : 'Ad set daily';
   const campaignId = normalizeText(campaign?.id);
 
   if (!campaignId) {
@@ -335,7 +336,7 @@ async function recordPublishedCampaign({ token, launch, account, names, campaign
         adId: normalizeText(ad?.id),
         adName: names.adName,
         budget: {
-          type: 'Daily',
+          type: budgetLevel,
           amount: toStoredBudgetAmount(launch.dailyBudget, account.currency),
           currency: account.currency || '',
         },

@@ -1,17 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import toast from 'react-hot-toast';
-import {
-  Check,
-  Copy,
-  Database,
-  LoaderCircle,
-  PauseCircle,
-  PlayCircle,
-  RefreshCw,
-  Search,
-  Trash2,
-  X,
-} from 'lucide-react';
+import { Check, Copy, Database, Eye, LoaderCircle, PauseCircle, PlayCircle, RefreshCw, Search, Trash2, X } from 'lucide-react';
 import DashboardHeader from '../../dashboard/components/DashboardHeader';
 import DashboardPanel from '../../dashboard/components/DashboardPanel';
 import { useTokens } from '../../token-management/hooks/useTokens';
@@ -116,6 +105,19 @@ const DetailPill = ({ children }) => (
   <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-black text-slate-600">{children}</span>
 );
 
+const TableActionButton = ({ children, className = '', disabled = false, title, onClick }) => (
+  <button
+    type="button"
+    onClick={onClick}
+    disabled={disabled}
+    title={title}
+    aria-label={title}
+    className={`flex h-9 w-9 items-center justify-center rounded-xl border text-sm font-bold transition disabled:cursor-not-allowed disabled:opacity-45 ${className}`}
+  >
+    {children}
+  </button>
+);
+
 const AdsManagePage = () => {
   const { error: tokensError, loading: tokensLoading, tokens } = useTokens();
 
@@ -128,6 +130,7 @@ const AdsManagePage = () => {
   const [warnings, setWarnings] = useState([]);
   const [loadingCampaigns, setLoadingCampaigns] = useState(false);
   const [actionCampaignId, setActionCampaignId] = useState('');
+  const [expandedCampaignId, setExpandedCampaignId] = useState('');
   const [duplicateCampaign, setDuplicateCampaign] = useState(null);
   const [duplicateName, setDuplicateName] = useState('');
   const [duplicateStatus, setDuplicateStatus] = useState('PAUSED');
@@ -512,117 +515,166 @@ const AdsManagePage = () => {
             <div className="h-28 animate-pulse rounded-2xl bg-sky-50" />
           </div>
         ) : filteredCampaigns.length ? (
-          <div className="space-y-3">
-            {filteredCampaigns.map((campaign) => {
-              const isDeleted = campaign.status === 'DELETED';
-              const nextStatus = campaign.status === 'ACTIVE' ? 'PAUSED' : 'ACTIVE';
-              const updating = actionCampaignId === campaign.id;
+          <div className="overflow-hidden rounded-2xl border border-sky-100 bg-white shadow-sm shadow-sky-100/70">
+            <div className="overflow-x-auto">
+              <table className="min-w-[1120px] w-full text-left">
+                <thead className="bg-sky-50/80">
+                  <tr className="text-xs font-black uppercase tracking-[0.16em] text-sky-700">
+                    <th className="px-4 py-3">Status</th>
+                    <th className="px-4 py-3">Campaign</th>
+                    <th className="px-4 py-3">Account</th>
+                    <th className="px-4 py-3">Budget</th>
+                    <th className="px-4 py-3">Launch</th>
+                    <th className="px-4 py-3">Meta IDs</th>
+                    <th className="px-4 py-3">Saved</th>
+                    <th className="px-4 py-3 text-right">Actions</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-sky-50">
+                  {filteredCampaigns.map((campaign) => {
+                    const isDeleted = campaign.status === 'DELETED';
+                    const nextStatus = campaign.status === 'ACTIVE' ? 'PAUSED' : 'ACTIVE';
+                    const updating = actionCampaignId === campaign.id;
+                    const expanded = expandedCampaignId === campaign.id;
 
-              return (
-                <div key={campaign.id} className="rounded-2xl border border-sky-100 bg-white px-4 py-4 shadow-sm shadow-sky-100/70">
-                  <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
-                    <div className="min-w-0">
-                      <div className="flex flex-wrap items-center gap-2">
-                        <span className={`rounded-full px-3 py-1 text-xs font-black ${getStatusTone(campaign.effectiveStatus || campaign.status)}`}>
-                          {campaign.effectiveStatus || campaign.status || 'UNKNOWN'}
-                        </span>
-                        <DetailPill>{campaign.objective || 'No objective'}</DetailPill>
-                        <DetailPill>{campaign.source === 'DUPLICATE' ? 'Duplicated' : 'Ads Launch'}</DetailPill>
-                      </div>
-                      <p className="mt-3 break-words text-lg font-black text-slate-950">{campaign.name}</p>
-                      <p className="mt-1 text-xs font-semibold text-slate-400">
-                        Campaign {campaign.id} | {campaign.adAccount?.name || campaign.adAccount?.id}
-                      </p>
-                    </div>
-
-                    <div className="flex flex-wrap gap-2">
-                      <button
-                        type="button"
-                        onClick={() => updateCampaignStatus(campaign, nextStatus)}
-                        disabled={updating || isDeleted}
-                        className={`flex h-10 items-center gap-2 rounded-xl px-3 text-sm font-bold transition disabled:cursor-not-allowed disabled:opacity-50 ${
-                          nextStatus === 'PAUSED'
-                            ? 'bg-amber-50 text-amber-700 hover:bg-amber-100'
-                            : 'bg-emerald-50 text-emerald-700 hover:bg-emerald-100'
-                        }`}
-                      >
-                        {updating ? (
-                          <LoaderCircle size={16} strokeWidth={2.2} className="animate-spin" />
-                        ) : nextStatus === 'PAUSED' ? (
-                          <PauseCircle size={16} strokeWidth={2.2} />
-                        ) : (
-                          <PlayCircle size={16} strokeWidth={2.2} />
-                        )}
-                        {nextStatus === 'PAUSED' ? 'Pause' : 'Activate'}
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => openDuplicateDialog(campaign)}
-                        disabled={updating || isDeleted}
-                        className="flex h-10 items-center gap-2 rounded-xl border border-sky-100 bg-white px-3 text-sm font-bold text-slate-700 transition hover:bg-sky-50 disabled:cursor-not-allowed disabled:opacity-50"
-                      >
-                        <Copy size={16} strokeWidth={2.2} />
-                        Duplicate
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => deleteCampaign(campaign)}
-                        disabled={updating || isDeleted}
-                        className="flex h-10 items-center gap-2 rounded-xl border border-red-100 bg-white px-3 text-sm font-bold text-red-600 transition hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-50"
-                      >
-                        {updating ? <LoaderCircle size={16} strokeWidth={2.2} className="animate-spin" /> : <Trash2 size={16} strokeWidth={2.2} />}
-                        Delete
-                      </button>
-                    </div>
-                  </div>
-
-                  <div className="mt-4 grid gap-3 md:grid-cols-2 2xl:grid-cols-4">
-                    <div className="rounded-xl bg-sky-50/70 px-3 py-3">
-                      <p className="text-xs font-bold uppercase tracking-[0.16em] text-sky-600">Budget</p>
-                      <p className="mt-2 text-sm font-black text-slate-950">{formatBudget(campaign)}</p>
-                    </div>
-                    <div className="rounded-xl bg-sky-50/70 px-3 py-3">
-                      <p className="text-xs font-bold uppercase tracking-[0.16em] text-sky-600">Ad set</p>
-                      <p className="mt-2 break-words text-sm font-black text-slate-950">{campaign.adSetId || 'Saved by Meta copy'}</p>
-                    </div>
-                    <div className="rounded-xl bg-sky-50/70 px-3 py-3">
-                      <p className="text-xs font-bold uppercase tracking-[0.16em] text-sky-600">Creative / Ad</p>
-                      <p className="mt-2 break-words text-sm font-black text-slate-950">
-                        {campaign.creativeId || 'N/A'} / {campaign.adId || 'N/A'}
-                      </p>
-                    </div>
-                    <div className="rounded-xl bg-sky-50/70 px-3 py-3">
-                      <p className="text-xs font-bold uppercase tracking-[0.16em] text-sky-600">Saved</p>
-                      <p className="mt-2 text-sm font-black text-slate-950">{formatDateTime(campaign.updatedTime)}</p>
-                    </div>
-                  </div>
-
-                  <div className="mt-3 grid gap-3 lg:grid-cols-3">
-                    <div className="rounded-xl bg-slate-50 px-3 py-3">
-                      <p className="text-xs font-bold uppercase tracking-[0.16em] text-slate-500">Launch</p>
-                      <p className="mt-2 text-sm font-black text-slate-950">{campaign.launch?.launchLabel || 'Not saved'}</p>
-                      <p className="mt-1 text-xs font-semibold text-slate-400">{campaign.launch?.countryLabel || campaign.launch?.countries?.join(', ')}</p>
-                    </div>
-                    <div className="rounded-xl bg-slate-50 px-3 py-3">
-                      <p className="text-xs font-bold uppercase tracking-[0.16em] text-slate-500">Destination</p>
-                      <p className="mt-2 break-words text-sm font-black text-slate-950">{campaign.launch?.websiteUrl || 'Not saved'}</p>
-                      <p className="mt-1 text-xs font-semibold text-slate-400">{campaign.launch?.callToAction || ''}</p>
-                    </div>
-                    <div className="rounded-xl bg-slate-50 px-3 py-3">
-                      <p className="text-xs font-bold uppercase tracking-[0.16em] text-slate-500">Copy</p>
-                      <p className="mt-2 break-words text-sm font-black text-slate-950">{campaign.launch?.headline || 'Not saved'}</p>
-                      <p className="mt-1 line-clamp-2 text-xs font-semibold text-slate-400">{campaign.launch?.primaryText || ''}</p>
-                    </div>
-                  </div>
-
-                  {campaign.lastMetaError ? (
-                    <p className="mt-3 rounded-xl bg-red-50 px-3 py-3 text-sm font-semibold text-red-700">
-                      Last Meta action error: {campaign.lastMetaError}
-                    </p>
-                  ) : null}
-                </div>
-              );
-            })}
+                    return (
+                      <>
+                        <tr key={campaign.id} className="align-top transition hover:bg-sky-50/40">
+                          <td className="px-4 py-4">
+                            <span className={`inline-flex rounded-full px-3 py-1 text-xs font-black ${getStatusTone(campaign.effectiveStatus || campaign.status)}`}>
+                              {campaign.effectiveStatus || campaign.status || 'UNKNOWN'}
+                            </span>
+                            {campaign.lastMetaError ? (
+                              <p className="mt-2 max-w-36 text-xs font-semibold text-red-600">Action error</p>
+                            ) : null}
+                          </td>
+                          <td className="max-w-[300px] px-4 py-4">
+                            <p className="line-clamp-2 text-sm font-black text-slate-950">{campaign.name}</p>
+                            <p className="mt-1 break-all text-xs font-semibold text-slate-400">{campaign.id}</p>
+                            <div className="mt-2 flex flex-wrap gap-1.5">
+                              <DetailPill>{campaign.objective || 'No objective'}</DetailPill>
+                              <DetailPill>{campaign.source === 'DUPLICATE' ? 'Duplicated' : 'Ads Launch'}</DetailPill>
+                            </div>
+                          </td>
+                          <td className="max-w-[210px] px-4 py-4">
+                            <p className="truncate text-sm font-black text-slate-900">{campaign.adAccount?.name || campaign.adAccount?.id || 'Not saved'}</p>
+                            <p className="mt-1 text-xs font-semibold text-slate-400">
+                              {campaign.adAccount?.accountId || campaign.adAccount?.id || ''}
+                              {campaign.adAccount?.currency ? ` | ${campaign.adAccount.currency}` : ''}
+                            </p>
+                          </td>
+                          <td className="px-4 py-4">
+                            <p className="text-sm font-black text-slate-950">{formatBudget(campaign)}</p>
+                            <p className="mt-1 text-xs font-semibold text-slate-400">{campaign.budget?.type || 'Budget'}</p>
+                          </td>
+                          <td className="max-w-[220px] px-4 py-4">
+                            <p className="truncate text-sm font-black text-slate-950">{campaign.launch?.launchLabel || 'Not saved'}</p>
+                            <p className="mt-1 truncate text-xs font-semibold text-slate-400">
+                              {campaign.launch?.countryLabel || campaign.launch?.countries?.join(', ') || 'No country'}
+                            </p>
+                            <p className="mt-1 truncate text-xs font-semibold text-slate-400">{campaign.launch?.websiteUrl || 'No URL saved'}</p>
+                          </td>
+                          <td className="px-4 py-4">
+                            <div className="space-y-1 text-xs font-semibold text-slate-500">
+                              <p className="break-all">
+                                <span className="font-black text-slate-700">Ad set:</span> {campaign.adSetId || 'Meta copy'}
+                              </p>
+                              <p className="break-all">
+                                <span className="font-black text-slate-700">Creative:</span> {campaign.creativeId || 'N/A'}
+                              </p>
+                              <p className="break-all">
+                                <span className="font-black text-slate-700">Ad:</span> {campaign.adId || 'N/A'}
+                              </p>
+                            </div>
+                          </td>
+                          <td className="px-4 py-4">
+                            <p className="text-sm font-black text-slate-950">{formatDateTime(campaign.updatedTime)}</p>
+                            <p className="mt-1 text-xs font-semibold text-slate-400">
+                              {campaign.lastActionAt ? `Action ${formatDateTime(campaign.lastActionAt)}` : 'No action yet'}
+                            </p>
+                          </td>
+                          <td className="px-4 py-4">
+                            <div className="flex justify-end gap-2">
+                              <TableActionButton
+                                onClick={() => setExpandedCampaignId((current) => (current === campaign.id ? '' : campaign.id))}
+                                className="border-sky-100 bg-white text-slate-600 hover:bg-sky-50"
+                                title={expanded ? 'Hide details' : 'Show details'}
+                              >
+                                <Eye size={16} strokeWidth={2.2} />
+                              </TableActionButton>
+                              <TableActionButton
+                                onClick={() => updateCampaignStatus(campaign, nextStatus)}
+                                disabled={updating || isDeleted}
+                                className={
+                                  nextStatus === 'PAUSED'
+                                    ? 'border-amber-100 bg-amber-50 text-amber-700 hover:bg-amber-100'
+                                    : 'border-emerald-100 bg-emerald-50 text-emerald-700 hover:bg-emerald-100'
+                                }
+                                title={nextStatus === 'PAUSED' ? 'Pause campaign' : 'Activate campaign'}
+                              >
+                                {updating ? (
+                                  <LoaderCircle size={16} strokeWidth={2.2} className="animate-spin" />
+                                ) : nextStatus === 'PAUSED' ? (
+                                  <PauseCircle size={16} strokeWidth={2.2} />
+                                ) : (
+                                  <PlayCircle size={16} strokeWidth={2.2} />
+                                )}
+                              </TableActionButton>
+                              <TableActionButton
+                                onClick={() => openDuplicateDialog(campaign)}
+                                disabled={updating || isDeleted}
+                                className="border-sky-100 bg-white text-slate-700 hover:bg-sky-50"
+                                title="Duplicate campaign"
+                              >
+                                <Copy size={16} strokeWidth={2.2} />
+                              </TableActionButton>
+                              <TableActionButton
+                                onClick={() => deleteCampaign(campaign)}
+                                disabled={updating || isDeleted}
+                                className="border-red-100 bg-white text-red-600 hover:bg-red-50"
+                                title="Delete campaign"
+                              >
+                                {updating ? <LoaderCircle size={16} strokeWidth={2.2} className="animate-spin" /> : <Trash2 size={16} strokeWidth={2.2} />}
+                              </TableActionButton>
+                            </div>
+                          </td>
+                        </tr>
+                        {expanded ? (
+                          <tr key={`${campaign.id}-details`} className="bg-slate-50/80">
+                            <td colSpan={8} className="px-4 py-4">
+                              <div className="grid gap-3 lg:grid-cols-3">
+                                <div className="rounded-xl bg-white px-3 py-3">
+                                  <p className="text-xs font-bold uppercase tracking-[0.16em] text-slate-500">Launch</p>
+                                  <p className="mt-2 text-sm font-black text-slate-950">{campaign.launch?.launchLabel || 'Not saved'}</p>
+                                  <p className="mt-1 text-xs font-semibold text-slate-400">
+                                    {campaign.launch?.countryLabel || campaign.launch?.countries?.join(', ')}
+                                  </p>
+                                </div>
+                                <div className="rounded-xl bg-white px-3 py-3">
+                                  <p className="text-xs font-bold uppercase tracking-[0.16em] text-slate-500">Destination</p>
+                                  <p className="mt-2 break-words text-sm font-black text-slate-950">{campaign.launch?.websiteUrl || 'Not saved'}</p>
+                                  <p className="mt-1 text-xs font-semibold text-slate-400">{campaign.launch?.callToAction || ''}</p>
+                                </div>
+                                <div className="rounded-xl bg-white px-3 py-3">
+                                  <p className="text-xs font-bold uppercase tracking-[0.16em] text-slate-500">Copy</p>
+                                  <p className="mt-2 break-words text-sm font-black text-slate-950">{campaign.launch?.headline || 'Not saved'}</p>
+                                  <p className="mt-1 line-clamp-2 text-xs font-semibold text-slate-400">{campaign.launch?.primaryText || ''}</p>
+                                </div>
+                              </div>
+                              {campaign.lastMetaError ? (
+                                <p className="mt-3 rounded-xl bg-red-50 px-3 py-3 text-sm font-semibold text-red-700">
+                                  Last Meta action error: {campaign.lastMetaError}
+                                </p>
+                              ) : null}
+                            </td>
+                          </tr>
+                        ) : null}
+                      </>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
           </div>
         ) : (
           <EmptyState>
