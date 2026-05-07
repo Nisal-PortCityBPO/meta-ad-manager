@@ -15,6 +15,7 @@ import {
   MousePointerClick,
   Pencil,
   Plus,
+  RefreshCw,
   Rocket,
   Save,
   Trash2,
@@ -43,15 +44,16 @@ const countryOptions = [
 
 const TEMPLATES_PER_PAGE = 2;
 
+const TRAFFIC_OBJECTIVE = 'OUTCOME_TRAFFIC';
+
 const objectiveOptions = [
-  { value: 'OUTCOME_TRAFFIC', label: 'Traffic' },
+  { value: TRAFFIC_OBJECTIVE, label: 'Traffic' },
   { value: 'OUTCOME_ENGAGEMENT', label: 'Engagement' },
   { value: 'OUTCOME_LEADS', label: 'Leads' },
   { value: 'OUTCOME_SALES', label: 'Sales' },
 ];
 
-const supportedObjectiveValues = new Set(objectiveOptions.map((objective) => objective.value));
-const normalizeObjective = (objective) => (supportedObjectiveValues.has(objective) ? objective : 'OUTCOME_TRAFFIC');
+const normalizeObjective = () => TRAFFIC_OBJECTIVE;
 
 const websiteEventOptions = [
   { value: 'LEAD', label: 'Lead' },
@@ -63,11 +65,6 @@ const websiteEventOptions = [
   { value: 'CONTACT', label: 'Contact' },
   { value: 'SUBSCRIBE', label: 'Subscribe' },
 ];
-
-const defaultWebsiteEventByObjective = {
-  OUTCOME_LEADS: 'LEAD',
-  OUTCOME_SALES: 'PURCHASE',
-};
 
 const callToActionOptions = [
   { value: 'LEARN_MORE', label: 'Learn More' },
@@ -228,6 +225,126 @@ const EmptyState = ({ children }) => (
     {children}
   </div>
 );
+
+const formatFileSize = (bytes = 0) => {
+  if (!bytes) {
+    return '0 KB';
+  }
+
+  if (bytes >= 1024 * 1024) {
+    return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+  }
+
+  return `${Math.max(Math.round(bytes / 1024), 1)} KB`;
+};
+
+const AdsLaunchMediaLibraryPicker = ({
+  description,
+  loading,
+  mediaAssets,
+  mode = 'media',
+  onClose,
+  onRefresh,
+  onSelect,
+  selectedMediaAssetUrl,
+}) => {
+  if (!onClose) {
+    return null;
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/50 px-4 py-6 backdrop-blur-sm">
+      <div className="max-h-[90vh] w-full max-w-5xl overflow-y-auto rounded-3xl border border-sky-100 bg-white p-5 shadow-2xl shadow-slate-950/20">
+        <div className="flex flex-wrap items-start justify-between gap-4">
+          <div>
+            <p className="text-xs font-black uppercase tracking-[0.18em] text-sky-600">Ads Media Library</p>
+            <h3 className="mt-1 text-xl font-black text-slate-950">{mode === 'thumbnail' ? 'Choose thumbnail image' : 'Choose image or video'}</h3>
+            <p className="mt-1 text-sm font-semibold text-slate-500">{description}</p>
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <a
+              href="/ads-media-library"
+              target="_blank"
+              rel="noreferrer"
+              className="inline-flex h-10 items-center gap-2 rounded-xl bg-slate-950 px-4 text-sm font-black text-white transition hover:bg-slate-800"
+            >
+              <Upload size={16} strokeWidth={2.3} />
+              Upload media
+            </a>
+            <button type="button" onClick={onRefresh} disabled={loading} className="flex h-10 items-center gap-2 rounded-xl border border-sky-100 bg-white px-4 text-sm font-black text-slate-700 transition hover:bg-sky-50 disabled:opacity-50">
+              <RefreshCw size={16} className={loading ? 'animate-spin' : ''} />
+              Refresh
+            </button>
+            <button type="button" onClick={onClose} className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-sky-100 text-slate-500 transition hover:bg-sky-50">
+              <X size={18} strokeWidth={2.4} />
+            </button>
+          </div>
+        </div>
+
+        {loading ? (
+          <div className="mt-5 grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+            {[0, 1, 2].map((item) => <div key={item} className="h-72 animate-pulse rounded-3xl bg-sky-50" />)}
+          </div>
+        ) : mediaAssets.length ? (
+          <div className="mt-5 grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+            {mediaAssets.map((mediaAsset) => {
+              const isVideo = mediaAsset.mediaType === 'VIDEO';
+              const media = mediaAsset.media || {};
+              const selected = selectedMediaAssetUrl === media.url;
+
+              return (
+                <button
+                  key={mediaAsset.id}
+                  type="button"
+                  onClick={() => onSelect(mediaAsset)}
+                  className={`overflow-hidden rounded-3xl border bg-white text-left shadow-sm transition ${
+                    selected
+                      ? 'border-sky-500 ring-4 ring-sky-100'
+                      : 'border-sky-100 hover:border-sky-300 hover:shadow-lg hover:shadow-sky-100'
+                  }`}
+                >
+                  <div className="relative bg-slate-950">
+                    {isVideo ? (
+                      <video src={media.url} poster={mediaAsset.thumbnail?.url} className="h-44 w-full object-contain" />
+                    ) : (
+                      <img src={media.url} alt={mediaAsset.name} className="h-44 w-full object-cover" />
+                    )}
+                    <span className={`absolute left-3 top-3 inline-flex items-center gap-2 rounded-full px-3 py-1 text-xs font-black ${isVideo ? 'bg-amber-50 text-amber-700' : 'bg-sky-50 text-sky-700'}`}>
+                      {isVideo ? <Video size={14} strokeWidth={2.4} /> : <ImageIcon size={14} strokeWidth={2.4} />}
+                      {isVideo ? 'Video' : 'Image'}
+                    </span>
+                    {selected ? (
+                      <span className="absolute right-3 top-3 rounded-full bg-emerald-50 px-3 py-1 text-xs font-black text-emerald-700">
+                        Selected
+                      </span>
+                    ) : null}
+                  </div>
+                  <div className="p-4">
+                    <p className="truncate text-sm font-black text-slate-950">{mediaAsset.name}</p>
+                    <p className="mt-1 truncate text-xs font-semibold text-slate-400">
+                      {media.width || 0}x{media.height || 0} | {formatFileSize(media.size)}
+                    </p>
+                    {isVideo ? (
+                      <p className={`mt-2 rounded-xl px-3 py-2 text-xs font-bold ${mediaAsset.thumbnail?.url ? 'bg-amber-50 text-amber-700' : 'bg-red-50 text-red-600'}`}>
+                        {mediaAsset.thumbnail?.url ? 'Default video thumbnail available' : 'No default thumbnail'}
+                      </p>
+                    ) : null}
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+        ) : (
+          <p className="mt-5 rounded-2xl bg-sky-50 px-4 py-8 text-sm font-semibold text-slate-500">
+            {mode === 'thumbnail'
+              ? 'No image assets available for thumbnails. Upload an image in Ads Media Library, then refresh.'
+              : 'No saved media yet. Upload an image or video in Ads Media Library, then refresh.'}
+          </p>
+        )}
+      </div>
+    </div>
+  );
+};
 
 const formatDateTime = (value) => {
   if (!value) {
@@ -541,6 +658,11 @@ const AdsLaunchPage = () => {
   const [savedThumbnailAsset, setSavedThumbnailAsset] = useState(null);
   const [mediaPreviewUrl, setMediaPreviewUrl] = useState('');
   const [thumbnailPreviewUrl, setThumbnailPreviewUrl] = useState('');
+  const [mediaAssets, setMediaAssets] = useState([]);
+  const [mediaAssetsLoading, setMediaAssetsLoading] = useState(false);
+  const [mediaLibraryPickerMode, setMediaLibraryPickerMode] = useState('');
+  const [creativeSource, setCreativeSource] = useState('saved');
+  const [thumbnailSource, setThumbnailSource] = useState('saved');
 
   const activeTokens = useMemo(() => tokens.filter((token) => token.status === 'ACTIVE'), [tokens]);
   const activeTemplate = useMemo(
@@ -668,6 +790,10 @@ const AdsLaunchPage = () => {
   const activeMediaPreviewUrl = activeMediaAsset?.url || '';
   const activeThumbnailPreviewUrl = activeThumbnailAsset?.url || '';
   const isVideoAsset = activeMediaAsset?.type?.startsWith('video/') || false;
+  const imageMediaAssets = useMemo(
+    () => mediaAssets.filter((mediaAsset) => mediaAsset.mediaType === 'IMAGE'),
+    [mediaAssets]
+  );
   const currentObjective = normalizeObjective(form.objective);
   const pixelRequired = currentObjective === 'OUTCOME_LEADS' || currentObjective === 'OUTCOME_SALES';
   const canGenerate = Boolean(
@@ -748,6 +874,22 @@ const AdsLaunchPage = () => {
     return () => {
       isMounted = false;
     };
+  }, []);
+
+  const loadMediaAssets = async () => {
+    setMediaAssetsLoading(true);
+    try {
+      const data = await adsLaunchApi.getMediaAssets();
+      setMediaAssets(data.mediaAssets || []);
+    } catch (requestError) {
+      toast.error(requestError.message);
+    } finally {
+      setMediaAssetsLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    loadMediaAssets();
   }, []);
 
   useEffect(() => {
@@ -914,17 +1056,15 @@ const AdsLaunchPage = () => {
   };
 
   const handleObjectiveChange = (objective) => {
-    const nextObjective = normalizeObjective(objective);
+    if (objective !== TRAFFIC_OBJECTIVE) {
+      toast.error('Only Traffic objective is enabled for now');
+    }
 
     setForm((current) => {
-      const currentDefaultEvent = defaultWebsiteEventByObjective[normalizeObjective(current.objective)] || current.websiteEvent;
-      const nextDefaultEvent = defaultWebsiteEventByObjective[nextObjective] || current.websiteEvent || 'LEAD';
-      const shouldUseNextDefault = !current.websiteEvent || current.websiteEvent === currentDefaultEvent;
-
       return {
         ...current,
-        objective: nextObjective,
-        websiteEvent: shouldUseNextDefault ? nextDefaultEvent : current.websiteEvent,
+        objective: TRAFFIC_OBJECTIVE,
+        websiteEvent: '',
       };
     });
   };
@@ -1022,6 +1162,8 @@ const AdsLaunchPage = () => {
     clearUploadedCreativeFiles();
     setSavedMediaAsset(null);
     setSavedThumbnailAsset(null);
+    setCreativeSource('saved');
+    setThumbnailSource('saved');
   };
 
   const resetComposer = () => {
@@ -1077,19 +1219,102 @@ const AdsLaunchPage = () => {
 
   const handleMediaChange = (event) => {
     const file = event.target.files?.[0] || null;
+    event.target.value = '';
     setMediaFile(file);
     setSavedMediaAsset(null);
+    setCreativeSource(file ? 'upload' : 'saved');
 
     if (file && !file.type.startsWith('video/')) {
       setThumbnailFile(null);
       setSavedThumbnailAsset(null);
+      setThumbnailSource('saved');
     }
   };
 
   const handleThumbnailChange = (event) => {
     const file = event.target.files?.[0] || null;
+    event.target.value = '';
     setThumbnailFile(file);
     setSavedThumbnailAsset(null);
+    setThumbnailSource(file ? 'upload' : 'saved');
+  };
+
+  const normalizeMediaLibraryMediaAsset = (mediaAsset) => {
+    if (!mediaAsset?.media?.url) {
+      return null;
+    }
+
+    return {
+      name: mediaAsset.media.name || mediaAsset.name,
+      type: mediaAsset.media.type,
+      url: mediaAsset.media.url,
+      size: mediaAsset.media.size || 0,
+    };
+  };
+
+  const normalizeMediaLibraryThumbnailAsset = (mediaAsset) => {
+    if (!mediaAsset) {
+      return null;
+    }
+
+    if (mediaAsset.mediaType === 'IMAGE') {
+      return normalizeMediaLibraryMediaAsset(mediaAsset);
+    }
+
+    if (!mediaAsset.thumbnail?.url) {
+      return null;
+    }
+
+    return {
+      name: mediaAsset.thumbnail.name || `${mediaAsset.name} thumbnail`,
+      type: mediaAsset.thumbnail.type,
+      url: mediaAsset.thumbnail.url,
+      size: mediaAsset.thumbnail.size || 0,
+    };
+  };
+
+  const selectMediaFromLibrary = (mediaAsset) => {
+    const libraryMedia = normalizeMediaLibraryMediaAsset(mediaAsset);
+
+    if (!libraryMedia) {
+      toast.error('Selected media is missing its saved file');
+      return;
+    }
+
+    setMediaFile(null);
+    setSavedMediaAsset(libraryMedia);
+    setCreativeSource('library');
+
+    if (mediaAsset.mediaType === 'VIDEO') {
+      const libraryThumbnail = normalizeMediaLibraryThumbnailAsset(mediaAsset);
+
+      setThumbnailFile(null);
+      setSavedThumbnailAsset(libraryThumbnail);
+      setThumbnailSource(libraryThumbnail ? 'library' : 'saved');
+      toast.success(libraryThumbnail ? 'Video selected with library thumbnail' : 'Video selected. Choose or upload a thumbnail.');
+    } else {
+      setThumbnailFile(null);
+      setSavedThumbnailAsset(null);
+      setThumbnailSource('saved');
+      toast.success(`Selected ${mediaAsset.name}`);
+    }
+
+    setMediaLibraryPickerMode('');
+  };
+
+  const selectThumbnailFromLibrary = (mediaAsset) => {
+    const libraryThumbnail = normalizeMediaLibraryThumbnailAsset(mediaAsset);
+
+    if (!libraryThumbnail) {
+      toast.error('Selected thumbnail is missing its saved image');
+      return;
+    }
+
+    setThumbnailFile(null);
+    setSavedThumbnailAsset(libraryThumbnail);
+    setThumbnailSource('library');
+    setMediaLibraryPickerMode('');
+    toast.success(`Selected thumbnail ${mediaAsset.name}`);
   };
 
   const serializeAssetForTemplate = async (file) => {
@@ -1129,13 +1354,13 @@ const AdsLaunchPage = () => {
   const buildTemplatePayload = async ({ includeStoredAssets = false } = {}) => {
     const media = mediaFile
       ? await serializeAssetForTemplate(mediaFile)
-      : includeStoredAssets
+      : includeStoredAssets || creativeSource === 'library'
         ? await serializeStoredAssetForTemplate(savedMediaAsset)
         : null;
     const thumbnail = isVideoAsset
       ? thumbnailFile
         ? await serializeAssetForTemplate(thumbnailFile)
-        : includeStoredAssets
+        : includeStoredAssets || thumbnailSource === 'library'
           ? await serializeStoredAssetForTemplate(savedThumbnailAsset)
           : null
       : null;
@@ -1172,13 +1397,19 @@ const AdsLaunchPage = () => {
           type: mediaFile.type,
           dataUrl: await readFileAsDataUrl(mediaFile),
         }
-      : null;
-    const thumbnail = isVideoAsset && thumbnailFile
-      ? {
-          name: thumbnailFile.name,
-          type: thumbnailFile.type,
-          dataUrl: await readFileAsDataUrl(thumbnailFile),
-        }
+      : activeMediaAsset
+        ? await serializeStoredAssetForTemplate(activeMediaAsset)
+        : null;
+    const thumbnail = isVideoAsset
+      ? thumbnailFile
+        ? {
+            name: thumbnailFile.name,
+            type: thumbnailFile.type,
+            dataUrl: await readFileAsDataUrl(thumbnailFile),
+          }
+        : activeThumbnailAsset
+          ? await serializeStoredAssetForTemplate(activeThumbnailAsset)
+          : null
       : null;
 
     return {
@@ -1260,6 +1491,8 @@ const AdsLaunchPage = () => {
       setTemplateName(data.template.name);
       setSavedMediaAsset(normalizeStoredAsset(data.template.snapshot?.media));
       setSavedThumbnailAsset(normalizeStoredAsset(data.template.snapshot?.thumbnail));
+      setCreativeSource('saved');
+      setThumbnailSource('saved');
       clearUploadedCreativeFiles();
       await loadTemplates();
       setTemplatePage(1);
@@ -1289,6 +1522,8 @@ const AdsLaunchPage = () => {
         setTemplateName('');
         setSavedMediaAsset(null);
         setSavedThumbnailAsset(null);
+        setCreativeSource('saved');
+        setThumbnailSource('saved');
       }
       await loadTemplates();
       toast.success(data.message);
@@ -1375,7 +1610,7 @@ const AdsLaunchPage = () => {
       country: countries[0] || '',
       countries,
       objective,
-      websiteEvent: config.websiteEvent || defaultWebsiteEventByObjective[objective] || 'LEAD',
+      websiteEvent: '',
       selectedAdAccountIds,
       staticDefaults: {
         ...defaultStaticDefaults,
@@ -1389,6 +1624,8 @@ const AdsLaunchPage = () => {
     clearUploadedCreativeFiles();
     setSavedMediaAsset(normalizeStoredAsset(template.snapshot?.media));
     setSavedThumbnailAsset(normalizeStoredAsset(template.snapshot?.thumbnail));
+    setCreativeSource('saved');
+    setThumbnailSource('saved');
     toast.success(`Loaded template "${template.name}"`);
   };
 
@@ -1500,6 +1737,23 @@ const AdsLaunchPage = () => {
           </div>
         }
       />
+
+      {mediaLibraryPickerMode ? (
+        <AdsLaunchMediaLibraryPicker
+          description={
+            mediaLibraryPickerMode === 'thumbnail'
+              ? 'Choose an image from the library to use as this video thumbnail.'
+              : 'Choose an image or video from the library. It can publish now and be copied into the saved launch template.'
+          }
+          loading={mediaAssetsLoading}
+          mediaAssets={mediaLibraryPickerMode === 'thumbnail' ? imageMediaAssets : mediaAssets}
+          mode={mediaLibraryPickerMode}
+          onClose={() => setMediaLibraryPickerMode('')}
+          onRefresh={loadMediaAssets}
+          onSelect={mediaLibraryPickerMode === 'thumbnail' ? selectThumbnailFromLibrary : selectMediaFromLibrary}
+          selectedMediaAssetUrl={mediaLibraryPickerMode === 'thumbnail' ? activeThumbnailAsset?.url : activeMediaAsset?.url}
+        />
+      ) : null}
 
       {brandsError ? <p className="mb-4 rounded-xl bg-red-50 px-4 py-3 text-sm font-semibold text-red-700">{brandsError}</p> : null}
       {tokensError ? <p className="mb-4 rounded-xl bg-red-50 px-4 py-3 text-sm font-semibold text-red-700">{tokensError}</p> : null}
@@ -1650,11 +1904,12 @@ const AdsLaunchPage = () => {
                   className="h-12 w-full rounded-xl border border-sky-100 bg-white px-4 outline-none transition focus:border-sky-400 focus:ring-4 focus:ring-sky-100"
                 >
                   {objectiveOptions.map((objective) => (
-                    <option key={objective.value} value={objective.value}>
-                      {objective.label}
+                    <option key={objective.value} value={objective.value} disabled={objective.value !== TRAFFIC_OBJECTIVE}>
+                      {objective.value === TRAFFIC_OBJECTIVE ? objective.label : `${objective.label} (disabled)`}
                     </option>
                   ))}
                 </select>
+                <p className="text-xs font-semibold text-slate-400">Only Traffic is enabled in the frontend for now.</p>
               </div>
 
               <div className="space-y-2">
@@ -2084,14 +2339,29 @@ const AdsLaunchPage = () => {
 
             <div className="grid gap-4 xl:grid-cols-2">
               <div className="space-y-2">
-                <FieldLabel htmlFor="media-upload">Image or video</FieldLabel>
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <FieldLabel htmlFor="media-upload">Image or video</FieldLabel>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (!mediaAssets.length) {
+                        loadMediaAssets();
+                      }
+                      setMediaLibraryPickerMode('media');
+                    }}
+                    className="inline-flex h-9 items-center gap-2 rounded-lg border border-sky-100 bg-white px-3 text-xs font-black uppercase tracking-[0.14em] text-sky-700 transition hover:bg-sky-50"
+                  >
+                    <FolderOpen size={14} strokeWidth={2.3} />
+                    Library
+                  </button>
+                </div>
                 <label
                   htmlFor="media-upload"
                   className="flex min-h-52 cursor-pointer flex-col items-center justify-center rounded-2xl border border-dashed border-sky-200 bg-sky-50/70 px-5 py-6 text-center transition hover:border-sky-400 hover:bg-sky-50"
                 >
                   <Upload size={26} strokeWidth={2.1} className="text-sky-600" />
                   <p className="mt-3 text-sm font-black text-slate-950">Upload image or video</p>
-                  <p className="mt-1 text-xs font-semibold text-slate-500">This file can be saved with the template and reused later.</p>
+                  <p className="mt-1 text-xs font-semibold text-slate-500">Upload a new file or use Library above. Either option can be saved with the template.</p>
                 </label>
                 <input id="media-upload" type="file" accept="image/*,video/*" onChange={handleMediaChange} className="hidden" />
 
@@ -2105,7 +2375,10 @@ const AdsLaunchPage = () => {
                     <div className="flex items-center justify-between gap-3 px-4 py-3">
                       <div className="min-w-0">
                         <p className="truncate text-sm font-black text-slate-950">{activeMediaAsset?.name}</p>
-                        <p className="mt-1 text-xs font-semibold text-slate-400">{activeMediaAsset?.type || 'Unknown file type'}</p>
+                        <p className="mt-1 text-xs font-semibold text-slate-400">
+                          {activeMediaAsset?.type || 'Unknown file type'}
+                          {creativeSource === 'library' ? ' | Ads Media Library' : ''}
+                        </p>
                       </div>
                       {isVideoAsset ? (
                         <InfoPill icon={Video} tone="amber">
@@ -2120,7 +2393,23 @@ const AdsLaunchPage = () => {
               </div>
 
               <div className="space-y-2">
-                <FieldLabel htmlFor="thumbnail-upload">Thumbnail for video</FieldLabel>
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <FieldLabel htmlFor="thumbnail-upload">Thumbnail for video</FieldLabel>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (!mediaAssets.length) {
+                        loadMediaAssets();
+                      }
+                      setMediaLibraryPickerMode('thumbnail');
+                    }}
+                    disabled={!isVideoAsset}
+                    className="inline-flex h-9 items-center gap-2 rounded-lg border border-sky-100 bg-white px-3 text-xs font-black uppercase tracking-[0.14em] text-sky-700 transition hover:bg-sky-50 disabled:cursor-not-allowed disabled:opacity-40"
+                  >
+                    <FolderOpen size={14} strokeWidth={2.3} />
+                    Library
+                  </button>
+                </div>
                 <label
                   htmlFor="thumbnail-upload"
                   className={`flex min-h-52 flex-col items-center justify-center rounded-2xl border border-dashed px-5 py-6 text-center transition ${
@@ -2131,7 +2420,7 @@ const AdsLaunchPage = () => {
                 >
                   <Upload size={26} strokeWidth={2.1} className={isVideoAsset ? 'text-sky-600' : 'text-slate-300'} />
                   <p className="mt-3 text-sm font-black text-slate-950">Upload thumbnail</p>
-                  <p className="mt-1 text-xs font-semibold text-slate-500">Required when the main creative is a video and stored with the template too.</p>
+                  <p className="mt-1 text-xs font-semibold text-slate-500">Required for video. Upload one or choose an image from the library.</p>
                 </label>
                 <input
                   id="thumbnail-upload"
@@ -2147,7 +2436,10 @@ const AdsLaunchPage = () => {
                     <img src={activeThumbnailPreviewUrl} alt="Video thumbnail preview" className="h-56 w-full object-cover" />
                     <div className="px-4 py-3">
                       <p className="truncate text-sm font-black text-slate-950">{activeThumbnailAsset?.name}</p>
-                      <p className="mt-1 text-xs font-semibold text-slate-400">{activeThumbnailAsset?.type || 'Unknown file type'}</p>
+                      <p className="mt-1 text-xs font-semibold text-slate-400">
+                        {activeThumbnailAsset?.type || 'Unknown file type'}
+                        {thumbnailSource === 'library' ? ' | Ads Media Library' : ''}
+                      </p>
                     </div>
                   </div>
                 ) : null}

@@ -2,6 +2,7 @@ import { Navigate, Outlet, Route, Routes } from 'react-router-dom';
 import DashboardLayout from '../layouts/DashboardLayout';
 import ActivityLogsPage from '../../features/activity-logs/pages/ActivityLogsPage';
 import AdsLaunchPage from '../../features/ads-launch/pages/AdsLaunchPage';
+import AdsMediaLibraryPage from '../../features/ads-launch/pages/AdsMediaLibraryPage';
 import AdsTemplateBuilderPage from '../../features/ads-launch/pages/AdsTemplateBuilderPage';
 import DynamicAdsLaunchPage from '../../features/ads-launch/pages/DynamicAdsLaunchPage';
 import AdsManagePage from '../../features/ads-manage/pages/AdsManagePage';
@@ -67,6 +68,7 @@ const AppRouter = () => {
           <Route element={<RoleRoute roles={[USER_ROLES.SUPER_ADMIN, USER_ROLES.ADMIN]} />}>
             <Route path="/ads-launch" element={<AdsLaunchPage />} />
             <Route path="/ads-templates" element={<AdsTemplateBuilderPage />} />
+            <Route path="/ads-media-library" element={<AdsMediaLibraryPage />} />
             <Route path="/dynamic-ads-launch" element={<DynamicAdsLaunchPage />} />
             <Route path="/meta-connection" element={<TokenManagementPage />} />
             <Route path="/roadmap" element={<RoadmapPage />} />
