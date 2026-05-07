@@ -122,6 +122,9 @@ function sanitizeTemplateConfig(input = {}) {
     primaryText: normalizeText(input.primaryText),
     description: normalizeText(input.description),
     websiteUrl: normalizeText(input.websiteUrl),
+    displayUrl: normalizeText(input.displayUrl),
+    scheduleStart: normalizeText(input.scheduleStart),
+    scheduleEnd: normalizeText(input.scheduleEnd),
     callToAction: normalizeText(input.callToAction),
     staticDefaults: {
       buyingType: normalizeText(staticDefaults.buyingType) || DEFAULT_STATIC_DEFAULTS.buyingType,
@@ -679,6 +682,22 @@ function toMetaBudget(value, currency) {
   return String(Math.round(numericValue * getBudgetMultiplier(currency)));
 }
 
+function normalizeOptionalScheduleTime(value, label) {
+  const normalizedValue = normalizeText(value);
+
+  if (!normalizedValue) {
+    return '';
+  }
+
+  const date = new Date(normalizedValue);
+
+  if (Number.isNaN(date.getTime())) {
+    throw new HttpError(400, `${label} must be a valid date and time`);
+  }
+
+  return date.toISOString();
+}
+
 function ensurePublishPayload(payload) {
   const staticDefaults = payload.staticDefaults || {};
   const countries = sanitizeCountries({
@@ -701,6 +720,9 @@ function ensurePublishPayload(payload) {
     primaryText: normalizeText(payload.primaryText),
     description: normalizeText(payload.description),
     websiteUrl: normalizeText(payload.websiteUrl),
+    displayUrl: normalizeText(payload.displayUrl),
+    scheduleStart: normalizeOptionalScheduleTime(payload.scheduleStart, 'Schedule start'),
+    scheduleEnd: normalizeOptionalScheduleTime(payload.scheduleEnd, 'Schedule end'),
     callToAction: normalizeText(payload.callToAction),
     selectedAdAccounts: Array.isArray(payload.selectedAdAccounts)
       ? payload.selectedAdAccounts
@@ -769,6 +791,18 @@ function ensurePublishPayload(payload) {
 
   if (!cleaned.websiteUrl) {
     throw new HttpError(400, 'Destination URL is required');
+  }
+
+  if (cleaned.scheduleStart && new Date(cleaned.scheduleStart) <= new Date()) {
+    throw new HttpError(400, 'Schedule start must be in the future');
+  }
+
+  if (cleaned.scheduleStart && cleaned.scheduleEnd && new Date(cleaned.scheduleEnd) <= new Date(cleaned.scheduleStart)) {
+    throw new HttpError(400, 'Schedule end must be after schedule start');
+  }
+
+  if (cleaned.scheduleEnd && new Date(cleaned.scheduleEnd) <= new Date()) {
+    throw new HttpError(400, 'Schedule end must be in the future');
   }
 
   if (!cleaned.callToAction) {
@@ -876,6 +910,8 @@ async function createAdSet({
   dailyBudget,
   currency,
   countries,
+  scheduleStart,
+  scheduleEnd,
   pageId,
   pixelId,
   staticDefaults,
@@ -924,6 +960,14 @@ async function createAdSet({
     params.bid_strategy = resolveBidStrategy(staticDefaults.bidStrategy);
   }
 
+  if (scheduleStart) {
+    params.start_time = scheduleStart;
+  }
+
+  if (scheduleEnd) {
+    params.end_time = scheduleEnd;
+  }
+
   const promotedObject = settings.buildPromotedObject({ pageId, pixelId });
   if (promotedObject) {
     params.promoted_object = promotedObject;
@@ -946,6 +990,7 @@ async function createAdCreative({
   name,
   pageId,
   websiteUrl,
+  displayUrl,
   primaryText,
   headline,
   description,
@@ -1041,6 +1086,7 @@ async function createAdCreative({
             page_id: pageId,
             link_data: {
               link: websiteUrl,
+              caption: displayUrl || undefined,
               message: primaryText,
               name: headline,
               description: description || undefined,
@@ -1271,6 +1317,8 @@ async function publishLaunch({ payload, actor, req, onProgress = null }) {
           dailyBudget: launch.dailyBudget,
           currency: selectedAccount.currency,
           countries: launch.countries,
+          scheduleStart: launch.scheduleStart,
+          scheduleEnd: launch.scheduleEnd,
           pageId: launch.pageId,
           pixelId: launch.pixelId,
           staticDefaults: launch.staticDefaults,
@@ -1286,6 +1334,7 @@ async function publishLaunch({ payload, actor, req, onProgress = null }) {
         name: names.adName,
         pageId: launch.pageId,
         websiteUrl: launch.websiteUrl,
+        displayUrl: launch.displayUrl,
         primaryText: launch.primaryText,
         headline: launch.headline,
         description: launch.description,
