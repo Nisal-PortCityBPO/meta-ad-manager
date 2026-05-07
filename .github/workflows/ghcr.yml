@@ -89,6 +89,6 @@ jobs:
           envs: VERSION
           script: |
             cd /var/www
-            ./deploy.sh "${VERSION}"
+            ./deploy_meta_app.sh "${VERSION}"
         env:
           VERSION: ${{ needs.version.outputs.version }}
