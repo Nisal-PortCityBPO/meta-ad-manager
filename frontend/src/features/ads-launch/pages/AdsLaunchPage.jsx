@@ -366,6 +366,47 @@ const getLocalDateTimeInputValue = (date) => {
 
 const getMinimumScheduleStartValue = () => getLocalDateTimeInputValue(new Date(Date.now() + SCHEDULE_MIN_LEAD_MINUTES * 60 * 1000));
 
+const hasExplicitTimezone = (value) => /(Z|[+-]\d{2}:?\d{2})$/i.test(String(value || '').trim());
+
+const getLocalTimezoneOffsetSuffix = (date = new Date()) => {
+  const offsetMinutes = -date.getTimezoneOffset();
+  const sign = offsetMinutes >= 0 ? '+' : '-';
+  const absoluteMinutes = Math.abs(offsetMinutes);
+  const hours = String(Math.floor(absoluteMinutes / 60)).padStart(2, '0');
+  const minutes = String(absoluteMinutes % 60).padStart(2, '0');
+  return `${sign}${hours}:${minutes}`;
+};
+
+const toSchedulePayloadValue = (value) => {
+  const normalizedValue = String(value || '').trim();
+
+  if (!normalizedValue) {
+    return '';
+  }
+
+  if (hasExplicitTimezone(normalizedValue)) {
+    return normalizedValue;
+  }
+
+  const withSeconds = normalizedValue.length === 16 ? `${normalizedValue}:00` : normalizedValue;
+  return `${withSeconds}${getLocalTimezoneOffsetSuffix(new Date(withSeconds))}`;
+};
+
+const toDateTimeLocalInputValue = (value) => {
+  const normalizedValue = String(value || '').trim();
+
+  if (!normalizedValue) {
+    return '';
+  }
+
+  if (!hasExplicitTimezone(normalizedValue)) {
+    return normalizedValue.slice(0, 16);
+  }
+
+  const date = new Date(normalizedValue.replace(/([+-]\d{2})(\d{2})$/, '$1:$2'));
+  return Number.isNaN(date.getTime()) ? '' : getLocalDateTimeInputValue(date);
+};
+
 const parseHttpUrl = (value) => {
   const normalizedValue = String(value || '').trim();
 
@@ -553,11 +594,19 @@ const getLaunchMissingFields = ({ activeMediaAsset, activeThumbnailAsset, form, 
   return missing;
 };
 
-const readFileAsDataUrl = (file) =>
+const readFileAsDataUrl = (file, onProgress) =>
   new Promise((resolve, reject) => {
     const reader = new FileReader();
-    reader.onload = () => resolve(reader.result);
+    reader.onload = () => {
+      onProgress?.(100);
+      resolve(reader.result);
+    };
     reader.onerror = () => reject(new Error(`Failed to read ${file.name}`));
+    reader.onprogress = (event) => {
+      if (event.lengthComputable) {
+        onProgress?.(Math.min(Math.round((event.loaded / event.total) * 100), 99));
+      }
+    };
     reader.readAsDataURL(file);
   });
 
@@ -663,6 +712,7 @@ const AdsLaunchPage = () => {
   const [mediaLibraryPickerMode, setMediaLibraryPickerMode] = useState('');
   const [creativeSource, setCreativeSource] = useState('saved');
   const [thumbnailSource, setThumbnailSource] = useState('saved');
+  const [creativeUploadProgress, setCreativeUploadProgress] = useState(null);
 
   const activeTokens = useMemo(() => tokens.filter((token) => token.status === 'ACTIVE'), [tokens]);
   const activeTemplate = useMemo(
@@ -1317,7 +1367,7 @@ const AdsLaunchPage = () => {
     toast.success(`Selected thumbnail ${mediaAsset.name}`);
   };
 
-  const serializeAssetForTemplate = async (file) => {
+  const serializeAssetForTemplate = async (file, label = 'Preparing creative file') => {
     if (!file) {
       return null;
     }
@@ -1325,7 +1375,7 @@ const AdsLaunchPage = () => {
     return {
       name: file.name,
       type: file.type,
-      dataUrl: await readFileAsDataUrl(file),
+      dataUrl: await readFileAsDataUrl(file, (percent) => setCreativeUploadProgress({ label, percent })),
     };
   };
 
@@ -1353,13 +1403,13 @@ const AdsLaunchPage = () => {
 
   const buildTemplatePayload = async ({ includeStoredAssets = false } = {}) => {
     const media = mediaFile
-      ? await serializeAssetForTemplate(mediaFile)
+      ? await serializeAssetForTemplate(mediaFile, 'Preparing media for template')
       : includeStoredAssets || creativeSource === 'library'
         ? await serializeStoredAssetForTemplate(savedMediaAsset)
         : null;
     const thumbnail = isVideoAsset
       ? thumbnailFile
-        ? await serializeAssetForTemplate(thumbnailFile)
+        ? await serializeAssetForTemplate(thumbnailFile, 'Preparing thumbnail for template')
         : includeStoredAssets || thumbnailSource === 'library'
           ? await serializeStoredAssetForTemplate(savedThumbnailAsset)
           : null
@@ -1371,6 +1421,8 @@ const AdsLaunchPage = () => {
         ...form,
         objective: currentObjective,
         websiteEvent: pixelRequired ? form.websiteEvent : '',
+        scheduleStart: toSchedulePayloadValue(form.scheduleStart),
+        scheduleEnd: toSchedulePayloadValue(form.scheduleEnd),
         staticDefaults: {
           ...form.staticDefaults,
         },
@@ -1392,21 +1444,13 @@ const AdsLaunchPage = () => {
 
   const buildPublishPayload = async () => {
     const media = mediaFile
-      ? {
-          name: mediaFile.name,
-          type: mediaFile.type,
-          dataUrl: await readFileAsDataUrl(mediaFile),
-        }
+      ? await serializeAssetForTemplate(mediaFile, 'Preparing media for publish')
       : activeMediaAsset
         ? await serializeStoredAssetForTemplate(activeMediaAsset)
         : null;
     const thumbnail = isVideoAsset
       ? thumbnailFile
-        ? {
-            name: thumbnailFile.name,
-            type: thumbnailFile.type,
-            dataUrl: await readFileAsDataUrl(thumbnailFile),
-          }
+        ? await serializeAssetForTemplate(thumbnailFile, 'Preparing thumbnail for publish')
         : activeThumbnailAsset
           ? await serializeStoredAssetForTemplate(activeThumbnailAsset)
           : null
@@ -1441,8 +1485,8 @@ const AdsLaunchPage = () => {
       websiteUrl: form.websiteUrl.trim(),
       displayUrl: form.displayUrl.trim(),
       urlParameters: form.urlParameters.trim(),
-      scheduleStart: form.scheduleStart,
-      scheduleEnd: form.scheduleEnd,
+      scheduleStart: toSchedulePayloadValue(form.scheduleStart),
+      scheduleEnd: toSchedulePayloadValue(form.scheduleEnd),
       callToAction: form.callToAction,
       staticDefaults: {
         ...form.staticDefaults,
@@ -1478,6 +1522,7 @@ const AdsLaunchPage = () => {
     }
 
     setSavingTemplate(true);
+    setCreativeUploadProgress(null);
 
     try {
       const payload = await buildTemplatePayload({
@@ -1501,6 +1546,7 @@ const AdsLaunchPage = () => {
       toast.error(requestError.message);
     } finally {
       setSavingTemplate(false);
+      setCreativeUploadProgress(null);
     }
   };
 
@@ -1611,6 +1657,8 @@ const AdsLaunchPage = () => {
       countries,
       objective,
       websiteEvent: '',
+      scheduleStart: toDateTimeLocalInputValue(config.scheduleStart),
+      scheduleEnd: toDateTimeLocalInputValue(config.scheduleEnd),
       selectedAdAccountIds,
       staticDefaults: {
         ...defaultStaticDefaults,
@@ -1678,6 +1726,7 @@ const AdsLaunchPage = () => {
 
     setPublishing(true);
     setLatestPublish(null);
+    setCreativeUploadProgress(null);
     beginPublish();
 
     try {
@@ -1697,6 +1746,7 @@ const AdsLaunchPage = () => {
       toast.error(requestError.message);
     } finally {
       setPublishing(false);
+      setCreativeUploadProgress(null);
     }
   };
 
@@ -2388,6 +2438,20 @@ const AdsLaunchPage = () => {
                         <InfoPill icon={ImageIcon}>Image</InfoPill>
                       )}
                     </div>
+                  </div>
+                ) : null}
+                {creativeUploadProgress ? (
+                  <div className="rounded-2xl border border-amber-100 bg-amber-50 px-4 py-3">
+                    <div className="flex items-center justify-between gap-3 text-xs font-black uppercase tracking-[0.14em] text-amber-700">
+                      <span>{creativeUploadProgress.label}</span>
+                      <span>{creativeUploadProgress.percent}%</span>
+                    </div>
+                    <div className="mt-2 h-2 overflow-hidden rounded-full bg-white">
+                      <div className="h-full rounded-full bg-amber-500 transition-all duration-200" style={{ width: `${creativeUploadProgress.percent}%` }} />
+                    </div>
+                    <p className="mt-2 text-xs font-semibold text-amber-800">
+                      Large videos can take a little while to prepare before the live Meta publish steps start.
+                    </p>
                   </div>
                 ) : null}
               </div>

@@ -9,9 +9,30 @@ const MIN_DIMENSION = 600;
 const MIN_ASPECT_RATIO = 0.56;
 const MAX_ASPECT_RATIO = 1.92;
 const MAX_IMAGE_BYTES = 30 * 1024 * 1024;
-const MAX_VIDEO_BYTES = 95 * 1024 * 1024;
+const MAX_VIDEO_BYTES = 100 * 1024 * 1024;
 const IMAGE_MIME_TYPES = new Set(['image/jpeg']);
 const VIDEO_MIME_TYPES = new Set(['video/mp4', 'video/quicktime']);
+const MIME_TYPE_BY_EXTENSION = {
+  '.jpeg': 'image/jpeg',
+  '.jpg': 'image/jpeg',
+  '.mov': 'video/quicktime',
+  '.mp4': 'video/mp4',
+};
+
+const getFileExtension = (name = '') => {
+  const extensionMatch = String(name).toLowerCase().match(/\.[^.]+$/);
+  return extensionMatch ? extensionMatch[0] : '';
+};
+
+const getSupportedMimeType = (file) => {
+  const reportedType = String(file?.type || '').toLowerCase();
+
+  if (IMAGE_MIME_TYPES.has(reportedType) || VIDEO_MIME_TYPES.has(reportedType)) {
+    return reportedType;
+  }
+
+  return MIME_TYPE_BY_EXTENSION[getFileExtension(file?.name)] || reportedType;
+};
 
 const formatFileSize = (bytes = 0) => {
   if (!bytes) {
@@ -40,11 +61,12 @@ const formatDuration = (duration = 0) => {
 const getAspectRatio = ({ width, height }) => (height ? width / height : 0);
 
 const getValidationError = ({ file, width, height, duration }) => {
-  const isVideo = file.type.startsWith('video/');
+  const mimeType = getSupportedMimeType(file);
+  const isVideo = mimeType.startsWith('video/');
   const allowedTypes = isVideo ? VIDEO_MIME_TYPES : IMAGE_MIME_TYPES;
   const maxBytes = isVideo ? MAX_VIDEO_BYTES : MAX_IMAGE_BYTES;
 
-  if (!allowedTypes.has(file.type)) {
+  if (!allowedTypes.has(mimeType)) {
     return isVideo
       ? 'Use MP4 or MOV video files for Meta publishing.'
       : 'Use JPG/JPEG image files only.';
@@ -73,14 +95,6 @@ const getValidationError = ({ file, width, height, duration }) => {
 
   return '';
 };
-
-const readFileAsDataUrl = (file) =>
-  new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(reader.result);
-    reader.onerror = () => reject(new Error(`Failed to read ${file.name}`));
-    reader.readAsDataURL(file);
-  });
 
 const readImageMetadata = (file) =>
   new Promise((resolve, reject) => {
@@ -125,6 +139,18 @@ const readVideoMetadata = (file) =>
 const getDataUrlSize = (dataUrl) => {
   const base64 = String(dataUrl || '').split(',')[1] || '';
   return Math.round((base64.length * 3) / 4);
+};
+
+const dataUrlToFile = (dataUrl, name, type) => {
+  const base64 = String(dataUrl || '').split(',')[1] || '';
+  const binary = atob(base64);
+  const bytes = new Uint8Array(binary.length);
+
+  for (let index = 0; index < binary.length; index += 1) {
+    bytes[index] = binary.charCodeAt(index);
+  }
+
+  return new File([bytes], name, { type });
 };
 
 const createVideoThumbnail = (file) =>
@@ -260,8 +286,9 @@ const AdsMediaLibraryPage = () => {
   const [selectedPreviewUrl, setSelectedPreviewUrl] = useState('');
   const [fileDetails, setFileDetails] = useState(null);
   const [generatedThumbnail, setGeneratedThumbnail] = useState(null);
+  const [uploadProgress, setUploadProgress] = useState(null);
 
-  const selectedIsVideo = selectedFile?.type?.startsWith('video/') || false;
+  const selectedIsVideo = selectedFile ? getSupportedMimeType(selectedFile).startsWith('video/') : false;
   const validationError = useMemo(
     () => (selectedFile && fileDetails ? getValidationError({ file: selectedFile, ...fileDetails }) : ''),
     [fileDetails, selectedFile]
@@ -300,6 +327,7 @@ const AdsMediaLibraryPage = () => {
     setSelectedFile(null);
     setFileDetails(null);
     setGeneratedThumbnail(null);
+    setUploadProgress(null);
   };
 
   const handleFileChange = async (event) => {
@@ -308,6 +336,7 @@ const AdsMediaLibraryPage = () => {
     setSelectedFile(null);
     setFileDetails(null);
     setGeneratedThumbnail(null);
+    setUploadProgress(null);
 
     if (!file) {
       return;
@@ -315,20 +344,25 @@ const AdsMediaLibraryPage = () => {
 
     setProcessingFile(true);
     try {
-      const isVideo = file.type.startsWith('video/');
-      const details = isVideo ? await readVideoMetadata(file) : await readImageMetadata(file);
-      const nextValidationError = getValidationError({ file, ...details });
+      const supportedMimeType = getSupportedMimeType(file);
+      const normalizedFile =
+        supportedMimeType && file.type !== supportedMimeType
+          ? new File([file], file.name, { type: supportedMimeType, lastModified: file.lastModified })
+          : file;
+      const isVideo = supportedMimeType.startsWith('video/');
+      const details = isVideo ? await readVideoMetadata(normalizedFile) : await readImageMetadata(normalizedFile);
+      const nextValidationError = getValidationError({ file: normalizedFile, ...details });
 
       if (nextValidationError) {
         toast.error(nextValidationError);
         return;
       }
 
-      const thumbnail = isVideo ? await createVideoThumbnail(file) : null;
-      setSelectedFile(file);
+      const thumbnail = isVideo ? await createVideoThumbnail(normalizedFile) : null;
+      setSelectedFile(normalizedFile);
       setFileDetails(details);
       setGeneratedThumbnail(thumbnail);
-      setName((current) => current || file.name.replace(/\.[^.]+$/, ''));
+      setName((current) => current || normalizedFile.name.replace(/\.[^.]+$/, ''));
       toast.success(isVideo ? 'Video ready with auto thumbnail' : 'Image ready');
     } catch (error) {
       toast.error(error.message);
@@ -359,22 +393,41 @@ const AdsMediaLibraryPage = () => {
     }
 
     setSaving(true);
+    setUploadProgress({
+      label: selectedIsVideo ? 'Starting video upload' : 'Starting image upload',
+      percent: 0,
+    });
     try {
-      const dataUrl = await readFileAsDataUrl(selectedFile);
-      const payload = {
+      const thumbnailFile = generatedThumbnail
+        ? dataUrlToFile(generatedThumbnail.dataUrl, generatedThumbnail.name, generatedThumbnail.type)
+        : null;
+      setUploadProgress({
+        label: selectedIsVideo ? 'Uploading video to media library' : 'Uploading image to media library',
+        percent: 0,
+      });
+      const data = await adsLaunchApi.uploadMediaAssetWithProgress({
         name: name.trim(),
-        media: {
-          name: selectedFile.name,
-          type: selectedFile.type,
-          size: selectedFile.size,
-          dataUrl,
+        mediaFile: selectedFile,
+        mediaMetadata: {
           width: fileDetails.width,
           height: fileDetails.height,
           duration: fileDetails.duration || 0,
         },
-        thumbnail: generatedThumbnail,
-      };
-      const data = await adsLaunchApi.createMediaAsset(payload);
+        thumbnailFile,
+        thumbnailMetadata: generatedThumbnail
+          ? {
+              width: generatedThumbnail.width,
+              height: generatedThumbnail.height,
+              duration: generatedThumbnail.duration || 0,
+            }
+          : null,
+      }, {
+        onUploadProgress: (percent) =>
+          setUploadProgress({
+            label: selectedIsVideo ? 'Uploading video to media library' : 'Uploading image to media library',
+            percent,
+          }),
+      });
       toast.success(data.message);
       resetForm();
       await loadMediaAssets();
@@ -382,6 +435,7 @@ const AdsMediaLibraryPage = () => {
       toast.error(requestError.message);
     } finally {
       setSaving(false);
+      setUploadProgress(null);
     }
   };
 
@@ -449,7 +503,7 @@ const AdsMediaLibraryPage = () => {
                         {selectedIsVideo ? ` | ${formatDuration(fileDetails?.duration)}` : ''}
                       </p>
                     </div>
-                    <button type="button" onClick={() => { setSelectedFile(null); setFileDetails(null); setGeneratedThumbnail(null); }} className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-red-100 text-red-600 transition hover:bg-red-50">
+                    <button type="button" onClick={() => { setSelectedFile(null); setFileDetails(null); setGeneratedThumbnail(null); setUploadProgress(null); }} className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-red-100 text-red-600 transition hover:bg-red-50">
                       <X size={16} strokeWidth={2.3} />
                     </button>
                   </div>
@@ -459,6 +513,21 @@ const AdsMediaLibraryPage = () => {
                     </p>
                   ) : null}
                 </div>
+              </div>
+            ) : null}
+
+            {uploadProgress ? (
+              <div className="rounded-2xl border border-amber-100 bg-amber-50 px-4 py-3">
+                <div className="flex items-center justify-between gap-3 text-xs font-black uppercase tracking-[0.14em] text-amber-700">
+                  <span>{uploadProgress.label}</span>
+                  <span>{uploadProgress.percent}%</span>
+                </div>
+                <div className="mt-2 h-2 overflow-hidden rounded-full bg-white">
+                  <div className="h-full rounded-full bg-amber-500 transition-all duration-200" style={{ width: `${uploadProgress.percent}%` }} />
+                </div>
+                <p className="mt-2 text-xs font-semibold text-amber-800">
+                  Large videos need a little time while the browser prepares the file and sends it to the local media library.
+                </p>
               </div>
             ) : null}
 

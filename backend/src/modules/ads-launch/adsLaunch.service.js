@@ -24,7 +24,7 @@ const MEDIA_LIBRARY_MIN_DIMENSION = 600;
 const MEDIA_LIBRARY_MIN_ASPECT_RATIO = 0.56;
 const MEDIA_LIBRARY_MAX_ASPECT_RATIO = 1.92;
 const MEDIA_LIBRARY_MAX_IMAGE_BYTES = 30 * 1024 * 1024;
-const MEDIA_LIBRARY_MAX_VIDEO_BYTES = 95 * 1024 * 1024;
+const MEDIA_LIBRARY_MAX_VIDEO_BYTES = 100 * 1024 * 1024;
 const MEDIA_LIBRARY_MAX_THUMBNAIL_BYTES = 10 * 1024 * 1024;
 const MEDIA_LIBRARY_IMAGE_MIME_TYPES = new Set(['image/jpeg']);
 const MEDIA_LIBRARY_VIDEO_MIME_TYPES = new Set(['video/mp4', 'video/quicktime']);
@@ -519,6 +519,29 @@ function getAssetFileExtension(name, mimeType) {
   return '';
 }
 
+function normalizeMediaLibraryMimeType(mimeType, filename = '') {
+  const normalizedMimeType = normalizeText(mimeType).toLowerCase();
+
+  if (MEDIA_LIBRARY_IMAGE_MIME_TYPES.has(normalizedMimeType) || MEDIA_LIBRARY_VIDEO_MIME_TYPES.has(normalizedMimeType)) {
+    return normalizedMimeType;
+  }
+
+  const extension = path.extname(filename || '').toLowerCase();
+  if (extension === '.jpg' || extension === '.jpeg') {
+    return 'image/jpeg';
+  }
+
+  if (extension === '.mp4') {
+    return 'video/mp4';
+  }
+
+  if (extension === '.mov') {
+    return 'video/quicktime';
+  }
+
+  return normalizedMimeType;
+}
+
 function deleteStoredTemplateAsset(asset) {
   if (!asset?.storageKey) {
     return;
@@ -605,6 +628,23 @@ function sanitizeMediaLibraryAssetInput(asset) {
   };
 }
 
+function parseUploadMetadata(value, label) {
+  if (!value) {
+    return {};
+  }
+
+  if (typeof value === 'object') {
+    return value;
+  }
+
+  try {
+    const parsed = JSON.parse(value);
+    return parsed && typeof parsed === 'object' ? parsed : {};
+  } catch (error) {
+    throw new HttpError(400, `${label} metadata is not valid JSON`);
+  }
+}
+
 function assertMediaLibraryMimeType(mimeType, mediaType) {
   const normalizedMimeType = normalizeText(mimeType).toLowerCase();
   const allowedTypes =
@@ -638,11 +678,31 @@ function validateMediaLibraryDimensions(asset, label) {
   }
 }
 
+function parseUploadedMediaLibraryAsset(file, metadataInput, label, mediaType) {
+  if (!file?.path) {
+    return null;
+  }
+
+  const metadata = parseUploadMetadata(metadataInput, label);
+  const normalizedMimeType = normalizeMediaLibraryMimeType(file.mimetype, file.originalname);
+  assertMediaLibraryMimeType(normalizedMimeType, mediaType);
+
+  return {
+    name: normalizeText(file.originalname) || label,
+    mimeType: normalizedMimeType,
+    size: Math.max(Number(file.size) || 0, 0),
+    filePath: file.path,
+    width: Math.max(Math.round(Number(metadata.width) || 0), 0),
+    height: Math.max(Math.round(Number(metadata.height) || 0), 0),
+    duration: Math.max(Number(metadata.duration) || 0, 0),
+  };
+}
+
 function parseMediaLibraryAsset(asset, label, mediaType) {
   const parsed = parseDataUrlFile(asset, label, {
     allowedMimeTypePrefixes: mediaType === ADS_MEDIA_TYPES.VIDEO ? ['video/'] : ['image/'],
   });
-  const normalizedMimeType = normalizeText(parsed.mimeType).toLowerCase();
+  const normalizedMimeType = normalizeMediaLibraryMimeType(parsed.mimeType, parsed.name);
 
   assertMediaLibraryMimeType(normalizedMimeType, mediaType);
 
@@ -655,11 +715,21 @@ function parseMediaLibraryAsset(asset, label, mediaType) {
   };
 }
 
-function validateMediaLibraryParsedAsset(parsed, mediaType) {
+function validateMediaLibraryParsedAsset(parsed, mediaType, assetKind = 'media') {
   const isVideo = mediaType === ADS_MEDIA_TYPES.VIDEO;
   const maxBytes = isVideo ? MEDIA_LIBRARY_MAX_VIDEO_BYTES : MEDIA_LIBRARY_MAX_IMAGE_BYTES;
 
-  if (parsed.buffer.length > maxBytes) {
+  if (assetKind === 'thumbnail') {
+    if (parsed.size > MEDIA_LIBRARY_MAX_THUMBNAIL_BYTES || parsed.buffer?.length > MEDIA_LIBRARY_MAX_THUMBNAIL_BYTES) {
+      throw new HttpError(400, 'Video thumbnail is too large. Maximum is 10MB.');
+    }
+
+    validateMediaLibraryDimensions(parsed, 'Video thumbnail');
+    return;
+  }
+
+  const byteSize = parsed.size || parsed.buffer?.length || 0;
+  if (byteSize > maxBytes) {
     throw new HttpError(
       400,
       `${isVideo ? 'Video' : 'Image'} is too large. Maximum is ${Math.round(maxBytes / 1024 / 1024)}MB.`
@@ -677,10 +747,7 @@ function persistMediaLibraryAsset({ mediaId, asset, assetKind, mediaType }) {
   const parsed = parseMediaLibraryAsset(asset, assetKind === 'thumbnail' ? 'Video thumbnail' : 'Media', mediaType);
 
   if (assetKind === 'thumbnail') {
-    if (parsed.buffer.length > MEDIA_LIBRARY_MAX_THUMBNAIL_BYTES) {
-      throw new HttpError(400, 'Video thumbnail is too large. Maximum is 10MB.');
-    }
-    validateMediaLibraryDimensions(parsed, 'Video thumbnail');
+    validateMediaLibraryParsedAsset(parsed, mediaType, 'thumbnail');
   } else {
     validateMediaLibraryParsedAsset(parsed, mediaType);
   }
@@ -701,6 +768,54 @@ function persistMediaLibraryAsset({ mediaId, asset, assetKind, mediaType }) {
     height: parsed.height,
     duration: parsed.duration,
   };
+}
+
+function persistUploadedMediaLibraryAsset({ mediaId, file, metadata, assetKind, mediaType }) {
+  const parsed = parseUploadedMediaLibraryAsset(
+    file,
+    metadata,
+    assetKind === 'thumbnail' ? 'Video thumbnail' : 'Media',
+    mediaType
+  );
+
+  if (!parsed) {
+    return null;
+  }
+
+  validateMediaLibraryParsedAsset(parsed, mediaType, assetKind);
+
+  if (!fs.existsSync(parsed.filePath)) {
+    throw new HttpError(400, `${assetKind === 'thumbnail' ? 'Video thumbnail' : 'Media'} upload was not received correctly`);
+  }
+
+  const extension = getAssetFileExtension(parsed.name, parsed.mimeType);
+  const storageKey = `${mediaId}-${assetKind}-${Date.now()}${extension}`;
+  const filePath = path.join(MEDIA_LIBRARY_ASSET_DIR, storageKey);
+
+  ensureMediaLibraryAssetDir();
+  fs.renameSync(parsed.filePath, filePath);
+
+  return {
+    name: parsed.name,
+    type: parsed.mimeType,
+    size: parsed.size,
+    storageKey,
+    width: parsed.width,
+    height: parsed.height,
+    duration: parsed.duration,
+  };
+}
+
+function cleanupUploadedMediaFile(file) {
+  if (!file?.path) {
+    return;
+  }
+
+  try {
+    fs.rmSync(file.path, { force: true });
+  } catch (error) {
+    // Ignore temp cleanup failures; the saved media record has already succeeded or failed.
+  }
 }
 
 function deleteStoredMediaLibraryAsset(asset) {
@@ -850,22 +965,41 @@ async function listMediaAssets({ actor }) {
   return mediaAssets.map((mediaAsset) => mediaAsset.toSafeObject());
 }
 
-async function createMediaAsset({ name, media, thumbnail, actor, req }) {
+async function createMediaAsset({
+  name,
+  media,
+  thumbnail,
+  uploadedMedia = null,
+  uploadedThumbnail = null,
+  mediaMetadata = null,
+  thumbnailMetadata = null,
+  actor,
+  req,
+}) {
   const normalizedName = normalizeText(name);
-  const mediaInput = sanitizeMediaLibraryAssetInput(media);
-  const thumbnailInput = sanitizeMediaLibraryAssetInput(thumbnail);
+  const mediaInput = uploadedMedia ? null : sanitizeMediaLibraryAssetInput(media);
+  const thumbnailInput = uploadedThumbnail ? null : sanitizeMediaLibraryAssetInput(thumbnail);
 
   if (!normalizedName) {
+    cleanupUploadedMediaFile(uploadedMedia);
+    cleanupUploadedMediaFile(uploadedThumbnail);
     throw new HttpError(400, 'Media name is required');
   }
 
-  if (!mediaInput) {
+  if (!uploadedMedia && !mediaInput) {
+    cleanupUploadedMediaFile(uploadedMedia);
+    cleanupUploadedMediaFile(uploadedThumbnail);
     throw new HttpError(400, 'Select an image or video to save in the media library');
   }
 
-  const mediaType = mediaInput.type.startsWith('video/') ? ADS_MEDIA_TYPES.VIDEO : ADS_MEDIA_TYPES.IMAGE;
+  const mediaMimeType = uploadedMedia
+    ? normalizeMediaLibraryMimeType(uploadedMedia.mimetype, uploadedMedia.originalname)
+    : normalizeMediaLibraryMimeType(mediaInput?.type, mediaInput?.name);
+  const mediaType = mediaMimeType.startsWith('video/') ? ADS_MEDIA_TYPES.VIDEO : ADS_MEDIA_TYPES.IMAGE;
 
-  if (mediaType === ADS_MEDIA_TYPES.VIDEO && !thumbnailInput) {
+  if (mediaType === ADS_MEDIA_TYPES.VIDEO && !uploadedThumbnail && !thumbnailInput) {
+    cleanupUploadedMediaFile(uploadedMedia);
+    cleanupUploadedMediaFile(uploadedThumbnail);
     throw new HttpError(400, 'Video media requires a thumbnail before it can be used in Meta ads');
   }
 
@@ -877,25 +1011,44 @@ async function createMediaAsset({ name, media, thumbnail, actor, req }) {
   });
 
   try {
-    mediaAsset.media = persistMediaLibraryAsset({
-      mediaId: mediaAsset._id.toString(),
-      asset: mediaInput,
-      assetKind: 'media',
-      mediaType,
-    });
-    mediaAsset.thumbnail = thumbnailInput
-      ? persistMediaLibraryAsset({
+    mediaAsset.media = uploadedMedia
+      ? persistUploadedMediaLibraryAsset({
           mediaId: mediaAsset._id.toString(),
-          asset: thumbnailInput,
+          file: uploadedMedia,
+          metadata: mediaMetadata,
+          assetKind: 'media',
+          mediaType,
+        })
+      : persistMediaLibraryAsset({
+          mediaId: mediaAsset._id.toString(),
+          asset: mediaInput,
+          assetKind: 'media',
+          mediaType,
+        });
+    mediaAsset.thumbnail = uploadedThumbnail
+      ? persistUploadedMediaLibraryAsset({
+          mediaId: mediaAsset._id.toString(),
+          file: uploadedThumbnail,
+          metadata: thumbnailMetadata,
           assetKind: 'thumbnail',
           mediaType: ADS_MEDIA_TYPES.IMAGE,
         })
-      : null;
+      : thumbnailInput
+        ? persistMediaLibraryAsset({
+            mediaId: mediaAsset._id.toString(),
+            asset: thumbnailInput,
+            assetKind: 'thumbnail',
+            mediaType: ADS_MEDIA_TYPES.IMAGE,
+          })
+        : null;
     await mediaAsset.save();
   } catch (error) {
     deleteStoredMediaLibraryAsset(mediaAsset.media);
     deleteStoredMediaLibraryAsset(mediaAsset.thumbnail);
     throw error;
+  } finally {
+    cleanupUploadedMediaFile(uploadedMedia);
+    cleanupUploadedMediaFile(uploadedThumbnail);
   }
 
   await writeActivityLog({
@@ -1286,13 +1439,27 @@ function normalizeOptionalScheduleTime(value, label) {
     return '';
   }
 
-  const date = new Date(normalizedValue);
+  const date = new Date(normalizedValue.replace(/([+-]\d{2})(\d{2})$/, '$1:$2'));
 
   if (Number.isNaN(date.getTime())) {
     throw new HttpError(400, `${label} must be a valid date and time`);
   }
 
-  return date.toISOString();
+  const timezoneMatch = normalizedValue.match(/(Z|[+-]\d{2}:?\d{2})$/i);
+  if (!timezoneMatch) {
+    return date.toISOString();
+  }
+
+  const timezoneSuffix =
+    timezoneMatch[1].toUpperCase() === 'Z'
+      ? '+0000'
+      : timezoneMatch[1].replace(':', '');
+  const localDateTime = normalizedValue
+    .replace(/(Z|[+-]\d{2}:?\d{2})$/i, '')
+    .replace(/\.\d+$/, '');
+  const withSeconds = localDateTime.length === 16 ? `${localDateTime}:00` : localDateTime;
+
+  return `${withSeconds}${timezoneSuffix}`;
 }
 
 function ensurePublishPayload(payload) {

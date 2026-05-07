@@ -210,6 +210,52 @@ const normalizeTemplateCountries = (config = {}) => {
 
 const normalizeCampaignStatus = (value) => (String(value || '').trim().toUpperCase() === 'ACTIVE' ? 'ACTIVE' : 'PAUSED');
 
+const hasExplicitTimezone = (value) => /(Z|[+-]\d{2}:?\d{2})$/i.test(String(value || '').trim());
+
+const getLocalDateTimeInputValue = (date) => {
+  const localDate = new Date(date.getTime() - date.getTimezoneOffset() * 60000);
+  return localDate.toISOString().slice(0, 16);
+};
+
+const getLocalTimezoneOffsetSuffix = (date = new Date()) => {
+  const offsetMinutes = -date.getTimezoneOffset();
+  const sign = offsetMinutes >= 0 ? '+' : '-';
+  const absoluteMinutes = Math.abs(offsetMinutes);
+  const hours = String(Math.floor(absoluteMinutes / 60)).padStart(2, '0');
+  const minutes = String(absoluteMinutes % 60).padStart(2, '0');
+  return `${sign}${hours}:${minutes}`;
+};
+
+const toSchedulePayloadValue = (value) => {
+  const normalizedValue = String(value || '').trim();
+
+  if (!normalizedValue) {
+    return '';
+  }
+
+  if (hasExplicitTimezone(normalizedValue)) {
+    return normalizedValue;
+  }
+
+  const withSeconds = normalizedValue.length === 16 ? `${normalizedValue}:00` : normalizedValue;
+  return `${withSeconds}${getLocalTimezoneOffsetSuffix(new Date(withSeconds))}`;
+};
+
+const toDateTimeLocalInputValue = (value) => {
+  const normalizedValue = String(value || '').trim();
+
+  if (!normalizedValue) {
+    return '';
+  }
+
+  if (!hasExplicitTimezone(normalizedValue)) {
+    return normalizedValue.slice(0, 16);
+  }
+
+  const date = new Date(normalizedValue.replace(/([+-]\d{2})(\d{2})$/, '$1:$2'));
+  return Number.isNaN(date.getTime()) ? '' : getLocalDateTimeInputValue(date);
+};
+
 const getCampaignStatusBadgeClass = (status) =>
   status === 'ACTIVE' ? 'bg-emerald-50 text-emerald-700' : 'bg-amber-50 text-amber-700';
 
@@ -414,8 +460,8 @@ const AdsTemplateBuilderPage = () => {
       objective: TRAFFIC_OBJECTIVE,
       websiteEvent: '',
       dailyBudget: config.dailyBudget || '15',
-      scheduleStart: config.scheduleStart || '',
-      scheduleEnd: config.scheduleEnd || '',
+      scheduleStart: toDateTimeLocalInputValue(config.scheduleStart),
+      scheduleEnd: toDateTimeLocalInputValue(config.scheduleEnd),
       staticDefaults: {
         ...staticDefaults,
         campaignStatus: normalizeCampaignStatus(staticDefaults.campaignStatus),
@@ -465,8 +511,8 @@ const AdsTemplateBuilderPage = () => {
           objective: TRAFFIC_OBJECTIVE,
           websiteEvent: campaignPixelRequired ? campaignForm.websiteEvent : '',
           dailyBudget: campaignForm.dailyBudget,
-          scheduleStart: campaignForm.scheduleStart,
-          scheduleEnd: campaignForm.scheduleEnd,
+          scheduleStart: toSchedulePayloadValue(campaignForm.scheduleStart),
+          scheduleEnd: toSchedulePayloadValue(campaignForm.scheduleEnd),
           staticDefaults: campaignForm.staticDefaults,
         },
         snapshot: {},

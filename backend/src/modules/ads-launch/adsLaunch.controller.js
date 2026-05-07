@@ -43,10 +43,17 @@ const getMediaAsset = asyncHandler(async (req, res) => {
 });
 
 const createMediaAsset = asyncHandler(async (req, res) => {
+  const uploadedMedia = req.files?.media?.[0] || null;
+  const uploadedThumbnail = req.files?.thumbnail?.[0] || null;
+
   const mediaAsset = await adsLaunchService.createMediaAsset({
     name: req.body.name,
     media: req.body.media,
     thumbnail: req.body.thumbnail,
+    uploadedMedia,
+    uploadedThumbnail,
+    mediaMetadata: req.body.mediaMetadata,
+    thumbnailMetadata: req.body.thumbnailMetadata,
     actor: req.user,
     req,
   });

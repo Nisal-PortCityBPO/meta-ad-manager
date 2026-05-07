@@ -63,6 +63,62 @@ const readPublishStream = async (response, onProgress) => {
   return finalResult;
 };
 
+const requestWithUploadProgress = (path, payload, { onUploadProgress } = {}) =>
+  new Promise((resolve, reject) => {
+    const isFormData = typeof FormData !== 'undefined' && payload instanceof FormData;
+    const xhr = new XMLHttpRequest();
+    xhr.open('POST', `/api${path}`);
+    xhr.withCredentials = true;
+
+    if (!isFormData) {
+      xhr.setRequestHeader('Content-Type', 'application/json');
+    }
+
+    xhr.upload.onprogress = (event) => {
+      if (event.lengthComputable) {
+        onUploadProgress?.(Math.min(Math.round((event.loaded / event.total) * 100), 99));
+      }
+    };
+
+    xhr.onload = () => {
+      const contentType = xhr.getResponseHeader('content-type') || '';
+      let data = {};
+
+      if (contentType.includes('application/json') && xhr.responseText) {
+        try {
+          data = JSON.parse(xhr.responseText);
+        } catch {
+          data = {};
+        }
+      }
+
+      if (xhr.status >= 200 && xhr.status < 300) {
+        onUploadProgress?.(100);
+        resolve(data);
+        return;
+      }
+
+      reject(new Error(data.message || 'Request failed'));
+    };
+
+    xhr.onerror = () => reject(new Error('Upload failed. Please check your connection and try again.'));
+    xhr.send(isFormData ? payload : JSON.stringify(payload));
+  });
+
+const buildMediaUploadFormData = ({ name, mediaFile, mediaMetadata, thumbnailFile, thumbnailMetadata }) => {
+  const formData = new FormData();
+  formData.append('name', name);
+  formData.append('media', mediaFile, mediaFile.name);
+  formData.append('mediaMetadata', JSON.stringify(mediaMetadata || {}));
+
+  if (thumbnailFile) {
+    formData.append('thumbnail', thumbnailFile, thumbnailFile.name);
+    formData.append('thumbnailMetadata', JSON.stringify(thumbnailMetadata || {}));
+  }
+
+  return formData;
+};
+
 export const adsLaunchApi = {
   getTemplates: (params = {}) => {
     const query = new URLSearchParams();
@@ -94,6 +150,10 @@ export const adsLaunchApi = {
       method: 'POST',
       body: payload,
     }),
+  createMediaAssetWithProgress: (payload, options = {}) =>
+    requestWithUploadProgress('/ads-launch/media', payload, options),
+  uploadMediaAssetWithProgress: (payload, options = {}) =>
+    requestWithUploadProgress('/ads-launch/media', buildMediaUploadFormData(payload), options),
   deleteMediaAsset: (id) =>
     apiRequest(`/ads-launch/media/${id}`, {
       method: 'DELETE',

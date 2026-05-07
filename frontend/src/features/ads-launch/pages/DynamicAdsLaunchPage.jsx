@@ -334,6 +334,32 @@ const sanitizeCountries = (config = {}) => {
 
 const getTemplateLabel = (template) => (template ? template.name : 'Not selected');
 
+const hasExplicitTimezone = (value) => /(Z|[+-]\d{2}:?\d{2})$/i.test(String(value || '').trim());
+
+const getLocalTimezoneOffsetSuffix = (date = new Date()) => {
+  const offsetMinutes = -date.getTimezoneOffset();
+  const sign = offsetMinutes >= 0 ? '+' : '-';
+  const absoluteMinutes = Math.abs(offsetMinutes);
+  const hours = String(Math.floor(absoluteMinutes / 60)).padStart(2, '0');
+  const minutes = String(absoluteMinutes % 60).padStart(2, '0');
+  return `${sign}${hours}:${minutes}`;
+};
+
+const toSchedulePayloadValue = (value) => {
+  const normalizedValue = String(value || '').trim();
+
+  if (!normalizedValue) {
+    return '';
+  }
+
+  if (hasExplicitTimezone(normalizedValue)) {
+    return normalizedValue;
+  }
+
+  const withSeconds = normalizedValue.length === 16 ? `${normalizedValue}:00` : normalizedValue;
+  return `${withSeconds}${getLocalTimezoneOffsetSuffix(new Date(withSeconds))}`;
+};
+
 const DynamicAdsLaunchPage = () => {
   const { loading: tokensLoading, tokens } = useTokens();
   const { accountPixels, adAccounts, loadAccountPixels, loadAssets, loadingAssets, loadingPixels, pages } = useTokenMetaAssets();
@@ -720,8 +746,8 @@ const DynamicAdsLaunchPage = () => {
       websiteUrl: mediaConfig.websiteUrl || '',
       displayUrl: mediaConfig.displayUrl || '',
       urlParameters: mediaConfig.urlParameters || '',
-      scheduleStart: campaignConfig.scheduleStart || '',
-      scheduleEnd: campaignConfig.scheduleEnd || '',
+      scheduleStart: toSchedulePayloadValue(campaignConfig.scheduleStart),
+      scheduleEnd: toSchedulePayloadValue(campaignConfig.scheduleEnd),
       callToAction: mediaConfig.callToAction || 'LEARN_MORE',
       media: firstMediaAsset?.media || null,
       thumbnail: firstThumbnailAsset?.media || firstMediaAsset?.thumbnail || null,
