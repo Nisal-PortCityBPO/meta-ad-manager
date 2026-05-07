@@ -35,6 +35,11 @@ const launchTemplateConfigSchema = new mongoose.Schema(
       default: '',
       trim: true,
     },
+    brandId: {
+      type: String,
+      default: '',
+      trim: true,
+    },
     tokenId: {
       type: String,
       default: '',
@@ -173,6 +178,11 @@ const launchTemplateConfigSchema = new mongoose.Schema(
 
 const launchTemplateSnapshotSchema = new mongoose.Schema(
   {
+    brandName: {
+      type: String,
+      default: '',
+      trim: true,
+    },
     tokenLabel: {
       type: String,
       default: '',
@@ -271,6 +281,7 @@ launchTemplateSchema.methods.toSafeObject = function toSafeObject() {
     name: this.name,
     config: this.config,
     snapshot: {
+      brandName: this.snapshot?.brandName || '',
       tokenLabel: this.snapshot?.tokenLabel || '',
       pageName: this.snapshot?.pageName || '',
       pixelName: this.snapshot?.pixelName || '',

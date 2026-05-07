@@ -23,6 +23,7 @@ import {
 } from 'lucide-react';
 import DashboardHeader from '../../dashboard/components/DashboardHeader';
 import DashboardPanel from '../../dashboard/components/DashboardPanel';
+import { businessDataApi } from '../../dashboard/api/businessDataApi';
 import { useTokens } from '../../token-management/hooks/useTokens';
 import { usePublishProgress } from '../../notifications/PublishProgressContext';
 import { adsLaunchApi } from '../api/adsLaunchApi';
@@ -109,6 +110,7 @@ const defaultStaticDefaults = {
 
 const emptyForm = {
   launchLabel: '',
+  brandId: '',
   tokenId: '',
   country: 'ID',
   countries: ['ID'],
@@ -210,6 +212,11 @@ const normalizeTemplateCountries = (config = {}) => {
   return countries.length ? countries : config.country ? [config.country] : ['ID'];
 };
 
+const getAdAccountKeys = (account = {}) =>
+  [account.id, account.accountId, String(account.id || '').replace(/^act_/, '')]
+    .map((value) => String(value || '').trim())
+    .filter(Boolean);
+
 const MetricCard = ({ label, value, detail }) => (
   <div className="rounded-2xl border border-sky-100 bg-white px-4 py-4 shadow-sm shadow-sky-100/70">
     <p className="text-xs font-bold uppercase tracking-[0.18em] text-sky-600">{label}</p>
@@ -252,6 +259,9 @@ const AdsLaunchPage = () => {
   } = usePublishProgress();
 
   const [form, setForm] = useState(createEmptyForm);
+  const [brands, setBrands] = useState([]);
+  const [brandsLoading, setBrandsLoading] = useState(true);
+  const [brandsError, setBrandsError] = useState('');
   const [activeTemplateId, setActiveTemplateId] = useState('');
   const [templateName, setTemplateName] = useState('');
   const [editingStaticDefaults, setEditingStaticDefaults] = useState(false);
@@ -272,9 +282,74 @@ const AdsLaunchPage = () => {
     () => templates.find((template) => template.id === activeTemplateId) || null,
     [activeTemplateId, templates]
   );
+  const selectedBrand = brands.find((brand) => brand.id === form.brandId) || null;
+  const selectedBrandSocialAccounts = useMemo(
+    () => (Array.isArray(selectedBrand?.assignedSocialAccounts) ? selectedBrand.assignedSocialAccounts : []),
+    [selectedBrand]
+  );
+  const brandTokenOptions = useMemo(() => {
+    if (!selectedBrandSocialAccounts.length) {
+      return [];
+    }
+
+    const tokenSummaries = new Map();
+
+    selectedBrandSocialAccounts.forEach((account) => {
+      if (!account.sourceTokenId) {
+        return;
+      }
+
+      if (!tokenSummaries.has(account.sourceTokenId)) {
+        const activeToken = activeTokens.find((token) => token.id === account.sourceTokenId);
+        tokenSummaries.set(account.sourceTokenId, {
+          id: account.sourceTokenId,
+          label: activeToken?.label || account.sourceTokenLabel || 'Meta token',
+          accessToken: activeToken?.accessToken || '',
+          adsPowerProfile: activeToken?.adsPowerProfile || account.adsPowerProfile || '',
+          socialAccountNames: [],
+          isActive: Boolean(activeToken),
+        });
+      }
+
+      tokenSummaries.get(account.sourceTokenId).socialAccountNames.push(account.name);
+    });
+
+    return Array.from(tokenSummaries.values())
+      .filter((token) => token.isActive)
+      .sort((first, second) => first.label.localeCompare(second.label));
+  }, [activeTokens, selectedBrandSocialAccounts]);
   const selectedToken = activeTokens.find((token) => token.id === form.tokenId) || null;
   const selectedPage = pages.find((page) => page.id === form.pageId) || null;
   const selectedPixel = pixels.find((pixel) => pixel.id === form.pixelId) || null;
+  const selectedBrandSavedAccountKeys = useMemo(() => {
+    if (!form.tokenId || !selectedBrandSocialAccounts.length) {
+      return new Set();
+    }
+
+    const accountKeys = new Set();
+
+    selectedBrandSocialAccounts
+      .filter((account) => account.sourceTokenId === form.tokenId)
+      .flatMap((account) => (Array.isArray(account.businessProfiles) ? account.businessProfiles : []))
+      .flatMap((profile) => (Array.isArray(profile.adAccounts) ? profile.adAccounts : []))
+      .forEach((account) => {
+        getAdAccountKeys(account).forEach((key) => accountKeys.add(key));
+      });
+
+    return accountKeys;
+  }, [form.tokenId, selectedBrandSocialAccounts]);
+  const scopedAdAccounts = useMemo(() => {
+    if (!form.brandId || !form.tokenId) {
+      return [];
+    }
+
+    if (!selectedBrandSavedAccountKeys.size) {
+      return adAccounts;
+    }
+
+    return adAccounts.filter((account) => getAdAccountKeys(account).some((key) => selectedBrandSavedAccountKeys.has(key)));
+  }, [adAccounts, form.brandId, form.tokenId, selectedBrandSavedAccountKeys]);
+  const hasBrandSavedAdAccounts = selectedBrandSavedAccountKeys.size > 0;
   const templatePageCount = Math.max(Math.ceil(templates.length / TEMPLATES_PER_PAGE), 1);
   const safeTemplatePage = Math.min(Math.max(templatePage, 1), templatePageCount);
   const visibleTemplates = useMemo(
@@ -282,8 +357,8 @@ const AdsLaunchPage = () => {
     [safeTemplatePage, templates]
   );
   const selectedAdAccounts = useMemo(
-    () => adAccounts.filter((account) => form.selectedAdAccountIds.includes(account.id)),
-    [adAccounts, form.selectedAdAccountIds]
+    () => scopedAdAccounts.filter((account) => form.selectedAdAccountIds.includes(account.id)),
+    [scopedAdAccounts, form.selectedAdAccountIds]
   );
   const selectedCountryLabel = useMemo(
     () =>
@@ -322,7 +397,8 @@ const AdsLaunchPage = () => {
   const isVideoAsset = activeMediaAsset?.type?.startsWith('video/') || false;
   const pixelRequired = form.objective === 'OUTCOME_LEADS' || form.objective === 'OUTCOME_SALES';
   const canGenerate = Boolean(
-    form.tokenId &&
+    form.brandId &&
+      form.tokenId &&
       form.launchLabel.trim() &&
       (form.countries || []).length &&
       form.selectedAdAccountIds.length &&
@@ -360,16 +436,80 @@ const AdsLaunchPage = () => {
   }, [thumbnailFile]);
 
   useEffect(() => {
-    loadAssets(form.tokenId);
-  }, [form.tokenId, loadAssets]);
+    let isMounted = true;
+
+    businessDataApi
+      .getBrands()
+      .then((data) => {
+        if (isMounted) {
+          setBrands(data.brands || []);
+          setBrandsError('');
+        }
+      })
+      .catch((requestError) => {
+        if (isMounted) {
+          setBrandsError(requestError.message);
+        }
+      })
+      .finally(() => {
+        if (isMounted) {
+          setBrandsLoading(false);
+        }
+      });
+
+    return () => {
+      isMounted = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (brandsLoading || form.brandId || !form.tokenId || !brands.length) {
+      return;
+    }
+
+    const matchingBrandIds = new Set(
+      brands
+        .filter((brand) =>
+          (brand.assignedSocialAccounts || []).some((account) => account.sourceTokenId === form.tokenId)
+        )
+        .map((brand) => brand.id)
+    );
+
+    if (matchingBrandIds.size === 1) {
+      setForm((current) => ({
+        ...current,
+        brandId: Array.from(matchingBrandIds)[0],
+      }));
+    }
+  }, [brands, brandsLoading, form.brandId, form.tokenId]);
+
+  useEffect(() => {
+    if (brandsLoading || tokensLoading || !form.brandId || !form.tokenId) {
+      return;
+    }
+
+    if (!brandTokenOptions.some((token) => token.id === form.tokenId)) {
+      setForm((current) => ({
+        ...current,
+        tokenId: '',
+        selectedAdAccountIds: [],
+        pageId: '',
+        pixelId: '',
+      }));
+    }
+  }, [brandTokenOptions, brandsLoading, form.brandId, form.tokenId, tokensLoading]);
+
+  useEffect(() => {
+    loadAssets(form.brandId && form.tokenId ? form.tokenId : '');
+  }, [form.brandId, form.tokenId, loadAssets]);
 
   useEffect(() => {
     setTemplatePage((currentPage) => Math.min(Math.max(currentPage, 1), templatePageCount));
   }, [templatePageCount]);
 
   useEffect(() => {
-    loadPixels(form.tokenId, form.selectedAdAccountIds);
-  }, [form.selectedAdAccountIds, form.tokenId, loadPixels]);
+    loadPixels(form.brandId && form.tokenId ? form.tokenId : '', form.selectedAdAccountIds);
+  }, [form.brandId, form.selectedAdAccountIds, form.tokenId, loadPixels]);
 
   useEffect(() => {
     if (pages.length === 1 && !form.pageId) {
@@ -405,11 +545,13 @@ const AdsLaunchPage = () => {
   }, [form.pixelId, pixelRequired, pixels]);
 
   useEffect(() => {
-    if (!adAccounts.length || !form.selectedAdAccountIds.length) {
+    if (!form.selectedAdAccountIds.length) {
       return;
     }
 
-    const validAccountIds = form.selectedAdAccountIds.filter((accountId) => adAccounts.some((account) => account.id === accountId));
+    const validAccountIds = form.selectedAdAccountIds.filter((accountId) =>
+      scopedAdAccounts.some((account) => account.id === accountId)
+    );
 
     if (validAccountIds.length !== form.selectedAdAccountIds.length) {
       setForm((current) => ({
@@ -417,7 +559,7 @@ const AdsLaunchPage = () => {
         selectedAdAccountIds: validAccountIds,
       }));
     }
-  }, [adAccounts, form.selectedAdAccountIds]);
+  }, [form.selectedAdAccountIds, scopedAdAccounts]);
 
   const previewItems = useMemo(
     () =>
@@ -505,6 +647,17 @@ const AdsLaunchPage = () => {
     resetCreativeFiles();
   };
 
+  const handleBrandChange = (brandId) => {
+    setForm((current) => ({
+      ...current,
+      brandId,
+      tokenId: '',
+      selectedAdAccountIds: [],
+      pageId: '',
+      pixelId: '',
+    }));
+  };
+
   const handleTokenChange = (tokenId) => {
     setForm((current) => ({
       ...current,
@@ -532,7 +685,7 @@ const AdsLaunchPage = () => {
     setForm((current) => ({
       ...current,
       selectedAdAccountIds:
-        current.selectedAdAccountIds.length === adAccounts.length ? [] : adAccounts.map((account) => account.id),
+        current.selectedAdAccountIds.length === scopedAdAccounts.length ? [] : scopedAdAccounts.map((account) => account.id),
     }));
   };
 
@@ -610,6 +763,7 @@ const AdsLaunchPage = () => {
         },
       },
       snapshot: {
+        brandName: selectedBrand?.name || '',
         tokenLabel: selectedToken?.label || '',
         pageName: selectedPage?.name || '',
         pixelName: selectedPixel?.name || '',
@@ -642,6 +796,8 @@ const AdsLaunchPage = () => {
     return {
       templateId: activeTemplateId || undefined,
       launchLabel: form.launchLabel.trim(),
+      brandId: form.brandId,
+      brandName: selectedBrand?.name || '',
       tokenId: form.tokenId,
       country: (form.countries || [])[0] || form.country,
       countries: form.countries || [],
@@ -753,12 +909,28 @@ const AdsLaunchPage = () => {
     }
   };
 
+  const getUniqueBrandIdForToken = (tokenId) => {
+    if (!tokenId) {
+      return '';
+    }
+
+    const matchingBrandIds = new Set(
+      brands
+        .filter((brand) => (brand.assignedSocialAccounts || []).some((account) => account.sourceTokenId === tokenId))
+        .map((brand) => brand.id)
+    );
+
+    return matchingBrandIds.size === 1 ? Array.from(matchingBrandIds)[0] : '';
+  };
+
   const handleLoadTemplate = (template) => {
     const countries = normalizeTemplateCountries(template.config);
+    const brandId = template.config.brandId || getUniqueBrandIdForToken(template.config.tokenId);
 
     setForm({
       ...createEmptyForm(),
       ...template.config,
+      brandId,
       country: countries[0] || '',
       countries,
       selectedAdAccountIds: Array.isArray(template.config.selectedAdAccountIds) ? template.config.selectedAdAccountIds : [],
@@ -809,8 +981,8 @@ const AdsLaunchPage = () => {
         canGenerate
           ? 'Add the creative file, and for video also upload a thumbnail before publishing'
           : pixelRequired
-            ? 'Complete countries, token, ad account, page, shared pixel, and copy fields before publishing'
-            : 'Complete countries, token, ad account, page, and copy fields before publishing'
+            ? 'Complete countries, brand, token, ad account, page, shared pixel, and copy fields before publishing'
+            : 'Complete countries, brand, token, ad account, page, and copy fields before publishing'
       );
       return;
     }
@@ -840,7 +1012,7 @@ const AdsLaunchPage = () => {
     <div>
       <DashboardHeader
         title="Ads Launch"
-        description="Load token-based Meta assets, save reusable launch templates, and publish campaign, ad set, creative, and ad batches."
+        description="Choose a brand, pick one of its assigned Meta tokens, then publish campaign, ad set, creative, and ad batches."
         action={
           <div className="flex flex-wrap gap-2">
             <button
@@ -874,6 +1046,7 @@ const AdsLaunchPage = () => {
         }
       />
 
+      {brandsError ? <p className="mb-4 rounded-xl bg-red-50 px-4 py-3 text-sm font-semibold text-red-700">{brandsError}</p> : null}
       {tokensError ? <p className="mb-4 rounded-xl bg-red-50 px-4 py-3 text-sm font-semibold text-red-700">{tokensError}</p> : null}
       {assetsError ? <p className="mb-4 rounded-xl bg-red-50 px-4 py-3 text-sm font-semibold text-red-700">{assetsError}</p> : null}
       {pixelError ? <p className="mb-4 rounded-xl bg-amber-50 px-4 py-3 text-sm font-semibold text-amber-800">{pixelError}</p> : null}
@@ -891,7 +1064,7 @@ const AdsLaunchPage = () => {
       <div className="grid gap-4 2xl:grid-cols-[minmax(0,1.55fr)_minmax(320px,420px)]">
         <DashboardPanel title="One-click launch builder">
           <div className="mb-5 flex flex-wrap gap-2">
-            <InfoPill icon={KeyRound}>Token-scoped assets</InfoPill>
+            <InfoPill icon={KeyRound}>Brand-scoped tokens</InfoPill>
             <InfoPill icon={Layers3}>Reusable templates</InfoPill>
             <InfoPill icon={Globe2}>China and Indonesia ready</InfoPill>
             <InfoPill icon={MousePointerClick}>Page + pixel from one asset call</InfoPill>
@@ -968,7 +1141,26 @@ const AdsLaunchPage = () => {
               </div>
             </div>
 
-            <div className="grid gap-4 xl:grid-cols-4">
+            <div className="grid gap-4 xl:grid-cols-5">
+              <div className="space-y-2">
+                <FieldLabel htmlFor="brand-id">Brand</FieldLabel>
+                <select
+                  id="brand-id"
+                  value={form.brandId}
+                  onChange={(event) => handleBrandChange(event.target.value)}
+                  className="h-12 w-full rounded-xl border border-sky-100 bg-white px-4 outline-none transition focus:border-sky-400 focus:ring-4 focus:ring-sky-100"
+                  disabled={brandsLoading}
+                  required
+                >
+                  <option value="">{brandsLoading ? 'Loading brands...' : 'Select brand'}</option>
+                  {brands.map((brand) => (
+                    <option key={brand.id} value={brand.id}>
+                      {brand.name} ({brand.socialAccountCount || 0} account{brand.socialAccountCount === 1 ? '' : 's'})
+                    </option>
+                  ))}
+                </select>
+              </div>
+
               <div className="space-y-2">
                 <FieldLabel htmlFor="source-token">Source token</FieldLabel>
                 <select
@@ -976,13 +1168,19 @@ const AdsLaunchPage = () => {
                   value={form.tokenId}
                   onChange={(event) => handleTokenChange(event.target.value)}
                   className="h-12 w-full rounded-xl border border-sky-100 bg-white px-4 outline-none transition focus:border-sky-400 focus:ring-4 focus:ring-sky-100"
-                  disabled={tokensLoading}
+                  disabled={tokensLoading || !selectedBrand || !brandTokenOptions.length}
                   required
                 >
-                  <option value="">Select active Meta token</option>
-                  {activeTokens.map((token) => (
+                  <option value="">
+                    {!selectedBrand
+                      ? 'Select brand first'
+                      : brandTokenOptions.length
+                        ? 'Select brand token'
+                        : 'No active token assigned'}
+                  </option>
+                  {brandTokenOptions.map((token) => (
                     <option key={token.id} value={token.id}>
-                      {token.label} ({token.accessToken})
+                      {token.label}{token.accessToken ? ` (${token.accessToken})` : ''}
                     </option>
                   ))}
                 </select>
@@ -1048,19 +1246,19 @@ const AdsLaunchPage = () => {
                   <button
                     type="button"
                     onClick={toggleSelectAllAccounts}
-                    disabled={!adAccounts.length}
+                    disabled={!scopedAdAccounts.length}
                     className="text-xs font-black uppercase tracking-[0.16em] text-sky-600 disabled:text-slate-300"
                   >
-                    {form.selectedAdAccountIds.length === adAccounts.length && adAccounts.length ? 'Clear all' : 'Select all'}
+                    {form.selectedAdAccountIds.length === scopedAdAccounts.length && scopedAdAccounts.length ? 'Clear all' : 'Select all'}
                   </button>
                 </div>
 
                 <div id="ad-account-list" className="rounded-2xl border border-sky-100 bg-white p-3">
                   {loadingAssets ? (
                     <div className="h-44 animate-pulse rounded-xl bg-sky-50" />
-                  ) : adAccounts.length ? (
+                  ) : scopedAdAccounts.length ? (
                     <div className="grid max-h-80 gap-2 overflow-y-auto md:grid-cols-2">
-                      {adAccounts.map((account) => {
+                      {scopedAdAccounts.map((account) => {
                         const checked = form.selectedAdAccountIds.includes(account.id);
 
                         return (
@@ -1087,9 +1285,23 @@ const AdsLaunchPage = () => {
                       })}
                     </div>
                   ) : (
-                    <EmptyState>Select a token with `ads_management` access to load ad accounts.</EmptyState>
+                    <EmptyState>
+                      {!form.brandId
+                        ? 'Select a brand first. Only tokens assigned to that brand will be available.'
+                        : !form.tokenId
+                          ? 'Select a brand token to load ad accounts.'
+                          : hasBrandSavedAdAccounts && adAccounts.length
+                            ? 'No loaded ad accounts match this brand. Sync the brand in Dashboard or choose another token.'
+                            : 'This token did not return ad accounts with `ads_management` access.'}
+                    </EmptyState>
                   )}
                 </div>
+                {selectedBrand && form.tokenId ? (
+                  <p className="text-xs font-semibold text-slate-400">
+                    Showing {scopedAdAccounts.length} account{scopedAdAccounts.length === 1 ? '' : 's'} for {selectedBrand.name}
+                    {hasBrandSavedAdAccounts ? ' from saved brand business profiles.' : ' from the selected token.'}
+                  </p>
+                ) : null}
               </div>
 
               <div className="grid gap-4 md:grid-cols-2">
@@ -1401,6 +1613,7 @@ const AdsLaunchPage = () => {
                     </div>
 
                     <div className="mt-3 flex flex-wrap gap-2">
+                      {template.snapshot?.brandName ? <InfoPill icon={Layers3}>{template.snapshot.brandName}</InfoPill> : null}
                       {template.snapshot?.tokenLabel ? <InfoPill icon={KeyRound}>{template.snapshot.tokenLabel}</InfoPill> : null}
                       {template.snapshot?.pageName ? <InfoPill icon={MousePointerClick}>{template.snapshot.pageName}</InfoPill> : null}
                     </div>
@@ -1711,8 +1924,12 @@ const AdsLaunchPage = () => {
       </div>
 
       <div className="mt-4 grid gap-4 lg:grid-cols-2 2xl:grid-cols-4">
-        <MetricCard label="Active Tokens" value={activeTokens.length} detail="Available Meta access sources for this launch." />
-        <MetricCard label="Loaded Accounts" value={adAccounts.length} detail="Accounts retrieved from the selected token." />
+        <MetricCard
+          label="Brand Tokens"
+          value={selectedBrand ? brandTokenOptions.length : activeTokens.length}
+          detail={selectedBrand ? 'Active tokens assigned to this brand.' : 'Select a brand to narrow token choices.'}
+        />
+        <MetricCard label="Brand Accounts" value={scopedAdAccounts.length} detail="Accounts available after brand and token selection." />
         <MetricCard label="Loaded Pages" value={pages.length} detail="Page options come directly from Meta token access." />
         <MetricCard label="Shared Pixels" value={pixels.length} detail="Common pixels across the selected accounts." />
       </div>
@@ -1720,6 +1937,20 @@ const AdsLaunchPage = () => {
       <div className="mt-4 grid gap-4 2xl:grid-cols-[360px_minmax(0,1fr)]">
         <DashboardPanel title="Current launch context">
           <div className="space-y-4">
+            {selectedBrand ? (
+              <div className="rounded-2xl border border-sky-100 bg-white px-4 py-4">
+                <div className="flex items-center gap-3">
+                  <span className="h-3 w-3 rounded-full" style={{ backgroundColor: selectedBrand.color || '#0ea5e9' }} />
+                  <p className="font-black text-slate-950">{selectedBrand.name}</p>
+                </div>
+                <p className="mt-2 text-xs font-semibold text-slate-400">
+                  {selectedBrand.socialAccountCount || 0} assigned social account{selectedBrand.socialAccountCount === 1 ? '' : 's'}
+                </p>
+              </div>
+            ) : (
+              <EmptyState>Select a brand first. Token and ad account options will follow that brand assignment.</EmptyState>
+            )}
+
             {selectedToken ? (
               <div className="rounded-2xl border border-sky-100 bg-white px-4 py-4">
                 <p className="font-black text-slate-950">{selectedToken.label}</p>
@@ -1733,7 +1964,7 @@ const AdsLaunchPage = () => {
                 </div>
               </div>
             ) : (
-              <EmptyState>Select an active token to load API-backed asset options.</EmptyState>
+              <EmptyState>Select a brand token to load API-backed asset options.</EmptyState>
             )}
 
             {!loadingPixels && form.selectedAdAccountIds.length > 1 && !pixels.length ? (

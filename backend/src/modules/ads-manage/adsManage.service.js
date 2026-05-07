@@ -355,6 +355,8 @@ async function recordPublishedCampaign({ token, launch, account, names, campaign
         launch: {
           launchLabel: launch.launchLabel,
           templateId: launch.templateId || '',
+          brandId: launch.brandId || '',
+          brandName: launch.brandName || '',
           countries: launch.countries || [],
           countryLabel: launch.countryLabel || (launch.countries || []).join(', '),
           dailyBudget: launch.dailyBudget,

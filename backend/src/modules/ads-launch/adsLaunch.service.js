@@ -110,6 +110,7 @@ function sanitizeTemplateConfig(input = {}) {
 
   return {
     launchLabel: normalizeText(input.launchLabel),
+    brandId: normalizeText(input.brandId),
     tokenId: normalizeText(input.tokenId),
     country: normalizedCountries[0] || '',
     countries: normalizedCountries,
@@ -144,6 +145,7 @@ function sanitizeTemplateConfig(input = {}) {
 
 function sanitizeSnapshot(input = {}) {
   return {
+    brandName: normalizeText(input.brandName),
     tokenLabel: normalizeText(input.tokenLabel),
     pageName: normalizeText(input.pageName),
     pixelName: normalizeText(input.pixelName),
@@ -707,6 +709,8 @@ function ensurePublishPayload(payload) {
   const cleaned = {
     templateId: normalizeText(payload.templateId),
     launchLabel: normalizeText(payload.launchLabel),
+    brandId: normalizeText(payload.brandId),
+    brandName: normalizeText(payload.brandName),
     tokenId: normalizeText(payload.tokenId),
     country: countries[0] || '',
     countries,

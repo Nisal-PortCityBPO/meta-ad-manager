@@ -140,6 +140,16 @@ const launchDetailsSchema = new mongoose.Schema(
       default: '',
       trim: true,
     },
+    brandId: {
+      type: String,
+      default: '',
+      trim: true,
+    },
+    brandName: {
+      type: String,
+      default: '',
+      trim: true,
+    },
     countries: {
       type: [String],
       default: [],
