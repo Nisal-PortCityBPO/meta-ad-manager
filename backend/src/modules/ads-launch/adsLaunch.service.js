@@ -26,7 +26,7 @@ const MEDIA_LIBRARY_MAX_ASPECT_RATIO = 1.92;
 const MEDIA_LIBRARY_MAX_IMAGE_BYTES = 30 * 1024 * 1024;
 const MEDIA_LIBRARY_MAX_VIDEO_BYTES = 95 * 1024 * 1024;
 const MEDIA_LIBRARY_MAX_THUMBNAIL_BYTES = 10 * 1024 * 1024;
-const MEDIA_LIBRARY_IMAGE_MIME_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp']);
+const MEDIA_LIBRARY_IMAGE_MIME_TYPES = new Set(['image/jpeg']);
 const MEDIA_LIBRARY_VIDEO_MIME_TYPES = new Set(['video/mp4', 'video/quicktime']);
 
 const SUPPORTED_WEBSITE_EVENTS = new Set([
@@ -615,7 +615,7 @@ function assertMediaLibraryMimeType(mimeType, mediaType) {
       400,
       mediaType === ADS_MEDIA_TYPES.VIDEO
         ? 'Video media must be MP4 or MOV for reliable Meta publishing'
-        : 'Image media must be JPG, PNG, or WEBP for reliable Meta publishing'
+        : 'Image media must be JPG/JPEG for reliable Meta publishing'
     );
   }
 }

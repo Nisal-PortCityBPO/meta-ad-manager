@@ -10,7 +10,7 @@ const MIN_ASPECT_RATIO = 0.56;
 const MAX_ASPECT_RATIO = 1.92;
 const MAX_IMAGE_BYTES = 30 * 1024 * 1024;
 const MAX_VIDEO_BYTES = 95 * 1024 * 1024;
-const IMAGE_MIME_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp']);
+const IMAGE_MIME_TYPES = new Set(['image/jpeg']);
 const VIDEO_MIME_TYPES = new Set(['video/mp4', 'video/quicktime']);
 
 const formatFileSize = (bytes = 0) => {
@@ -47,7 +47,7 @@ const getValidationError = ({ file, width, height, duration }) => {
   if (!allowedTypes.has(file.type)) {
     return isVideo
       ? 'Use MP4 or MOV video files for Meta publishing.'
-      : 'Use JPG, PNG, or WEBP image files for Meta publishing.';
+      : 'Use JPG/JPEG image files only.';
   }
 
   if (file.size > maxBytes) {
@@ -429,9 +429,9 @@ const AdsMediaLibraryPage = () => {
             <label htmlFor="media-library-file" className="flex min-h-52 cursor-pointer flex-col items-center justify-center rounded-3xl border border-dashed border-sky-200 bg-sky-50/70 px-5 py-6 text-center transition hover:border-sky-400 hover:bg-sky-50">
               {processingFile ? <LoaderCircle size={28} className="animate-spin text-sky-600" /> : <Upload size={28} strokeWidth={2.1} className="text-sky-600" />}
               <p className="mt-3 text-sm font-black text-slate-950">{selectedFile ? 'Replace media' : 'Select image or video'}</p>
-              <p className="mt-1 text-xs font-semibold text-slate-500">JPG, PNG, WEBP, MP4, or MOV. Minimum 600x600, ratio 9:16 to 1.91:1.</p>
+              <p className="mt-1 text-xs font-semibold text-slate-500">JPG/JPEG images only, or MP4/MOV videos. Minimum 600x600, ratio 9:16 to 1.91:1.</p>
             </label>
-            <input id="media-library-file" type="file" accept="image/jpeg,image/png,image/webp,video/mp4,video/quicktime" onChange={handleFileChange} className="hidden" />
+            <input id="media-library-file" type="file" accept="image/jpeg,video/mp4,video/quicktime" onChange={handleFileChange} className="hidden" />
 
             {selectedFile && selectedPreviewUrl ? (
               <div className="overflow-hidden rounded-3xl border border-sky-100 bg-white">
