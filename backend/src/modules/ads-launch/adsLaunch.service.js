@@ -1376,26 +1376,33 @@ function buildCreativeEnhancementOptOutSpec({ isVideo }) {
   const optOut = {
     enroll_status: 'OPT_OUT',
   };
-  const creativeFeaturesSpec = {
-    inline_comment: optOut,
-    enhance_cta: optOut,
-    text_optimizations: optOut,
-  };
+  const featureKeys = ['IMAGE_ANIMATION', 'PROFILE_CARD', 'TEXT_OVERLAY_TRANSLATION'];
 
   if (isVideo) {
-    creativeFeaturesSpec.video_auto_crop = optOut;
-  } else {
-    creativeFeaturesSpec.image_template = optOut;
-    creativeFeaturesSpec.image_touchups = optOut;
-    creativeFeaturesSpec.image_brightness_and_contrast = optOut;
+    featureKeys.push('IG_VIDEO_NATIVE_SUBTITLE');
   }
 
   return {
     degrees_of_freedom_spec: {
-      creative_features_spec: creativeFeaturesSpec,
+      creative_features_spec: Object.fromEntries(featureKeys.map((featureKey) => [featureKey, optOut])),
     },
     contextual_multi_ads: optOut,
   };
+}
+
+function hasCreativeEnhancementParams(params = {}) {
+  return Boolean(params.degrees_of_freedom_spec || params.contextual_multi_ads);
+}
+
+function stripCreativeEnhancementParams(params = {}) {
+  const nextParams = {
+    ...params,
+  };
+
+  delete nextParams.degrees_of_freedom_spec;
+  delete nextParams.contextual_multi_ads;
+
+  return nextParams;
 }
 
 function hasDisplayUrlInCreativeParams(params = {}) {
@@ -1443,6 +1450,16 @@ function isDisplayUrlMetaError(error) {
   return message.includes('display url') || message.includes('display_url') || message.includes('caption');
 }
 
+function isCreativeEnhancementMetaError(error) {
+  const message = String(error?.message || '').toLowerCase();
+  return (
+    message.includes('degrees_of_freedom_spec') ||
+    message.includes('creative_features_spec') ||
+    message.includes('standard enhancements') ||
+    message.includes('contextual_multi_ads')
+  );
+}
+
 async function postCreativeToMeta({ token, adAccountId, params }) {
   try {
     return await postToMeta({
@@ -1451,6 +1468,14 @@ async function postCreativeToMeta({ token, adAccountId, params }) {
       params,
     });
   } catch (error) {
+    if (hasCreativeEnhancementParams(params) && isCreativeEnhancementMetaError(error)) {
+      return postToMeta({
+        token,
+        path: `${adAccountId}/adcreatives`,
+        params: stripCreativeEnhancementParams(params),
+      });
+    }
+
     if (!hasDisplayUrlInCreativeParams(params) || !isDisplayUrlMetaError(error)) {
       throw error;
     }
@@ -1778,7 +1803,7 @@ function sanitizeAccountLaunches(input = []) {
     .filter((item) => item.adAccountId && (item.campaignTemplateId || item.mediaTemplateId));
 }
 
-function mergeTemplateConfig(baseLaunch, campaignConfig = {}, mediaConfig = {}) {
+function mergeTemplateConfig(baseLaunch, campaignConfig = {}, mediaConfig = {}, templateNames = {}) {
   const campaignStaticDefaults = campaignConfig.staticDefaults || {};
   const baseStaticDefaults = baseLaunch.staticDefaults || {};
   const campaignCountries = sanitizeCountries({
@@ -1789,9 +1814,14 @@ function mergeTemplateConfig(baseLaunch, campaignConfig = {}, mediaConfig = {}) 
   const objective = normalizeText(campaignConfig.objective) || baseLaunch.objective;
   const templateWebsiteEvent = normalizeText(campaignConfig.websiteEvent).toUpperCase();
   const shouldUseBaseWebsiteEvent = !normalizeText(campaignConfig.objective) || objective === baseLaunch.objective;
+  const launchLabel =
+    normalizeText(templateNames.campaignTemplateName) ||
+    normalizeText(campaignConfig.launchLabel) ||
+    baseLaunch.launchLabel;
 
   return {
     ...baseLaunch,
+    launchLabel,
     objective,
     dailyBudget: normalizeText(campaignConfig.dailyBudget) || baseLaunch.dailyBudget,
     country: countries[0] || baseLaunch.country,
@@ -1853,7 +1883,10 @@ async function resolveAccountLaunchFromTemplates({ baseLaunch, accountLaunch, se
   const templateLaunch = mergeTemplateConfig(
     baseLaunch,
     campaignTemplate?.config?.toObject?.() || campaignTemplate?.config || {},
-    mediaTemplate?.config?.toObject?.() || mediaTemplate?.config || {}
+    mediaTemplate?.config?.toObject?.() || mediaTemplate?.config || {},
+    {
+      campaignTemplateName: campaignTemplate?.name,
+    }
   );
   const accountLaunchOverrides = {
     ...templateLaunch,

@@ -3,6 +3,7 @@ import { metaAssetsApi } from '../api/metaAssetsApi';
 
 export const useTokenMetaAssets = () => {
   const [adAccounts, setAdAccounts] = useState([]);
+  const [accountPixels, setAccountPixels] = useState({});
   const [pages, setPages] = useState([]);
   const [pixels, setPixels] = useState([]);
   const [warnings, setWarnings] = useState([]);
@@ -13,6 +14,7 @@ export const useTokenMetaAssets = () => {
 
   const resetAssets = useCallback(() => {
     setAdAccounts([]);
+    setAccountPixels({});
     setPages([]);
     setPixels([]);
     setWarnings([]);
@@ -34,6 +36,7 @@ export const useTokenMetaAssets = () => {
 
       if (!adAccountIds.length) {
         setPixelError('');
+        setAccountPixels({});
       }
 
       try {
@@ -76,9 +79,49 @@ export const useTokenMetaAssets = () => {
     [loadAssets]
   );
 
+  const loadAccountPixels = useCallback(async (tokenId, adAccountIds = []) => {
+    if (!tokenId || !adAccountIds.length) {
+      setAccountPixels({});
+      setPixelError('');
+      setLoadingPixels(false);
+      return;
+    }
+
+    setLoadingPixels(true);
+    setPixelError('');
+
+    const nextAccountPixels = {};
+    const failed = [];
+
+    for (const adAccountId of adAccountIds) {
+      try {
+        const data = await metaAssetsApi.getMetaPixels(tokenId, adAccountId);
+        nextAccountPixels[adAccountId] = data.pixels || [];
+      } catch (requestError) {
+        nextAccountPixels[adAccountId] = [];
+        failed.push(`${adAccountId}: ${requestError.message}`);
+      }
+    }
+
+    setAccountPixels(nextAccountPixels);
+    setPixels(
+      Array.from(
+        new Map(
+          Object.values(nextAccountPixels)
+            .flat()
+            .map((pixel) => [pixel.id, pixel])
+        ).values()
+      ).sort((first, second) => first.name.localeCompare(second.name))
+    );
+    setPixelError(failed.join(' | '));
+    setLoadingPixels(false);
+  }, []);
+
   return {
+    accountPixels,
     adAccounts,
     error,
+    loadAccountPixels,
     loadAssets,
     loadPixels,
     loadingAssets,

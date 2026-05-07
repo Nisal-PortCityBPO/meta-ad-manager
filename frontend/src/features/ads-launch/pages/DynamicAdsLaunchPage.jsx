@@ -139,40 +139,25 @@ const PixelPublishPrompt = ({
   loadingPixels,
   onClose,
   onLoadPixels,
-  onPublishWithoutPixel,
-  onPublishWithPixel,
-  pixels,
   prompt,
-  selectedPixelId,
 }) => {
-  const [draftPixelId, setDraftPixelId] = useState(selectedPixelId || '');
-
-  useEffect(() => {
-    setDraftPixelId(selectedPixelId || '');
-  }, [selectedPixelId, prompt]);
-
   if (!prompt) {
     return null;
   }
 
-  const isRequired = prompt.required;
-  const affectedTemplates = prompt.templates?.slice(0, 3) || [];
+  const affectedAccounts = prompt.accounts?.slice(0, 5) || [];
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/50 px-4 py-6 backdrop-blur-sm">
       <div className="w-full max-w-lg rounded-3xl border border-sky-100 bg-white p-5 shadow-2xl shadow-slate-950/20">
         <div className="flex items-start justify-between gap-4">
           <div className="flex gap-3">
-            <span className={`flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl ${isRequired ? 'bg-red-50 text-red-600' : 'bg-amber-50 text-amber-600'}`}>
+            <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-red-50 text-red-600">
               <AlertTriangle size={21} strokeWidth={2.4} />
             </span>
             <div>
-              <p className="text-xs font-black uppercase tracking-[0.18em] text-sky-600">
-                {isRequired ? 'Pixel required' : 'Pixel not selected'}
-              </p>
-              <h3 className="mt-1 text-xl font-black text-slate-950">
-                {isRequired ? 'Select a pixel before publishing' : 'Publish without pixel tracking?'}
-              </h3>
+              <p className="text-xs font-black uppercase tracking-[0.18em] text-sky-600">Pixel required</p>
+              <h3 className="mt-1 text-xl font-black text-slate-950">Select pixel per ad account</h3>
             </div>
           </div>
           <button type="button" onClick={onClose} className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-sky-100 text-slate-500 transition hover:bg-sky-50">
@@ -181,56 +166,29 @@ const PixelPublishPrompt = ({
         </div>
 
         <p className="mt-4 text-sm font-semibold leading-6 text-slate-600">
-          {isRequired
-            ? `${prompt.accountCount} ready ad account${prompt.accountCount === 1 ? '' : 's'} use Leads/Sales templates, so Meta needs a pixel for the website event.`
-            : `${prompt.accountCount} ready ad account${prompt.accountCount === 1 ? '' : 's'} can publish without a pixel. Select one if you want tracking, or continue without it.`}
+          {prompt.accountCount} ready ad account{prompt.accountCount === 1 ? '' : 's'} use campaign templates that need website-event tracking. Choose the correct pixel in each row, then publish again.
         </p>
 
-        {affectedTemplates.length ? (
+        {affectedAccounts.length ? (
           <div className="mt-4 rounded-2xl bg-sky-50 px-4 py-3">
-            <p className="text-xs font-black uppercase tracking-[0.14em] text-sky-600">Templates checked</p>
-            <div className="mt-2 flex flex-wrap gap-2">
-              {affectedTemplates.map((templateName) => (
-                <span key={templateName} className="rounded-full bg-white px-3 py-1 text-xs font-black text-slate-700 shadow-sm shadow-sky-100">
-                  {templateName}
-                </span>
+            <p className="text-xs font-black uppercase tracking-[0.14em] text-sky-600">Rows needing pixel</p>
+            <div className="mt-2 space-y-2">
+              {affectedAccounts.map((item) => (
+                <div key={`${item.accountName}-${item.templateName}`} className="rounded-xl bg-white px-3 py-2 shadow-sm shadow-sky-100">
+                  <p className="text-xs font-black text-slate-800">{item.accountName}</p>
+                  <p className="mt-0.5 text-[11px] font-semibold text-slate-400">{item.templateName}</p>
+                </div>
               ))}
             </div>
           </div>
         ) : null}
 
-        <div className="mt-5 space-y-2">
-          <FieldLabel htmlFor="pixel-publish-select">Pixel</FieldLabel>
-          <select
-            id="pixel-publish-select"
-            value={draftPixelId}
-            onChange={(event) => setDraftPixelId(event.target.value)}
-            disabled={loadingPixels || !pixels.length}
-            className="h-12 w-full rounded-xl border border-sky-100 px-4 outline-none focus:border-sky-400 focus:ring-4 focus:ring-sky-100 disabled:bg-slate-50 disabled:text-slate-400"
-          >
-            <option value="">{pixels.length ? 'Select pixel' : 'No pixels loaded yet'}</option>
-            {pixels.map((pixel) => (
-              <option key={pixel.id} value={pixel.id}>{pixel.name}</option>
-            ))}
-          </select>
-          <button type="button" onClick={onLoadPixels} disabled={loadingPixels} className="h-10 rounded-xl border border-sky-100 bg-white px-4 text-sm font-bold text-slate-700 transition hover:bg-sky-50 disabled:opacity-50">
+        <div className="mt-5 flex flex-wrap justify-end gap-2">
+          <button type="button" onClick={onLoadPixels} disabled={loadingPixels} className="h-11 rounded-xl border border-sky-100 bg-white px-4 text-sm font-black text-slate-700 transition hover:bg-sky-50 disabled:opacity-50">
             {loadingPixels ? 'Loading pixels...' : 'Load pixels'}
           </button>
-        </div>
-
-        <div className="mt-5 flex flex-wrap justify-end gap-2">
-          {!isRequired ? (
-            <button type="button" onClick={onPublishWithoutPixel} className="h-11 rounded-xl border border-slate-200 bg-white px-4 text-sm font-black text-slate-700 transition hover:bg-slate-50">
-              Publish without pixel
-            </button>
-          ) : null}
-          <button
-            type="button"
-            onClick={() => onPublishWithPixel(draftPixelId)}
-            disabled={!draftPixelId}
-            className="h-11 rounded-xl bg-slate-950 px-4 text-sm font-black text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-50"
-          >
-            Use pixel and publish
+          <button type="button" onClick={onClose} className="h-11 rounded-xl bg-slate-950 px-4 text-sm font-black text-white transition hover:bg-slate-800">
+            Back to rows
           </button>
         </div>
       </div>
@@ -252,7 +210,7 @@ const getTemplateLabel = (template) => (template ? template.name : 'Not selected
 
 const DynamicAdsLaunchPage = () => {
   const { loading: tokensLoading, tokens } = useTokens();
-  const { adAccounts, loadAssets, loadingAssets, loadPixels, loadingPixels, pages, pixels } = useTokenMetaAssets();
+  const { accountPixels, adAccounts, loadAccountPixels, loadAssets, loadingAssets, loadingPixels, pages } = useTokenMetaAssets();
   const { error: templatesError, loading: templatesLoading, templates } = useLaunchTemplates();
   const { beginPublish, completePublish, failPublish, isPublishing, pushPublishEvent } = usePublishProgress();
   const [brands, setBrands] = useState([]);
@@ -260,7 +218,6 @@ const DynamicAdsLaunchPage = () => {
   const [brandId, setBrandId] = useState('');
   const [tokenId, setTokenId] = useState('');
   const [pageId, setPageId] = useState('');
-  const [pixelId, setPixelId] = useState('');
   const [assignments, setAssignments] = useState({});
   const [pixelPrompt, setPixelPrompt] = useState(null);
   const [previewTemplate, setPreviewTemplate] = useState(null);
@@ -278,7 +235,6 @@ const DynamicAdsLaunchPage = () => {
   }, [activeTokens, selectedBrandSocialAccounts]);
   const selectedToken = activeTokens.find((token) => token.id === tokenId) || null;
   const selectedPage = pages.find((page) => page.id === pageId) || null;
-  const selectedPixel = pixels.find((pixel) => pixel.id === pixelId) || null;
   const savedBrandAccountKeys = useMemo(() => {
     const keys = new Set();
 
@@ -302,11 +258,11 @@ const DynamicAdsLaunchPage = () => {
     return adAccounts.filter((account) => getAdAccountKeys(account).some((key) => savedBrandAccountKeys.has(key)));
   }, [adAccounts, brandId, savedBrandAccountKeys, tokenId]);
   const campaignTemplates = useMemo(
-    () => templates.filter((template) => ['CAMPAIGN', 'FULL'].includes(template.templateType || 'FULL')),
+    () => templates.filter((template) => template.templateType === 'CAMPAIGN'),
     [templates]
   );
   const mediaTemplates = useMemo(
-    () => templates.filter((template) => ['MEDIA', 'FULL'].includes(template.templateType || 'FULL') && template.snapshot?.media?.url),
+    () => templates.filter((template) => template.templateType === 'MEDIA' && template.snapshot?.media?.url),
     [templates]
   );
   const selectedAssignments = useMemo(
@@ -335,26 +291,28 @@ const DynamicAdsLaunchPage = () => {
     return page?.name || campaignTemplate?.snapshot?.pageName || selectedPage?.name || '';
   };
 
-  const getAssignmentPixelId = (assignment, fallbackPixelId = pixelId) => {
+  const getAssignmentPixelId = (assignment) => {
     const campaignTemplate = getAssignmentCampaignTemplate(assignment);
-    return campaignTemplate?.config?.pixelId || fallbackPixelId;
+    return assignment.pixelId || campaignTemplate?.config?.pixelId || '';
   };
 
-  const getPixelNameById = (nextPixelId) => pixels.find((pixel) => pixel.id === nextPixelId)?.name || '';
+  const getAccountPixelOptions = (accountId) => accountPixels[accountId] || [];
 
-  const getAssignmentPixelName = (assignment, fallbackPixelId = pixelId) => {
-    const assignmentPixelId = getAssignmentPixelId(assignment, fallbackPixelId);
+  const getPixelNameById = (nextPixelId, accountId) =>
+    getAccountPixelOptions(accountId).find((pixel) => pixel.id === nextPixelId)?.name || '';
+
+  const getAssignmentPixelName = (assignment) => {
+    const assignmentPixelId = getAssignmentPixelId(assignment);
     const campaignTemplate = getAssignmentCampaignTemplate(assignment);
-    return getPixelNameById(assignmentPixelId) || campaignTemplate?.snapshot?.pixelName || '';
+    return getPixelNameById(assignmentPixelId, assignment.account?.id) || campaignTemplate?.snapshot?.pixelName || '';
   };
 
-  const getPixelPromptDetails = (fallbackPixelId = pixelId) => {
+  const getPixelPromptDetails = () => {
     const requiredMissing = [];
-    const optionalMissing = [];
 
     selectedAssignments.forEach((assignment) => {
       const campaignTemplate = getAssignmentCampaignTemplate(assignment);
-      const assignmentPixelId = getAssignmentPixelId(assignment, fallbackPixelId);
+      const assignmentPixelId = getAssignmentPixelId(assignment);
 
       if (assignmentPixelId) {
         return;
@@ -367,13 +325,10 @@ const DynamicAdsLaunchPage = () => {
 
       if (campaignRequiresPixel(campaignTemplate)) {
         requiredMissing.push(item);
-      } else {
-        optionalMissing.push(item);
       }
     });
 
     return {
-      optionalMissing,
       requiredMissing,
     };
   };
@@ -404,7 +359,6 @@ const DynamicAdsLaunchPage = () => {
     setBrandId(nextBrandId);
     setTokenId('');
     setPageId('');
-    setPixelId('');
     setAssignments({});
     loadAssets('');
   };
@@ -412,7 +366,6 @@ const DynamicAdsLaunchPage = () => {
   const handleTokenChange = async (nextTokenId) => {
     setTokenId(nextTokenId);
     setPageId('');
-    setPixelId('');
     setAssignments({});
     await loadAssets(nextTokenId);
   };
@@ -427,7 +380,7 @@ const DynamicAdsLaunchPage = () => {
     }));
   };
 
-  const buildPublishPayload = (fallbackPixelId = pixelId) => {
+  const buildPublishPayload = () => {
     const firstAssignment = selectedAssignments[0];
     const firstCampaignTemplate = campaignTemplates.find((template) => template.id === firstAssignment.campaignTemplateId);
     const firstMediaTemplate = mediaTemplates.find((template) => template.id === firstAssignment.mediaTemplateId);
@@ -436,13 +389,12 @@ const DynamicAdsLaunchPage = () => {
     const countries = sanitizeCountries(campaignConfig);
     const firstPageId = getAssignmentPageId(firstAssignment);
     const firstPage = pages.find((page) => page.id === firstPageId) || selectedPage;
-    const firstPixelId = getAssignmentPixelId(firstAssignment, fallbackPixelId);
-    const firstPixel = pixels.find((pixel) => pixel.id === firstPixelId) || selectedPixel;
+    const firstPixelId = getAssignmentPixelId(firstAssignment);
     const websiteEvent = campaignConfig.websiteEvent || defaultWebsiteEventByObjective[campaignConfig.objective] || '';
 
     return {
       templateId: firstAssignment.mediaTemplateId,
-      launchLabel: campaignConfig.launchLabel || firstCampaignTemplate?.name || 'Dynamic launch',
+      launchLabel: firstCampaignTemplate?.name || campaignConfig.launchLabel || 'Dynamic launch',
       brandId,
       brandName: selectedBrand?.name || '',
       tokenId,
@@ -461,7 +413,7 @@ const DynamicAdsLaunchPage = () => {
       pageId: firstPageId,
       pageName: firstPage?.name || '',
       pixelId: firstPixelId,
-      pixelName: firstPixel?.name || '',
+      pixelName: getAssignmentPixelName(firstAssignment),
       websiteEvent,
       headline: mediaConfig.headline || firstMediaTemplate?.name || 'Ad',
       primaryText: mediaConfig.primaryText || ' ',
@@ -482,23 +434,22 @@ const DynamicAdsLaunchPage = () => {
         mediaTemplateId: assignment.mediaTemplateId,
         pageId: getAssignmentPageId(assignment),
         pageName: getAssignmentPageName(assignment),
-        pixelId: getAssignmentPixelId(assignment, fallbackPixelId),
-        pixelName: getAssignmentPixelName(assignment, fallbackPixelId),
+        pixelId: getAssignmentPixelId(assignment),
+        pixelName: getAssignmentPixelName(assignment),
       })),
     };
   };
 
-  const loadSharedPixels = () => loadPixels(tokenId, scopedAdAccounts.map((account) => account.id));
+  const loadRowPixels = () => loadAccountPixels(tokenId, scopedAdAccounts.map((account) => account.id));
 
-  const showPixelPrompt = ({ required, items }) => {
+  const showPixelPrompt = ({ items }) => {
     setPixelPrompt({
       accountCount: items.length,
-      required,
-      templates: Array.from(new Set(items.map((item) => item.templateName).filter(Boolean))),
+      accounts: items,
     });
   };
 
-  const publishDynamicLaunch = async ({ pixelOverride = pixelId, skipOptionalPixelPrompt = false } = {}) => {
+  const publishDynamicLaunch = async () => {
     if (isPublishing || publishing) {
       toast.error('A publish is already processing');
       return;
@@ -533,20 +484,11 @@ const DynamicAdsLaunchPage = () => {
       return;
     }
 
-    const pixelPromptDetails = getPixelPromptDetails(pixelOverride);
+    const pixelPromptDetails = getPixelPromptDetails();
 
     if (pixelPromptDetails.requiredMissing.length) {
       showPixelPrompt({
-        required: true,
         items: pixelPromptDetails.requiredMissing,
-      });
-      return;
-    }
-
-    if (!skipOptionalPixelPrompt && pixelPromptDetails.optionalMissing.length) {
-      showPixelPrompt({
-        required: false,
-        items: pixelPromptDetails.optionalMissing,
       });
       return;
     }
@@ -556,7 +498,7 @@ const DynamicAdsLaunchPage = () => {
     beginPublish();
 
     try {
-      const payload = buildPublishPayload(pixelOverride);
+      const payload = buildPublishPayload();
       const data = await adsLaunchApi.publishLaunchStream(payload, {
         onProgress: pushPublishEvent,
       });
@@ -594,25 +536,13 @@ const DynamicAdsLaunchPage = () => {
       <PixelPublishPrompt
         loadingPixels={loadingPixels}
         onClose={() => setPixelPrompt(null)}
-        onLoadPixels={loadSharedPixels}
-        onPublishWithoutPixel={() => publishDynamicLaunch({ pixelOverride: '', skipOptionalPixelPrompt: true })}
-        onPublishWithPixel={(nextPixelId) => {
-          if (!nextPixelId) {
-            toast.error('Select a pixel first');
-            return;
-          }
-
-          setPixelId(nextPixelId);
-          publishDynamicLaunch({ pixelOverride: nextPixelId, skipOptionalPixelPrompt: true });
-        }}
-        pixels={pixels}
+        onLoadPixels={loadRowPixels}
         prompt={pixelPrompt}
-        selectedPixelId={pixelId}
       />
 
       {templatesError ? <p className="mb-4 rounded-xl bg-red-50 px-4 py-3 text-sm font-semibold text-red-700">{templatesError}</p> : null}
 
-      <div className="grid gap-4 2xl:grid-cols-[360px_minmax(0,1fr)]">
+      <div className="grid gap-4 2xl:grid-cols-[280px_minmax(0,1fr)]">
         <DashboardPanel title="Launch scope">
           <div className="space-y-4">
             <div className="space-y-2">
@@ -637,16 +567,10 @@ const DynamicAdsLaunchPage = () => {
               </select>
               <p className="text-xs font-semibold text-slate-400">Optional. Each ad account row can override this page.</p>
             </div>
-            <div className="space-y-2">
-              <FieldLabel htmlFor="dynamic-pixel">Pixel</FieldLabel>
-              <select id="dynamic-pixel" value={pixelId} onChange={(event) => setPixelId(event.target.value)} disabled={loadingPixels || !pixels.length} className="h-12 w-full rounded-xl border border-sky-100 px-4 outline-none focus:border-sky-400 focus:ring-4 focus:ring-sky-100">
-                <option value="">Optional shared pixel</option>
-                {pixels.map((pixel) => <option key={pixel.id} value={pixel.id}>{pixel.name}</option>)}
-              </select>
-            </div>
-            <button type="button" onClick={loadSharedPixels} disabled={!tokenId || !scopedAdAccounts.length} className="h-10 rounded-xl border border-sky-100 bg-white px-4 text-sm font-bold text-slate-700 transition hover:bg-sky-50 disabled:opacity-50">
-              Load shared pixels
+            <button type="button" onClick={loadRowPixels} disabled={!tokenId || !scopedAdAccounts.length} className="h-10 rounded-xl border border-sky-100 bg-white px-4 text-sm font-bold text-slate-700 transition hover:bg-sky-50 disabled:opacity-50">
+              {loadingPixels ? 'Loading pixels...' : 'Load account pixels'}
             </button>
+            <p className="text-xs font-semibold text-slate-400">Pixels are selected per ad account row. Leave blank when that campaign template does not need pixel tracking.</p>
           </div>
         </DashboardPanel>
 
@@ -667,6 +591,7 @@ const DynamicAdsLaunchPage = () => {
                   <tr>
                     <th className="px-3 py-3">Ad account</th>
                     <th className="px-3 py-3">Page</th>
+                    <th className="px-3 py-3">Pixel</th>
                     <th className="px-3 py-3">Campaign template</th>
                     <th className="px-3 py-3">Media template</th>
                     <th className="px-3 py-3">Ready</th>
@@ -674,14 +599,21 @@ const DynamicAdsLaunchPage = () => {
                 </thead>
                 <tbody className="divide-y divide-sky-50">
                   {scopedAdAccounts.map((account) => {
-                    const assignment = assignments[account.id] || {};
+                    const assignment = {
+                      account,
+                      ...(assignments[account.id] || {}),
+                    };
                     const campaignTemplate = campaignTemplates.find((template) => template.id === assignment.campaignTemplateId);
                     const mediaTemplate = mediaTemplates.find((template) => template.id === assignment.mediaTemplateId);
                     const accountPageId = assignment.pageId || campaignTemplate?.config?.pageId || pageId;
                     const accountPage = pages.find((page) => page.id === accountPageId);
+                    const accountPixelOptions = getAccountPixelOptions(account.id);
+                    const accountPixelId = getAssignmentPixelId(assignment);
+                    const accountPixelName = getAssignmentPixelName(assignment);
+                    const requiresPixel = campaignRequiresPixel(campaignTemplate);
                     const campaignStatus = getCampaignStatus(campaignTemplate);
                     const hasSchedule = Boolean(campaignTemplate?.config?.scheduleStart && campaignTemplate?.config?.scheduleEnd);
-                    const ready = Boolean(campaignTemplate && mediaTemplate && accountPageId);
+                    const ready = Boolean(campaignTemplate && mediaTemplate && accountPageId && (!requiresPixel || accountPixelId));
 
                     return (
                       <tr key={account.id} className="align-top">
@@ -690,7 +622,7 @@ const DynamicAdsLaunchPage = () => {
                           <p className="mt-1 text-xs font-semibold text-slate-400">{account.accountId} {account.currency || ''}</p>
                         </td>
                         <td className="px-3 py-3">
-                          <select value={assignment.pageId || ''} onChange={(event) => updateAssignment(account.id, 'pageId', event.target.value)} disabled={!pages.length} className="h-11 min-w-52 rounded-xl border border-sky-100 px-3 outline-none focus:border-sky-400 focus:ring-4 focus:ring-sky-100 disabled:bg-slate-50">
+                          <select value={assignment.pageId || ''} onChange={(event) => updateAssignment(account.id, 'pageId', event.target.value)} disabled={!pages.length} className="h-10 min-w-48 rounded-xl border border-sky-100 px-3 text-xs font-semibold outline-none focus:border-sky-400 focus:ring-4 focus:ring-sky-100 disabled:bg-slate-50">
                             <option value="">{pageId ? `Use shared: ${selectedPage?.name || pageId}` : 'Select page'}</option>
                             {pages.map((page) => <option key={page.id} value={page.id}>{page.name}</option>)}
                           </select>
@@ -699,8 +631,31 @@ const DynamicAdsLaunchPage = () => {
                           </p>
                         </td>
                         <td className="px-3 py-3">
+                          <select
+                            value={accountPixelId}
+                            onChange={(event) => updateAssignment(account.id, 'pixelId', event.target.value)}
+                            disabled={loadingPixels || !accountPixelOptions.length}
+                            className="h-10 min-w-40 rounded-xl border border-sky-100 px-3 text-xs font-semibold outline-none focus:border-sky-400 focus:ring-4 focus:ring-sky-100 disabled:bg-slate-50"
+                          >
+                            <option value="">{requiresPixel ? 'Select pixel' : 'No pixel'}</option>
+                            {accountPixelId && !accountPixelOptions.some((pixel) => pixel.id === accountPixelId) ? (
+                              <option value={accountPixelId}>{accountPixelName || accountPixelId}</option>
+                            ) : null}
+                            {accountPixelOptions.map((pixel) => <option key={pixel.id} value={pixel.id}>{pixel.name}</option>)}
+                          </select>
+                          <p className={`mt-1 text-xs font-semibold ${requiresPixel && !accountPixelId ? 'text-red-500' : 'text-slate-400'}`}>
+                            {requiresPixel
+                              ? accountPixelId
+                                ? accountPixelName || 'Pixel selected'
+                                : 'Required for this template'
+                              : accountPixelId
+                                ? accountPixelName || 'Optional pixel selected'
+                                : 'Optional for tracking'}
+                          </p>
+                        </td>
+                        <td className="px-3 py-3">
                           <div className="flex items-center gap-2">
-                            <select value={assignment.campaignTemplateId || ''} onChange={(event) => updateAssignment(account.id, 'campaignTemplateId', event.target.value)} className="h-11 min-w-56 rounded-xl border border-sky-100 px-3 outline-none focus:border-sky-400 focus:ring-4 focus:ring-sky-100">
+                            <select value={assignment.campaignTemplateId || ''} onChange={(event) => updateAssignment(account.id, 'campaignTemplateId', event.target.value)} className="h-10 min-w-52 rounded-xl border border-sky-100 px-3 text-xs font-semibold outline-none focus:border-sky-400 focus:ring-4 focus:ring-sky-100">
                               <option value="">Select campaign template</option>
                               {campaignTemplates.map((template) => <option key={template.id} value={template.id}>{template.name}</option>)}
                             </select>
@@ -732,7 +687,7 @@ const DynamicAdsLaunchPage = () => {
                         </td>
                         <td className="px-3 py-3">
                           <div className="flex items-center gap-2">
-                            <select value={assignment.mediaTemplateId || ''} onChange={(event) => updateAssignment(account.id, 'mediaTemplateId', event.target.value)} className="h-11 min-w-56 rounded-xl border border-sky-100 px-3 outline-none focus:border-sky-400 focus:ring-4 focus:ring-sky-100">
+                            <select value={assignment.mediaTemplateId || ''} onChange={(event) => updateAssignment(account.id, 'mediaTemplateId', event.target.value)} className="h-10 min-w-52 rounded-xl border border-sky-100 px-3 text-xs font-semibold outline-none focus:border-sky-400 focus:ring-4 focus:ring-sky-100">
                               <option value="">Select media template</option>
                               {mediaTemplates.map((template) => <option key={template.id} value={template.id}>{template.name}</option>)}
                             </select>

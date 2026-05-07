@@ -49,6 +49,9 @@ const objectiveOptions = [
   { value: 'OUTCOME_SALES', label: 'Sales' },
 ];
 
+const supportedObjectiveValues = new Set(objectiveOptions.map((objective) => objective.value));
+const normalizeObjective = (objective) => (supportedObjectiveValues.has(objective) ? objective : 'OUTCOME_TRAFFIC');
+
 const websiteEventOptions = [
   { value: 'LEAD', label: 'Lead' },
   { value: 'PURCHASE', label: 'Purchase' },
@@ -362,7 +365,8 @@ const getUrlParameterValidationError = (value) => {
 };
 
 const getLaunchValidationError = (form) => {
-  const pixelRequired = form.objective === 'OUTCOME_LEADS' || form.objective === 'OUTCOME_SALES';
+  const objective = normalizeObjective(form.objective);
+  const pixelRequired = objective === 'OUTCOME_LEADS' || objective === 'OUTCOME_SALES';
 
   if (pixelRequired && !form.websiteEvent) {
     return 'Select the website event to optimize for';
@@ -408,6 +412,27 @@ const getLaunchValidationError = (form) => {
   }
 
   return '';
+};
+
+const getLaunchMissingFields = ({ activeMediaAsset, activeThumbnailAsset, form, isVideoAsset, loadingAssets, loadingPixels, pixelRequired }) => {
+  const missing = [];
+
+  if (!form.countries?.length) missing.push('countries');
+  if (!form.brandId) missing.push('brand');
+  if (!form.tokenId) missing.push('token');
+  if (loadingAssets) missing.push('ad accounts still loading');
+  if (!form.selectedAdAccountIds.length) missing.push('ad account');
+  if (!form.pageId) missing.push('page');
+  if (pixelRequired && loadingPixels) missing.push('pixel still loading');
+  if (pixelRequired && !form.pixelId) missing.push('shared pixel');
+  if (!form.launchLabel.trim()) missing.push('launch name');
+  if (!form.primaryText.trim()) missing.push('primary text');
+  if (!form.headline.trim()) missing.push('headline');
+  if (!form.websiteUrl.trim()) missing.push('destination URL');
+  if (!activeMediaAsset) missing.push('creative file');
+  if (isVideoAsset && !activeThumbnailAsset) missing.push('video thumbnail');
+
+  return missing;
 };
 
 const readFileAsDataUrl = (file) =>
@@ -588,14 +613,21 @@ const AdsLaunchPage = () => {
     return adAccounts.filter((account) => getAdAccountKeys(account).some((key) => selectedBrandSavedAccountKeys.has(key)));
   }, [adAccounts, form.brandId, form.tokenId, selectedBrandSavedAccountKeys]);
   const hasBrandSavedAdAccounts = selectedBrandSavedAccountKeys.size > 0;
-  const templatePageCount = Math.max(Math.ceil(templates.length / TEMPLATES_PER_PAGE), 1);
+  const launchTemplates = useMemo(
+    () => templates.filter((template) => !template.templateType || template.templateType === 'FULL'),
+    [templates]
+  );
+  const templatePageCount = Math.max(Math.ceil(launchTemplates.length / TEMPLATES_PER_PAGE), 1);
   const safeTemplatePage = Math.min(Math.max(templatePage, 1), templatePageCount);
   const visibleTemplates = useMemo(
-    () => templates.slice((safeTemplatePage - 1) * TEMPLATES_PER_PAGE, safeTemplatePage * TEMPLATES_PER_PAGE),
-    [safeTemplatePage, templates]
+    () => launchTemplates.slice((safeTemplatePage - 1) * TEMPLATES_PER_PAGE, safeTemplatePage * TEMPLATES_PER_PAGE),
+    [launchTemplates, safeTemplatePage]
   );
   const selectedAdAccounts = useMemo(
-    () => scopedAdAccounts.filter((account) => form.selectedAdAccountIds.includes(account.id)),
+    () => {
+      const selectedKeys = new Set(form.selectedAdAccountIds);
+      return scopedAdAccounts.filter((account) => getAdAccountKeys(account).some((key) => selectedKeys.has(key)));
+    },
     [scopedAdAccounts, form.selectedAdAccountIds]
   );
   const selectedCountryLabel = useMemo(
@@ -634,14 +666,17 @@ const AdsLaunchPage = () => {
   const activeMediaPreviewUrl = activeMediaAsset?.url || '';
   const activeThumbnailPreviewUrl = activeThumbnailAsset?.url || '';
   const isVideoAsset = activeMediaAsset?.type?.startsWith('video/') || false;
-  const pixelRequired = form.objective === 'OUTCOME_LEADS' || form.objective === 'OUTCOME_SALES';
+  const currentObjective = normalizeObjective(form.objective);
+  const pixelRequired = currentObjective === 'OUTCOME_LEADS' || currentObjective === 'OUTCOME_SALES';
   const canGenerate = Boolean(
     form.brandId &&
       form.tokenId &&
+      !loadingAssets &&
       form.launchLabel.trim() &&
       (form.countries || []).length &&
       form.selectedAdAccountIds.length &&
       form.pageId &&
+      (!pixelRequired || !loadingPixels) &&
       (!pixelRequired || form.pixelId) &&
       form.headline.trim() &&
       form.primaryText.trim() &&
@@ -674,6 +709,17 @@ const AdsLaunchPage = () => {
 
     return () => URL.revokeObjectURL(objectUrl);
   }, [thumbnailFile]);
+
+  useEffect(() => {
+    const normalizedObjective = normalizeObjective(form.objective);
+
+    if (form.objective !== normalizedObjective) {
+      setForm((current) => ({
+        ...current,
+        objective: normalizeObjective(current.objective),
+      }));
+    }
+  }, [form.objective]);
 
   useEffect(() => {
     let isMounted = true;
@@ -768,6 +814,20 @@ const AdsLaunchPage = () => {
   }, [form.pageId, pages]);
 
   useEffect(() => {
+    if (form.pageId || !activeTemplate?.snapshot?.pageName || !pages.length) {
+      return;
+    }
+
+    const matchingPage = pages.find((page) => page.name === activeTemplate.snapshot.pageName);
+    if (matchingPage) {
+      setForm((current) => ({
+        ...current,
+        pageId: current.pageId || matchingPage.id,
+      }));
+    }
+  }, [activeTemplate, form.pageId, pages]);
+
+  useEffect(() => {
     if (pixelRequired && pixels.length === 1 && !form.pixelId) {
       setForm((current) => ({
         ...current,
@@ -785,21 +845,53 @@ const AdsLaunchPage = () => {
   }, [form.pixelId, pixelRequired, pixels]);
 
   useEffect(() => {
+    if (form.pixelId || !activeTemplate?.snapshot?.pixelName || !pixels.length) {
+      return;
+    }
+
+    const matchingPixel = pixels.find((pixel) => pixel.name === activeTemplate.snapshot.pixelName);
+    if (matchingPixel) {
+      setForm((current) => ({
+        ...current,
+        pixelId: current.pixelId || matchingPixel.id,
+      }));
+    }
+  }, [activeTemplate, form.pixelId, pixels]);
+
+  useEffect(() => {
     if (!form.selectedAdAccountIds.length) {
       return;
     }
 
-    const validAccountIds = form.selectedAdAccountIds.filter((accountId) =>
-      scopedAdAccounts.some((account) => account.id === accountId)
+    if (form.brandId && form.tokenId && (loadingAssets || !scopedAdAccounts.length)) {
+      return;
+    }
+
+    const scopedAccountKeyMap = new Map();
+    scopedAdAccounts.forEach((account) => {
+      getAdAccountKeys(account).forEach((key) => scopedAccountKeyMap.set(key, account.id));
+    });
+
+    const validAccountIds = Array.from(
+      new Set(
+        form.selectedAdAccountIds
+          .map((accountId) => scopedAccountKeyMap.get(accountId) || '')
+          .filter(Boolean)
+      )
     );
 
-    if (validAccountIds.length !== form.selectedAdAccountIds.length) {
+    const currentAccountIds = form.selectedAdAccountIds;
+    const idsChanged =
+      validAccountIds.length !== currentAccountIds.length ||
+      validAccountIds.some((accountId, index) => accountId !== currentAccountIds[index]);
+
+    if (idsChanged) {
       setForm((current) => ({
         ...current,
         selectedAdAccountIds: validAccountIds,
       }));
     }
-  }, [form.selectedAdAccountIds, scopedAdAccounts]);
+  }, [form.brandId, form.selectedAdAccountIds, form.tokenId, loadingAssets, scopedAdAccounts]);
 
   const previewItems = useMemo(
     () =>
@@ -820,14 +912,16 @@ const AdsLaunchPage = () => {
   };
 
   const handleObjectiveChange = (objective) => {
+    const nextObjective = normalizeObjective(objective);
+
     setForm((current) => {
-      const currentDefaultEvent = defaultWebsiteEventByObjective[current.objective] || current.websiteEvent;
-      const nextDefaultEvent = defaultWebsiteEventByObjective[objective] || current.websiteEvent || 'LEAD';
+      const currentDefaultEvent = defaultWebsiteEventByObjective[normalizeObjective(current.objective)] || current.websiteEvent;
+      const nextDefaultEvent = defaultWebsiteEventByObjective[nextObjective] || current.websiteEvent || 'LEAD';
       const shouldUseNextDefault = !current.websiteEvent || current.websiteEvent === currentDefaultEvent;
 
       return {
         ...current,
-        objective,
+        objective: nextObjective,
         websiteEvent: shouldUseNextDefault ? nextDefaultEvent : current.websiteEvent,
       };
     });
@@ -1048,6 +1142,7 @@ const AdsLaunchPage = () => {
       name: (templateName || form.launchLabel).trim(),
       config: {
         ...form,
+        objective: currentObjective,
         websiteEvent: pixelRequired ? form.websiteEvent : '',
         staticDefaults: {
           ...form.staticDefaults,
@@ -1093,7 +1188,7 @@ const AdsLaunchPage = () => {
       country: (form.countries || [])[0] || form.country,
       countries: form.countries || [],
       countryLabel: selectedCountryLabel,
-      objective: form.objective,
+      objective: currentObjective,
       dailyBudget: form.dailyBudget,
       selectedAdAccountIds: form.selectedAdAccountIds,
       selectedAdAccounts: selectedAdAccounts.map((account) => ({
@@ -1106,7 +1201,7 @@ const AdsLaunchPage = () => {
       pageName: selectedPage?.name || '',
       pixelId: form.pixelId,
       pixelName: selectedPixel?.name || '',
-      websiteEvent: form.websiteEvent,
+      websiteEvent: pixelRequired ? form.websiteEvent : '',
       headline: form.headline.trim(),
       primaryText: form.primaryText.trim(),
       description: form.description.trim(),
@@ -1216,21 +1311,73 @@ const AdsLaunchPage = () => {
     return matchingBrandIds.size === 1 ? Array.from(matchingBrandIds)[0] : '';
   };
 
+  const getTemplateTokenId = (config = {}, snapshot = {}) => {
+    if (config.tokenId) {
+      return config.tokenId;
+    }
+
+    if (!snapshot.tokenLabel) {
+      return '';
+    }
+
+    const matchingTokens = activeTokens.filter((token) => token.label === snapshot.tokenLabel);
+    return matchingTokens.length === 1 ? matchingTokens[0].id : '';
+  };
+
+  const getTemplateBrandId = ({ brandName, tokenId }) => {
+    if (!tokenId) {
+      return '';
+    }
+
+    if (brandName) {
+      const matchingBrand = brands.find(
+        (brand) =>
+          brand.name === brandName &&
+          (brand.assignedSocialAccounts || []).some((account) => account.sourceTokenId === tokenId)
+      );
+
+      if (matchingBrand) {
+        return matchingBrand.id;
+      }
+    }
+
+    return getUniqueBrandIdForToken(tokenId);
+  };
+
   const handleLoadTemplate = (template) => {
-    const countries = normalizeTemplateCountries(template.config);
-    const brandId = template.config.brandId || getUniqueBrandIdForToken(template.config.tokenId);
+    if (template.templateType && template.templateType !== 'FULL') {
+      toast.error('Use Template Builder or Dynamic Ads Launch for campaign/media templates');
+      return;
+    }
+
+    const config = template.config || {};
+    const snapshot = template.snapshot || {};
+    const tokenId = getTemplateTokenId(config, snapshot);
+    const countries = normalizeTemplateCountries(config);
+    const objective = normalizeObjective(config.objective);
+    const brandId = config.brandId || getTemplateBrandId({
+      brandName: snapshot.brandName,
+      tokenId,
+    });
+    const selectedAdAccountIds = Array.isArray(config.selectedAdAccountIds) && config.selectedAdAccountIds.length
+      ? config.selectedAdAccountIds
+      : Array.isArray(snapshot.adAccounts)
+        ? snapshot.adAccounts.map((account) => account.id).filter(Boolean)
+        : [];
 
     setForm({
       ...createEmptyForm(),
-      ...template.config,
+      ...config,
       brandId,
+      tokenId,
       country: countries[0] || '',
       countries,
-      websiteEvent: template.config.websiteEvent || defaultWebsiteEventByObjective[template.config.objective] || 'LEAD',
-      selectedAdAccountIds: Array.isArray(template.config.selectedAdAccountIds) ? template.config.selectedAdAccountIds : [],
+      objective,
+      websiteEvent: config.websiteEvent || defaultWebsiteEventByObjective[objective] || 'LEAD',
+      selectedAdAccountIds,
       staticDefaults: {
         ...defaultStaticDefaults,
-        ...(template.config.staticDefaults || {}),
+        ...(config.staticDefaults || {}),
       },
     });
     setActiveTemplateId(template.id);
@@ -1277,13 +1424,16 @@ const AdsLaunchPage = () => {
     }
 
     if (!canPublish) {
-      toast.error(
-        canGenerate
-          ? 'Add the creative file, and for video also upload a thumbnail before publishing'
-          : pixelRequired
-            ? 'Complete countries, brand, token, ad account, page, shared pixel, and copy fields before publishing'
-            : 'Complete countries, brand, token, ad account, page, and copy fields before publishing'
-      );
+      const missingFields = getLaunchMissingFields({
+        activeMediaAsset,
+        activeThumbnailAsset,
+        form,
+        isVideoAsset,
+        loadingAssets,
+        loadingPixels,
+        pixelRequired,
+      });
+      toast.error(missingFields.length ? `Complete before publishing: ${missingFields.join(', ')}` : 'Complete the launch setup before publishing');
       return;
     }
 
@@ -1490,7 +1640,7 @@ const AdsLaunchPage = () => {
                 <FieldLabel htmlFor="objective">Objective</FieldLabel>
                 <select
                   id="objective"
-                  value={form.objective}
+                  value={currentObjective}
                   onChange={(event) => handleObjectiveChange(event.target.value)}
                   className="h-12 w-full rounded-xl border border-sky-100 bg-white px-4 outline-none transition focus:border-sky-400 focus:ring-4 focus:ring-sky-100"
                 >
@@ -1575,7 +1725,7 @@ const AdsLaunchPage = () => {
                   ) : scopedAdAccounts.length ? (
                     <div className="grid max-h-80 gap-2 overflow-y-auto md:grid-cols-2">
                       {scopedAdAccounts.map((account) => {
-                        const checked = form.selectedAdAccountIds.includes(account.id);
+                        const checked = getAdAccountKeys(account).some((key) => form.selectedAdAccountIds.includes(key));
 
                         return (
                           <label
@@ -2037,7 +2187,7 @@ const AdsLaunchPage = () => {
           <DashboardPanel
             title="Saved templates"
             headerAction={
-              templates.length > TEMPLATES_PER_PAGE ? (
+              launchTemplates.length > TEMPLATES_PER_PAGE ? (
                 <div className="flex items-center gap-1">
                   <button
                     type="button"
@@ -2063,7 +2213,7 @@ const AdsLaunchPage = () => {
           >
             {templatesLoading ? (
               <div className="h-56 animate-pulse rounded-2xl bg-sky-50" />
-            ) : templates.length ? (
+            ) : launchTemplates.length ? (
               <div className="space-y-3">
                 {visibleTemplates.map((template) => (
                   <div key={template.id} className="rounded-2xl border border-sky-100 bg-white p-4">
