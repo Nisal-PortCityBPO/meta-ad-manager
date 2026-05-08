@@ -1776,7 +1776,10 @@ const AdsLaunchPage = () => {
     setPublishing(true);
     setLatestPublish(null);
     setCreativeUploadProgress(null);
-    beginPublish();
+    beginPublish({
+      title: form.launchLabel ? `Ads Launch: ${form.launchLabel}` : 'Ads Launch publish',
+      source: 'Ads Launch',
+    });
 
     try {
       const payload = {

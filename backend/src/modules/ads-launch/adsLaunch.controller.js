@@ -1,4 +1,5 @@
 const asyncHandler = require('../../app/utils/asyncHandler');
+const adsManageService = require('../ads-manage/adsManage.service');
 const adsLaunchService = require('./adsLaunch.service');
 
 const getTemplates = asyncHandler(async (req, res) => {
@@ -145,6 +146,18 @@ const deleteMediaAsset = asyncHandler(async (req, res) => {
   });
 });
 
+const retryFailedLaunch = asyncHandler(async (req, res) => {
+  const result = await adsManageService.retryFailedLaunch({
+    tokenId: req.body.tokenId,
+    campaignId: req.params.campaignId,
+    tokenType: req.body.tokenType,
+    actor: req.user,
+    req,
+  });
+
+  res.json(result);
+});
+
 const updateMediaAssetBrand = asyncHandler(async (req, res) => {
   const mediaAsset = await adsLaunchService.updateMediaAssetBrand({
     mediaId: req.params.id,
@@ -269,6 +282,7 @@ module.exports = {
   getTemplateAsset,
   publishLaunch,
   publishLaunchStream,
+  retryFailedLaunch,
   uploadMediaChunk,
   updateMediaAssetBrand,
   updateTemplate,

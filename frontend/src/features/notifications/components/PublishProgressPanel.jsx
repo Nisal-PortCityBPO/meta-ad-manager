@@ -38,7 +38,7 @@ const getStatusIcon = (status) => {
   return LoaderCircle;
 };
 
-const PublishProgressPanel = ({ events, latestError, latestResult, progress }) => {
+const PublishProgressPanel = ({ events, label = 'Live publish process', latestError, latestResult, progress }) => {
   if (!progress && !events.length && !latestResult && !latestError) {
     return null;
   }
@@ -51,7 +51,7 @@ const PublishProgressPanel = ({ events, latestError, latestResult, progress }) =
     <div className="rounded-2xl border border-sky-100 bg-white p-4 shadow-sm shadow-sky-100/70">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <p className="text-xs font-bold uppercase tracking-[0.18em] text-sky-600">Live publish process</p>
+          <p className="text-xs font-bold uppercase tracking-[0.18em] text-sky-600">{label}</p>
           <div className="mt-2 flex items-center gap-2">
             <StatusIcon
               size={18}

@@ -18,6 +18,7 @@ const socialAccountRoutes = require('./modules/social-accounts/socialAccount.rou
 const metaAssetsRoutes = require('./modules/meta-assets/metaAssets.route');
 const adsLaunchRoutes = require('./modules/ads-launch/adsLaunch.route');
 const adsManageRoutes = require('./modules/ads-manage/adsManage.route');
+const settingsRoutes = require('./modules/settings/settings.route');
 
 const frontendRoot = path.resolve(__dirname, '../../frontend');
 const frontendDist = path.join(frontendRoot, 'dist');
@@ -67,6 +68,7 @@ function registerApiRoutes(app) {
   app.use('/api/meta-assets', metaAssetsRoutes);
   app.use('/api/ads-launch', adsLaunchRoutes);
   app.use('/api/ads-manage', adsManageRoutes);
+  app.use('/api/settings', settingsRoutes);
   app.use('/api/brands', brandRoutes);
   app.use('/api/agencies', agencyRoutes);
   app.use('/api/social-accounts', socialAccountRoutes);

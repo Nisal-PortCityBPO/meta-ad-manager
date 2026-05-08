@@ -11,6 +11,7 @@ const AdsLaunchMedia = require('./adsLaunchMedia.model');
 const { ADS_MEDIA_TYPES } = require('./adsLaunchMedia.model');
 const AdsLaunchMediaFolder = require('./adsLaunchMediaFolder.model');
 const adsManageService = require('../ads-manage/adsManage.service');
+const settingsService = require('../settings/settings.service');
 const tokenService = require('../token-management/token.service');
 
 const META_GRAPH_VERSION = process.env.META_GRAPH_VERSION || 'v24.0';
@@ -2742,6 +2743,37 @@ function sanitizeAccountLaunches(input = []) {
     .filter((item) => item.adAccountId && (item.campaignTemplateId || item.mediaTemplateId || item.mediaAssetId));
 }
 
+function sanitizeResumeStates(input = {}) {
+  if (!input || typeof input !== 'object') {
+    return new Map();
+  }
+
+  return new Map(
+    Object.entries(input)
+      .map(([adAccountId, state]) => [
+        normalizeText(state?.adAccountId) || normalizeText(adAccountId),
+        {
+          campaignId: normalizeText(state?.campaignId),
+          adSetId: normalizeText(state?.adSetId),
+          creativeId: normalizeText(state?.creativeId),
+          adId: normalizeText(state?.adId),
+        },
+      ])
+      .filter(([adAccountId, state]) => adAccountId && (state.campaignId || state.adSetId || state.creativeId || state.adId))
+  );
+}
+
+function getResumeStateForAccount(resumeStateMap, adAccountId) {
+  const normalizedAdAccountId = normalizeText(adAccountId);
+
+  return (
+    resumeStateMap.get(normalizedAdAccountId) ||
+    resumeStateMap.get(normalizedAdAccountId.replace(/^act_/, '')) ||
+    resumeStateMap.get(`act_${normalizedAdAccountId.replace(/^act_/, '')}`) ||
+    {}
+  );
+}
+
 function mergeTemplateConfig(baseLaunch, campaignConfig = {}, mediaConfig = {}, templateNames = {}) {
   const campaignStaticDefaults = campaignConfig.staticDefaults || {};
   const baseStaticDefaults = baseLaunch.staticDefaults || {};
@@ -2892,6 +2924,7 @@ async function publishLaunch({ payload, actor, req, onProgress = null, tokenType
   };
   const accountLaunches = sanitizeAccountLaunches(payload.accountLaunches);
   const accountLaunchMap = new Map(accountLaunches.map((item) => [item.adAccountId, item]));
+  const resumeStateMap = sanitizeResumeStates(payload.resumeState);
   const usesAccountTemplates = accountLaunches.length > 0;
   const baseCreativeAssets = usesAccountTemplates
     ? null
@@ -2939,6 +2972,7 @@ async function publishLaunch({ payload, actor, req, onProgress = null, tokenType
       accountLabel,
     };
     const accountTemplate = accountLaunchMap.get(adAccountId);
+    const resumeState = getResumeStateForAccount(resumeStateMap, adAccountId);
     let accountResolved = null;
     let effectiveLaunch = launch;
     let creativeAssets = baseCreativeAssets;
@@ -2986,75 +3020,111 @@ async function publishLaunch({ payload, actor, req, onProgress = null, tokenType
         message: `${accountLabel}: starting`,
       });
 
-      campaign = await runPublishStep('Campaign creation', () =>
-        createCampaign({
+      if (resumeState.campaignId) {
+        campaign = { id: resumeState.campaignId };
+        progress.complete({
+          ...progressContext,
+          step: 'campaign',
+          message: `${accountLabel}: continuing with existing campaign ${resumeState.campaignId}`,
+        });
+      } else {
+        campaign = await runPublishStep('Campaign creation', () =>
+          createCampaign({
+            token,
+            adAccountId,
+            name: names.campaignName,
+            objective: effectiveLaunch.objective,
+            dailyBudget: effectiveLaunch.dailyBudget,
+            currency: selectedAccount.currency,
+            staticDefaults: effectiveLaunch.staticDefaults,
+          }),
+          progress,
+          progressContext,
+          'campaign'
+        );
+      }
+
+      if (resumeState.adSetId) {
+        adSet = { id: resumeState.adSetId };
+        progress.complete({
+          ...progressContext,
+          step: 'ad-set',
+          message: `${accountLabel}: continuing with existing ad set ${resumeState.adSetId}`,
+        });
+      } else {
+        adSet = await runPublishStep('Ad set creation', () =>
+          createAdSet({
+            token,
+            adAccountId,
+            campaignId: campaign.id,
+            name: names.adSetName,
+            objective: effectiveLaunch.objective,
+            dailyBudget: effectiveLaunch.dailyBudget,
+            currency: selectedAccount.currency,
+            countries: effectiveLaunch.countries,
+            scheduleStart: effectiveLaunch.scheduleStart,
+            scheduleEnd: effectiveLaunch.scheduleEnd,
+            pageId: effectiveLaunch.pageId,
+            pixelId: effectiveLaunch.pixelId,
+            websiteEvent: effectiveLaunch.websiteEvent,
+            staticDefaults: effectiveLaunch.staticDefaults,
+          }),
+          progress,
+          progressContext,
+          'ad-set'
+        );
+      }
+
+      if (resumeState.creativeId) {
+        creative = { id: resumeState.creativeId };
+        progress.complete({
+          ...progressContext,
+          step: 'creative',
+          message: `${accountLabel}: continuing with existing creative ${resumeState.creativeId}`,
+        });
+      } else {
+        creative = await createAdCreative({
           token,
           adAccountId,
-          name: names.campaignName,
-          objective: effectiveLaunch.objective,
-          dailyBudget: effectiveLaunch.dailyBudget,
-          currency: selectedAccount.currency,
-          staticDefaults: effectiveLaunch.staticDefaults,
-        }),
-        progress,
-        progressContext,
-        'campaign'
-      );
-
-      adSet = await runPublishStep('Ad set creation', () =>
-        createAdSet({
-          token,
-          adAccountId,
-          campaignId: campaign.id,
-          name: names.adSetName,
-          objective: effectiveLaunch.objective,
-          dailyBudget: effectiveLaunch.dailyBudget,
-          currency: selectedAccount.currency,
-          countries: effectiveLaunch.countries,
-          scheduleStart: effectiveLaunch.scheduleStart,
-          scheduleEnd: effectiveLaunch.scheduleEnd,
-          pageId: effectiveLaunch.pageId,
-          pixelId: effectiveLaunch.pixelId,
-          websiteEvent: effectiveLaunch.websiteEvent,
-          staticDefaults: effectiveLaunch.staticDefaults,
-        }),
-        progress,
-        progressContext,
-        'ad-set'
-      );
-
-      creative = await createAdCreative({
-        token,
-        adAccountId,
-        name: names.adName,
-        pageId: effectiveLaunch.pageId,
-        websiteUrl: effectiveLaunch.websiteUrl,
-        displayUrl: effectiveLaunch.displayUrl,
-        urlParameters: effectiveLaunch.urlParameters,
-        primaryText: effectiveLaunch.primaryText,
-        headline: effectiveLaunch.headline,
-        description: effectiveLaunch.description,
-        callToAction: effectiveLaunch.callToAction,
-        media: creativeAssets.media,
-        thumbnail: creativeAssets.thumbnail,
-        staticDefaults: effectiveLaunch.staticDefaults,
-        progress,
-        progressContext,
-      });
-
-      ad = await runPublishStep('Ad creation', () =>
-        createAd({
-          token,
-          adAccountId,
-          adSetId: adSet.id,
-          creativeId: creative.id,
           name: names.adName,
+          pageId: effectiveLaunch.pageId,
+          websiteUrl: effectiveLaunch.websiteUrl,
+          displayUrl: effectiveLaunch.displayUrl,
+          urlParameters: effectiveLaunch.urlParameters,
+          primaryText: effectiveLaunch.primaryText,
+          headline: effectiveLaunch.headline,
+          description: effectiveLaunch.description,
+          callToAction: effectiveLaunch.callToAction,
+          media: creativeAssets.media,
+          thumbnail: creativeAssets.thumbnail,
           staticDefaults: effectiveLaunch.staticDefaults,
-        }),
-        progress,
-        progressContext,
-        'ad'
-      );
+          progress,
+          progressContext,
+        });
+      }
+
+      if (resumeState.adId) {
+        ad = { id: resumeState.adId };
+        progress.complete({
+          ...progressContext,
+          step: 'ad',
+          message: `${accountLabel}: continuing with existing ad ${resumeState.adId}`,
+        });
+      } else {
+        ad = await runPublishStep('Ad creation', () =>
+          createAd({
+            token,
+            adAccountId,
+            adSetId: adSet.id,
+            creativeId: creative.id,
+            name: names.adName,
+            staticDefaults: effectiveLaunch.staticDefaults,
+          }),
+          progress,
+          progressContext,
+          'ad'
+        );
+      }
 
       let historyRecord = null;
       let historyError = '';
@@ -3130,7 +3200,27 @@ async function publishLaunch({ payload, actor, req, onProgress = null, tokenType
           actor,
           req,
         });
-        failed[failed.length - 1].historyRecordId = failureRecord?.recordId || null;
+        Object.assign(failed[failed.length - 1], {
+          historyRecordId: failureRecord?.recordId || null,
+          campaignId: failureRecord?.campaignId || null,
+          tokenId: failureRecord?.tokenId || token.id,
+          canRetry: Boolean(failureRecord?.launch?.retryPayload),
+          resumeFromStep: failureRecord?.adId
+            ? 'history save'
+            : failureRecord?.creativeId
+              ? 'ad creation'
+              : failureRecord?.adSetId
+                ? 'creative creation'
+                : failureRecord?.campaignId && !String(failureRecord.campaignId).startsWith('failed_')
+                  ? 'ad set creation'
+                  : 'campaign creation',
+          partialMeta: {
+            campaignId: failureRecord?.campaignId && !String(failureRecord.campaignId).startsWith('failed_') ? failureRecord.campaignId : '',
+            adSetId: failureRecord?.adSetId || '',
+            creativeId: failureRecord?.creativeId || '',
+            adId: failureRecord?.adId || '',
+          },
+        });
       } catch (historyError) {
         failed[failed.length - 1].historyError = historyError.message;
         progress.info({
@@ -3151,14 +3241,12 @@ async function publishLaunch({ payload, actor, req, onProgress = null, tokenType
     }
   }
 
-  if (!results.length) {
-    throw new HttpError(400, failed[0]?.message || 'Meta publish failed');
-  }
-
-  await markTemplatePublished(launch.templateId, actor);
-  for (const accountLaunch of accountLaunches) {
-    await markTemplatePublished(accountLaunch.campaignTemplateId, actor);
-    await markTemplatePublished(accountLaunch.mediaTemplateId, actor);
+  if (results.length) {
+    await markTemplatePublished(launch.templateId, actor);
+    for (const accountLaunch of accountLaunches) {
+      await markTemplatePublished(accountLaunch.campaignTemplateId, actor);
+      await markTemplatePublished(accountLaunch.mediaTemplateId, actor);
+    }
   }
 
   await writeActivityLog({
@@ -3178,7 +3266,7 @@ async function publishLaunch({ payload, actor, req, onProgress = null, tokenType
     req,
   });
 
-  return {
+  const publishResult = {
     message:
       failed.length > 0
         ? `Publish completed with ${results.length} success and ${failed.length} failure`
@@ -3191,6 +3279,13 @@ async function publishLaunch({ payload, actor, req, onProgress = null, tokenType
       failed: failed.length,
     },
   };
+
+  publishResult.telegram = await settingsService.notifyPublishSummary({
+    launch,
+    result: publishResult,
+  });
+
+  return publishResult;
 }
 
 module.exports = {

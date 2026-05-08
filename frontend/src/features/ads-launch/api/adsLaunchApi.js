@@ -190,6 +190,11 @@ export const adsLaunchApi = {
     apiRequest(`/ads-launch/media/${id}`, {
       method: 'DELETE',
     }),
+  retryFailedLaunch: (campaignId, payload) =>
+    apiRequest(`/ads-launch/failed-launches/${campaignId}/retry`, {
+      method: 'POST',
+      body: payload,
+    }),
   publishLaunch: (payload) =>
     apiRequest('/ads-launch/publish', {
       method: 'POST',
