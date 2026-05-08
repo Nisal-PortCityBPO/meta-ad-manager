@@ -1,4 +1,5 @@
 const fs = require('fs');
+const mongoose = require('mongoose');
 const path = require('path');
 const HttpError = require('../../app/utils/httpError');
 const { waitForMetaApiPacing } = require('../../app/utils/metaApiPacing');
@@ -8,6 +9,7 @@ const LaunchTemplate = require('./adsLaunch.model');
 const { LAUNCH_TEMPLATE_TYPES } = require('./adsLaunch.model');
 const AdsLaunchMedia = require('./adsLaunchMedia.model');
 const { ADS_MEDIA_TYPES } = require('./adsLaunchMedia.model');
+const AdsLaunchMediaFolder = require('./adsLaunchMediaFolder.model');
 const adsManageService = require('../ads-manage/adsManage.service');
 const tokenService = require('../token-management/token.service');
 
@@ -1136,6 +1138,20 @@ function mediaLibraryAccessFilter(actor) {
   return isSuperAdmin(actor) ? {} : { createdBy: actor._id };
 }
 
+function normalizeMediaFolderId(folderId) {
+  const normalizedFolderId = normalizeText(folderId);
+
+  if (!normalizedFolderId || normalizedFolderId === 'root') {
+    return '';
+  }
+
+  if (!mongoose.isValidObjectId(normalizedFolderId)) {
+    throw new HttpError(400, 'Invalid media folder');
+  }
+
+  return normalizedFolderId;
+}
+
 async function getTemplateForActor(templateId, actor) {
   const template = await LaunchTemplate.findOne({
     _id: templateId,
@@ -1179,6 +1195,85 @@ async function getMediaAssetDocForActor(mediaId, actor) {
   return mediaAsset;
 }
 
+async function getMediaFolderDocForActor(folderId, actor) {
+  const normalizedFolderId = normalizeMediaFolderId(folderId);
+
+  if (!normalizedFolderId) {
+    return null;
+  }
+
+  const mediaFolder = await AdsLaunchMediaFolder.findOne({
+    _id: normalizedFolderId,
+    ...mediaLibraryAccessFilter(actor),
+  });
+
+  if (!mediaFolder) {
+    throw new HttpError(404, 'Media folder not found');
+  }
+
+  return mediaFolder;
+}
+
+async function listMediaFolders({ actor }) {
+  const mediaFolders = await AdsLaunchMediaFolder.find({
+    ...mediaLibraryAccessFilter(actor),
+  }).sort({ parent: 1, name: 1, createdAt: 1 });
+
+  return mediaFolders.map((mediaFolder) => mediaFolder.toSafeObject());
+}
+
+async function createMediaFolder({ name, parentId = null, brandId = '', brandName = '', actor, req }) {
+  const normalizedName = normalizeText(name);
+
+  if (!normalizedName) {
+    throw new HttpError(400, 'Folder name is required');
+  }
+
+  const parentFolder = await getMediaFolderDocForActor(parentId, actor);
+  const resolvedBrandId = parentFolder?.brandId || normalizeText(brandId);
+  const resolvedBrandName = parentFolder?.brandName || normalizeText(brandName);
+
+  if (!parentFolder && !resolvedBrandId) {
+    throw new HttpError(400, 'Select a brand before creating a top-level media folder');
+  }
+
+  const existingFolder = await AdsLaunchMediaFolder.findOne({
+    ...mediaLibraryAccessFilter(actor),
+    parent: parentFolder?._id || null,
+    brandId: resolvedBrandId,
+    name: normalizedName,
+  });
+
+  if (existingFolder) {
+    throw new HttpError(409, 'A folder with this name already exists here');
+  }
+
+  const mediaFolder = await AdsLaunchMediaFolder.create({
+    name: normalizedName,
+    parent: parentFolder?._id || null,
+    brandId: resolvedBrandId,
+    brandName: resolvedBrandName,
+    createdBy: actor._id,
+    updatedBy: actor._id,
+  });
+
+  await writeActivityLog({
+    user: actor,
+    action: 'ADS_MEDIA_FOLDER_CREATED',
+    entity: 'AdsLaunchMediaFolder',
+    entityId: mediaFolder._id.toString(),
+    metadata: {
+      name: mediaFolder.name,
+      parentId: parentFolder?._id?.toString?.() || null,
+      brandId: mediaFolder.brandId,
+      brandName: mediaFolder.brandName,
+    },
+    req,
+  });
+
+  return mediaFolder.toSafeObject();
+}
+
 async function listMediaAssets({ actor, brandId = '', search = '', includeUnassigned = false }) {
   const query = {
     ...mediaLibraryAccessFilter(actor),
@@ -1215,6 +1310,7 @@ async function createMediaAsset({
   name,
   brandId,
   brandName,
+  folderId = null,
   media,
   uploadedMedia = null,
   uploadedThumbnail = null,
@@ -1237,6 +1333,15 @@ async function createMediaAsset({
     throw new HttpError(400, 'Select an image or video to save in the media library');
   }
 
+  let folder = null;
+  try {
+    folder = await getMediaFolderDocForActor(folderId, actor);
+  } catch (error) {
+    cleanupUploadedMediaFile(uploadedMedia);
+    cleanupUploadedMediaFile(uploadedThumbnail);
+    throw error;
+  }
+
   const mediaMimeType = uploadedMedia
     ? normalizeMediaLibraryMimeType(uploadedMedia.mimetype, uploadedMedia.originalname)
     : normalizeMediaLibraryMimeType(mediaInput?.type, mediaInput?.name);
@@ -1245,8 +1350,9 @@ async function createMediaAsset({
   const mediaAsset = new AdsLaunchMedia({
     name: normalizedName,
     mediaType,
-    brandId: normalizeText(brandId),
-    brandName: normalizeText(brandName),
+    brandId: folder?.brandId || normalizeText(brandId),
+    brandName: folder?.brandName || normalizeText(brandName),
+    folder: folder?._id || null,
     createdBy: actor._id,
     updatedBy: actor._id,
   });
@@ -1286,6 +1392,7 @@ async function createMediaAsset({
       name: mediaAsset.name,
       brandId: mediaAsset.brandId,
       brandName: mediaAsset.brandName,
+      folderId: folder?._id?.toString?.() || null,
       mediaType: mediaAsset.mediaType,
       width: mediaAsset.media?.width || 0,
       height: mediaAsset.media?.height || 0,
@@ -1301,6 +1408,7 @@ async function completeChunkedMediaAsset({
   name,
   brandId,
   brandName,
+  folderId = null,
   uploadId,
   mediaOriginalName,
   mediaMimeType,
@@ -1328,6 +1436,7 @@ async function completeChunkedMediaAsset({
       name,
       brandId,
       brandName,
+      folderId,
       uploadedMedia,
       mediaMetadata,
       actor,
@@ -3087,12 +3196,14 @@ async function publishLaunch({ payload, actor, req, onProgress = null, tokenType
 module.exports = {
   completeChunkedMediaAsset,
   createMediaAsset,
+  createMediaFolder,
   createTemplate,
   deleteMediaAsset,
   deleteTemplate,
   getMediaAssetForActor,
   getTemplateAssetForActor,
   listMediaAssets,
+  listMediaFolders,
   listTemplates,
   publishLaunch,
   saveMediaUploadChunk,

@@ -80,6 +80,12 @@ const adsLaunchMediaSchema = new mongoose.Schema(
       type: adsMediaAssetSchema,
       default: null,
     },
+    folder: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'AdsLaunchMediaFolder',
+      default: null,
+      index: true,
+    },
     createdBy: {
       type: mongoose.Schema.Types.ObjectId,
       ref: 'User',
@@ -122,6 +128,7 @@ adsLaunchMediaSchema.methods.toSafeObject = function toSafeObject() {
     mediaType: this.mediaType,
     brandId: this.brandId || '',
     brandName: this.brandName || '',
+    folderId: this.folder?._id?.toString?.() || this.folder?.toString?.() || null,
     media: mapAsset(this.media, 'file'),
     thumbnail: mapAsset(this.thumbnail, 'thumbnail'),
     createdBy: this.createdBy
