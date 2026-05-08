@@ -28,7 +28,7 @@ import { businessDataApi } from '../../dashboard/api/businessDataApi';
 import { useTokens } from '../../token-management/hooks/useTokens';
 import { usePublishProgress } from '../../notifications/PublishProgressContext';
 import { useMetaKeySettings } from '../../settings/MetaKeySettingsContext';
-import { ADS_MEDIA_UPLOAD_CHUNK_BYTES, adsLaunchApi } from '../api/adsLaunchApi';
+import { adsLaunchApi } from '../api/adsLaunchApi';
 import { useLaunchTemplates } from '../hooks/useLaunchTemplates';
 import { useTokenMetaAssets } from '../hooks/useTokenMetaAssets';
 
@@ -305,7 +305,7 @@ const AdsLaunchMediaLibraryPicker = ({
                 >
                   <div className="relative bg-slate-950">
                     {isVideo ? (
-                      <video src={media.url} poster={mediaAsset.thumbnail?.url} className="h-44 w-full object-contain" />
+                      <video src={media.url} className="h-44 w-full object-contain" />
                     ) : (
                       <img src={media.url} alt={mediaAsset.name} className="h-44 w-full object-cover" />
                     )}
@@ -325,8 +325,8 @@ const AdsLaunchMediaLibraryPicker = ({
                       {media.width || 0}x{media.height || 0} | {formatFileSize(media.size)}
                     </p>
                     {isVideo ? (
-                      <p className={`mt-2 rounded-xl px-3 py-2 text-xs font-bold ${mediaAsset.thumbnail?.url ? 'bg-amber-50 text-amber-700' : 'bg-red-50 text-red-600'}`}>
-                        {mediaAsset.thumbnail?.url ? 'Default video thumbnail available' : 'No default thumbnail'}
+                      <p className="mt-2 rounded-xl bg-amber-50 px-3 py-2 text-xs font-bold text-amber-700">
+                        Choose a separate image thumbnail for publishing
                       </p>
                     ) : null}
                   </div>
@@ -652,14 +652,6 @@ const readVideoMetadata = (file) =>
   });
 
 const readMediaMetadata = (file) => (file?.type?.startsWith('video/') ? readVideoMetadata(file) : readImageMetadata(file));
-
-const createMediaUploadId = () => {
-  if (window.crypto?.randomUUID) {
-    return window.crypto.randomUUID().replace(/-/g, '');
-  }
-
-  return `${Date.now()}${Math.random().toString(36).slice(2, 14)}`;
-};
 
 const normalizeStoredAsset = (asset) => {
   if (!asset?.name || !asset?.type) {
@@ -1362,17 +1354,7 @@ const AdsLaunchPage = () => {
     if (mediaAsset.mediaType === 'IMAGE') {
       return normalizeMediaLibraryMediaAsset(mediaAsset);
     }
-
-    if (!mediaAsset.thumbnail?.url) {
-      return null;
-    }
-
-    return {
-      name: mediaAsset.thumbnail.name || `${mediaAsset.name} thumbnail`,
-      type: mediaAsset.thumbnail.type,
-      url: mediaAsset.thumbnail.url,
-      size: mediaAsset.thumbnail.size || 0,
-    };
+    return null;
   };
 
   const selectMediaFromLibrary = (mediaAsset) => {
@@ -1388,12 +1370,10 @@ const AdsLaunchPage = () => {
     setCreativeSource('library');
 
     if (mediaAsset.mediaType === 'VIDEO') {
-      const libraryThumbnail = normalizeMediaLibraryThumbnailAsset(mediaAsset);
-
       setThumbnailFile(null);
-      setSavedThumbnailAsset(libraryThumbnail);
-      setThumbnailSource(libraryThumbnail ? 'library' : 'saved');
-      toast.success(libraryThumbnail ? 'Video selected with library thumbnail' : 'Video selected. Choose or upload a thumbnail.');
+      setSavedThumbnailAsset(null);
+      setThumbnailSource('saved');
+      toast.success('Video selected. Choose or upload a separate image thumbnail.');
     } else {
       setThumbnailFile(null);
       setSavedThumbnailAsset(null);
@@ -1453,36 +1433,6 @@ const AdsLaunchPage = () => {
     };
   };
 
-  const uploadLaunchFileInChunks = async ({ file, label, progressStart = 0, progressEnd = 99 }) => {
-    const uploadId = createMediaUploadId();
-    const totalChunks = Math.max(Math.ceil(file.size / ADS_MEDIA_UPLOAD_CHUNK_BYTES), 1);
-
-    for (let chunkIndex = 0; chunkIndex < totalChunks; chunkIndex += 1) {
-      const chunkStart = chunkIndex * ADS_MEDIA_UPLOAD_CHUNK_BYTES;
-      const chunkEnd = Math.min(chunkStart + ADS_MEDIA_UPLOAD_CHUNK_BYTES, file.size);
-      const chunk = file.slice(chunkStart, chunkEnd, file.type);
-
-      await adsLaunchApi.uploadMediaChunkWithProgress({
-        uploadId,
-        chunk,
-        chunkIndex,
-        totalChunks,
-      }, {
-        onUploadProgress: (chunkPercent) => {
-          const uploadedBytes = chunkStart + Math.round(chunk.size * (chunkPercent / 100));
-          const fileProgress = file.size ? uploadedBytes / file.size : 1;
-          const percent = Math.min(Math.round(progressStart + fileProgress * (progressEnd - progressStart)), progressEnd);
-          setCreativeUploadProgress({
-            label: `Uploading ${label} ${chunkIndex + 1}/${totalChunks}`,
-            percent,
-          });
-        },
-      });
-    }
-
-    return uploadId;
-  };
-
   const saveUploadedCreativeToMediaLibrary = async ({ label = 'creative upload' } = {}) => {
     if (!mediaFile) {
       return null;
@@ -1490,40 +1440,18 @@ const AdsLaunchPage = () => {
 
     const mediaMetadata = await readMediaMetadata(mediaFile);
     const isVideoUpload = mediaFile.type.startsWith('video/');
-    const thumbnailMetadata = isVideoUpload && thumbnailFile ? await readImageMetadata(thumbnailFile) : null;
-    const mediaUploadEnd = isVideoUpload && thumbnailFile ? 94 : 99;
-    const uploadId = await uploadLaunchFileInChunks({
-      file: mediaFile,
-      label: isVideoUpload ? `${label} video` : `${label} image`,
-      progressStart: 0,
-      progressEnd: mediaUploadEnd,
-    });
-    const thumbnailUploadId = isVideoUpload && thumbnailFile
-      ? await uploadLaunchFileInChunks({
-          file: thumbnailFile,
-          label: `${label} thumbnail`,
-          progressStart: mediaUploadEnd,
-          progressEnd: 99,
-        })
-      : '';
-
-    setCreativeUploadProgress({
-      label: `Saving ${label}`,
-      percent: 100,
-    });
-
-    const data = await adsLaunchApi.completeChunkedMediaUpload({
+    const uploadLabel = `Uploading ${isVideoUpload ? `${label} video` : `${label} image`}`;
+    const data = await adsLaunchApi.uploadMediaAssetWithProgress({
       name: (templateName || form.launchLabel || mediaFile.name).trim(),
-      uploadId,
-      mediaOriginalName: mediaFile.name,
-      mediaMimeType: mediaFile.type,
-      mediaSize: mediaFile.size,
+      mediaFile,
       mediaMetadata,
-      thumbnailUploadId,
-      thumbnailOriginalName: thumbnailFile?.name || '',
-      thumbnailMimeType: thumbnailFile?.type || '',
-      thumbnailSize: thumbnailFile?.size || 0,
-      thumbnailMetadata,
+    }, {
+      onUploadProgress: (percent) => {
+        setCreativeUploadProgress({
+          label: uploadLabel,
+          percent,
+        });
+      },
     });
 
     return data.mediaAsset;
@@ -1535,25 +1463,17 @@ const AdsLaunchPage = () => {
     }
 
     const thumbnailMetadata = await readImageMetadata(thumbnailFile);
-    const uploadId = await uploadLaunchFileInChunks({
-      file: thumbnailFile,
-      label,
-      progressStart: 0,
-      progressEnd: 99,
-    });
-
-    setCreativeUploadProgress({
-      label: `Saving ${label}`,
-      percent: 100,
-    });
-
-    const data = await adsLaunchApi.completeChunkedMediaUpload({
+    const data = await adsLaunchApi.uploadMediaAssetWithProgress({
       name: `${(templateName || form.launchLabel || thumbnailFile.name).trim()} thumbnail`,
-      uploadId,
-      mediaOriginalName: thumbnailFile.name,
-      mediaMimeType: thumbnailFile.type,
-      mediaSize: thumbnailFile.size,
+      mediaFile: thumbnailFile,
       mediaMetadata: thumbnailMetadata,
+    }, {
+      onUploadProgress: (percent) => {
+        setCreativeUploadProgress({
+          label: `Uploading ${label}`,
+          percent,
+        });
+      },
     });
 
     return data.mediaAsset;
@@ -1561,7 +1481,7 @@ const AdsLaunchPage = () => {
 
   const buildTemplatePayload = async ({ includeStoredAssets = false } = {}) => {
     const uploadedMediaAsset = mediaFile ? await saveUploadedCreativeToMediaLibrary({ label: 'template media' }) : null;
-    const uploadedThumbnailAsset = !mediaFile && thumbnailFile
+    const uploadedThumbnailAsset = thumbnailFile
       ? await saveUploadedThumbnailToMediaLibrary({ label: 'template thumbnail' })
       : null;
     const mediaAssetId = uploadedMediaAsset?.id || (creativeSource === 'library' ? savedMediaAsset?.mediaAssetId : '');
@@ -1614,7 +1534,7 @@ const AdsLaunchPage = () => {
 
   const buildPublishPayload = async () => {
     const uploadedMediaAsset = mediaFile ? await saveUploadedCreativeToMediaLibrary({ label: 'publish media' }) : null;
-    const uploadedThumbnailAsset = !mediaFile && thumbnailFile
+    const uploadedThumbnailAsset = thumbnailFile
       ? await saveUploadedThumbnailToMediaLibrary({ label: 'publish thumbnail' })
       : null;
     const mediaAssetId = uploadedMediaAsset?.id || (creativeSource === 'library' ? activeMediaAsset?.mediaAssetId : '');

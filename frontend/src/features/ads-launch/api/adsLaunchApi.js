@@ -99,41 +99,26 @@ const requestWithUploadProgress = (path, payload, { onUploadProgress } = {}) =>
       }
 
       if (xhr.status === 413) {
-        reject(new Error('Upload request is still too large for the server/proxy. The app now uses smaller chunks, so refresh and try again.'));
+        reject(new Error('Upload is too large for the server/proxy. Please allow uploads up to 100MB on the server and proxy.'));
         return;
       }
 
       reject(new Error(data.message || 'Request failed'));
     };
 
-    xhr.onerror = () => reject(new Error('Upload failed. Please check your connection and try again.'));
+    xhr.onerror = () => reject(new Error('Upload connection dropped before the server replied. If the file is large, check the server/proxy upload limit.'));
+    xhr.ontimeout = () => reject(new Error('Upload timed out before the server replied. If the file is large, check the server/proxy upload limit.'));
     xhr.send(isFormData ? payload : JSON.stringify(payload));
   });
 
-const buildMediaUploadFormData = ({ name, mediaFile, mediaMetadata, thumbnailFile, thumbnailMetadata }) => {
+const buildMediaUploadFormData = ({ name, mediaFile, mediaMetadata }) => {
   const formData = new FormData();
   formData.append('name', name);
   formData.append('media', mediaFile, mediaFile.name);
   formData.append('mediaMetadata', JSON.stringify(mediaMetadata || {}));
 
-  if (thumbnailFile) {
-    formData.append('thumbnail', thumbnailFile, thumbnailFile.name);
-    formData.append('thumbnailMetadata', JSON.stringify(thumbnailMetadata || {}));
-  }
-
   return formData;
 };
-
-const buildMediaChunkFormData = ({ uploadId, chunk, chunkIndex, totalChunks }) => {
-  const formData = new FormData();
-  formData.append('uploadId', uploadId);
-  formData.append('chunkIndex', String(chunkIndex));
-  formData.append('totalChunks', String(totalChunks));
-  formData.append('chunk', chunk, `chunk-${chunkIndex}`);
-  return formData;
-};
-
-export const ADS_MEDIA_UPLOAD_CHUNK_BYTES = 1024 * 1024;
 
 export const adsLaunchApi = {
   getTemplates: (params = {}) => {
@@ -170,13 +155,6 @@ export const adsLaunchApi = {
     requestWithUploadProgress('/ads-launch/media', payload, options),
   uploadMediaAssetWithProgress: (payload, options = {}) =>
     requestWithUploadProgress('/ads-launch/media', buildMediaUploadFormData(payload), options),
-  uploadMediaChunkWithProgress: (payload, options = {}) =>
-    requestWithUploadProgress('/ads-launch/media/chunk', buildMediaChunkFormData(payload), options),
-  completeChunkedMediaUpload: (payload) =>
-    apiRequest('/ads-launch/media/complete', {
-      method: 'POST',
-      body: payload,
-    }),
   deleteMediaAsset: (id) =>
     apiRequest(`/ads-launch/media/${id}`, {
       method: 'DELETE',

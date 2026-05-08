@@ -1077,17 +1077,7 @@ async function applyTemplateAssets({ template, snapshotInput, existingSnapshot =
       assetKind: 'media',
     });
 
-    if (libraryMediaAsset.mediaType === ADS_MEDIA_TYPES.VIDEO) {
-      thumbnailAsset = libraryMediaAsset.thumbnail
-        ? copyMediaLibraryAssetToTemplateAsset({
-            templateId: template._id.toString(),
-            asset: libraryMediaAsset.thumbnail,
-            assetKind: 'thumbnail',
-          })
-        : null;
-    } else {
-      thumbnailAsset = null;
-    }
+    thumbnailAsset = null;
 
     deleteStoredTemplateAsset(previousMedia);
     deleteStoredTemplateAsset(previousThumbnail);
@@ -1202,17 +1192,14 @@ async function listMediaAssets({ actor }) {
 async function createMediaAsset({
   name,
   media,
-  thumbnail,
   uploadedMedia = null,
   uploadedThumbnail = null,
   mediaMetadata = null,
-  thumbnailMetadata = null,
   actor,
   req,
 }) {
   const normalizedName = normalizeText(name);
   const mediaInput = uploadedMedia ? null : sanitizeMediaLibraryAssetInput(media);
-  const thumbnailInput = uploadedThumbnail ? null : sanitizeMediaLibraryAssetInput(thumbnail);
 
   if (!normalizedName) {
     cleanupUploadedMediaFile(uploadedMedia);
@@ -1230,12 +1217,6 @@ async function createMediaAsset({
     ? normalizeMediaLibraryMimeType(uploadedMedia.mimetype, uploadedMedia.originalname)
     : normalizeMediaLibraryMimeType(mediaInput?.type, mediaInput?.name);
   const mediaType = mediaMimeType.startsWith('video/') ? ADS_MEDIA_TYPES.VIDEO : ADS_MEDIA_TYPES.IMAGE;
-
-  if (mediaType === ADS_MEDIA_TYPES.VIDEO && !uploadedThumbnail && !thumbnailInput) {
-    cleanupUploadedMediaFile(uploadedMedia);
-    cleanupUploadedMediaFile(uploadedThumbnail);
-    throw new HttpError(400, 'Video media requires a thumbnail before it can be used in Meta ads');
-  }
 
   const mediaAsset = new AdsLaunchMedia({
     name: normalizedName,
@@ -1259,22 +1240,7 @@ async function createMediaAsset({
           assetKind: 'media',
           mediaType,
         });
-    mediaAsset.thumbnail = uploadedThumbnail
-      ? persistUploadedMediaLibraryAsset({
-          mediaId: mediaAsset._id.toString(),
-          file: uploadedThumbnail,
-          metadata: thumbnailMetadata,
-          assetKind: 'thumbnail',
-          mediaType: ADS_MEDIA_TYPES.IMAGE,
-        })
-      : thumbnailInput
-        ? persistMediaLibraryAsset({
-            mediaId: mediaAsset._id.toString(),
-            asset: thumbnailInput,
-            assetKind: 'thumbnail',
-            mediaType: ADS_MEDIA_TYPES.IMAGE,
-          })
-        : null;
+    mediaAsset.thumbnail = null;
     await mediaAsset.save();
   } catch (error) {
     deleteStoredMediaLibraryAsset(mediaAsset.media);
@@ -1310,19 +1276,13 @@ async function completeChunkedMediaAsset({
   mediaMimeType,
   mediaSize,
   mediaMetadata,
-  thumbnail,
   thumbnailUploadId,
-  thumbnailOriginalName,
-  thumbnailMimeType,
-  thumbnailSize,
-  thumbnailMetadata,
   actor,
   req,
 }) {
   const normalizedUploadId = sanitizeMediaUploadId(uploadId);
   const normalizedThumbnailUploadId = normalizeText(thumbnailUploadId) ? sanitizeMediaUploadId(thumbnailUploadId) : '';
   let uploadedMedia = null;
-  let uploadedThumbnail = null;
 
   try {
     uploadedMedia = assembleMediaUploadChunks({
@@ -1333,24 +1293,11 @@ async function completeChunkedMediaAsset({
       size: mediaSize,
       label: 'Media',
     });
-    uploadedThumbnail = normalizedThumbnailUploadId
-      ? assembleMediaUploadChunks({
-          uploadId: normalizedThumbnailUploadId,
-          actor,
-          originalName: thumbnailOriginalName,
-          mimeType: thumbnailMimeType,
-          size: thumbnailSize,
-          label: 'Thumbnail',
-        })
-      : null;
 
     return await createMediaAsset({
       name,
-      thumbnail,
       uploadedMedia,
-      uploadedThumbnail,
       mediaMetadata,
-      thumbnailMetadata,
       actor,
       req,
     });
@@ -1358,7 +1305,6 @@ async function completeChunkedMediaAsset({
     cleanupMediaChunkSession(normalizedUploadId);
     cleanupMediaChunkSession(normalizedThumbnailUploadId);
     cleanupUploadedMediaFile(uploadedMedia);
-    cleanupUploadedMediaFile(uploadedThumbnail);
   }
 }
 
@@ -2574,19 +2520,14 @@ async function resolvePublishCreativeAssets({ launch, actor }) {
 
 function readCreativeAssetsFromMediaAsset(mediaAsset) {
   const media = readStoredMediaLibraryAsset(mediaAsset?.media);
-  const thumbnail = readStoredMediaLibraryAsset(mediaAsset?.thumbnail);
 
   if (!media) {
     throw new HttpError(400, `Media library asset "${mediaAsset?.name || 'selected'}" is missing its saved file`);
   }
 
-  if (String(media.type || '').startsWith('video/') && !thumbnail) {
-    throw new HttpError(400, `Video media "${mediaAsset?.name || 'selected'}" needs a thumbnail before publishing`);
-  }
-
   return {
     media,
-    thumbnail,
+    thumbnail: null,
   };
 }
 

@@ -3,14 +3,13 @@ import toast from 'react-hot-toast';
 import { ImageIcon, LoaderCircle, Plus, RefreshCw, Trash2, Upload, Video, X } from 'lucide-react';
 import DashboardHeader from '../../dashboard/components/DashboardHeader';
 import DashboardPanel from '../../dashboard/components/DashboardPanel';
-import { ADS_MEDIA_UPLOAD_CHUNK_BYTES, adsLaunchApi } from '../api/adsLaunchApi';
+import { adsLaunchApi } from '../api/adsLaunchApi';
 
 const MIN_DIMENSION = 600;
 const MIN_ASPECT_RATIO = 0.56;
 const MAX_ASPECT_RATIO = 1.92;
 const MAX_IMAGE_BYTES = 30 * 1024 * 1024;
 const MAX_VIDEO_BYTES = 100 * 1024 * 1024;
-const MEDIA_CHUNK_BYTES = ADS_MEDIA_UPLOAD_CHUNK_BYTES;
 const IMAGE_MIME_TYPES = new Set(['image/jpeg']);
 const VIDEO_MIME_TYPES = new Set(['video/mp4', 'video/quicktime']);
 const MIME_TYPE_BY_EXTENSION = {
@@ -137,98 +136,6 @@ const readVideoMetadata = (file) =>
     video.src = url;
   });
 
-const getDataUrlSize = (dataUrl) => {
-  const base64 = String(dataUrl || '').split(',')[1] || '';
-  return Math.round((base64.length * 3) / 4);
-};
-
-const dataUrlToFile = (dataUrl, name, type) => {
-  const base64 = String(dataUrl || '').split(',')[1] || '';
-  const binary = atob(base64);
-  const bytes = new Uint8Array(binary.length);
-
-  for (let index = 0; index < binary.length; index += 1) {
-    bytes[index] = binary.charCodeAt(index);
-  }
-
-  return new File([bytes], name, { type });
-};
-
-const createUploadId = () => {
-  if (window.crypto?.randomUUID) {
-    return window.crypto.randomUUID().replace(/-/g, '');
-  }
-
-  return `${Date.now()}${Math.random().toString(36).slice(2, 14)}`;
-};
-
-const createVideoThumbnail = (file) =>
-  new Promise((resolve, reject) => {
-    const video = document.createElement('video');
-    const url = URL.createObjectURL(file);
-    let settled = false;
-
-    const cleanup = () => {
-      URL.revokeObjectURL(url);
-      video.removeAttribute('src');
-      video.load();
-    };
-
-    const fail = () => {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      cleanup();
-      reject(new Error('Could not generate a thumbnail from this video'));
-    };
-
-    video.muted = true;
-    video.playsInline = true;
-    video.preload = 'metadata';
-    video.onloadedmetadata = () => {
-      const seekTo = Number.isFinite(video.duration) ? Math.min(Math.max(video.duration * 0.05, 0.2), 1.5) : 0.2;
-      video.currentTime = seekTo;
-    };
-    video.onseeked = () => {
-      if (settled) {
-        return;
-      }
-
-      const sourceWidth = video.videoWidth || MIN_DIMENSION;
-      const sourceHeight = video.videoHeight || MIN_DIMENSION;
-      const scale = Math.min(1920 / sourceWidth, 1920 / sourceHeight, 1);
-      const width = Math.max(Math.round(sourceWidth * scale), MIN_DIMENSION);
-      const height = Math.max(Math.round(sourceHeight * scale), MIN_DIMENSION);
-      const canvas = document.createElement('canvas');
-      canvas.width = width;
-      canvas.height = height;
-      const context = canvas.getContext('2d');
-
-      if (!context) {
-        fail();
-        return;
-      }
-
-      context.drawImage(video, 0, 0, width, height);
-      const dataUrl = canvas.toDataURL('image/jpeg', 0.86);
-      settled = true;
-      cleanup();
-      resolve({
-        name: `${file.name.replace(/\.[^.]+$/, '')}-thumbnail.jpg`,
-        type: 'image/jpeg',
-        size: getDataUrlSize(dataUrl),
-        dataUrl,
-        width,
-        height,
-        duration: 0,
-      });
-    };
-    video.onerror = fail;
-    video.src = url;
-    video.load();
-  });
-
 const MediaCard = ({ mediaAsset, onDelete }) => {
   const isVideo = mediaAsset.mediaType === 'VIDEO';
   const media = mediaAsset.media || {};
@@ -237,7 +144,7 @@ const MediaCard = ({ mediaAsset, onDelete }) => {
     <div className="overflow-hidden rounded-3xl border border-sky-100 bg-white shadow-sm shadow-sky-100/70">
       <div className="relative bg-slate-950">
         {isVideo ? (
-          <video src={media.url} poster={mediaAsset.thumbnail?.url} controls className="h-56 w-full object-contain" />
+          <video src={media.url} controls className="h-56 w-full object-contain" />
         ) : (
           <img src={media.url} alt={mediaAsset.name} className="h-56 w-full object-cover" />
         )}
@@ -277,7 +184,7 @@ const MediaCard = ({ mediaAsset, onDelete }) => {
         </div>
         {isVideo ? (
           <p className="mt-3 rounded-xl bg-amber-50 px-3 py-2 text-xs font-bold text-amber-700">
-            Thumbnail saved automatically. Duration {formatDuration(media.duration) || 'ready'}.
+            Video saved without a thumbnail. Select an image media asset as the thumbnail during launch.
           </p>
         ) : null}
       </div>
@@ -294,7 +201,6 @@ const AdsMediaLibraryPage = () => {
   const [selectedFile, setSelectedFile] = useState(null);
   const [selectedPreviewUrl, setSelectedPreviewUrl] = useState('');
   const [fileDetails, setFileDetails] = useState(null);
-  const [generatedThumbnail, setGeneratedThumbnail] = useState(null);
   const [uploadProgress, setUploadProgress] = useState(null);
 
   const selectedIsVideo = selectedFile ? getSupportedMimeType(selectedFile).startsWith('video/') : false;
@@ -335,7 +241,6 @@ const AdsMediaLibraryPage = () => {
     setName('');
     setSelectedFile(null);
     setFileDetails(null);
-    setGeneratedThumbnail(null);
     setUploadProgress(null);
   };
 
@@ -344,7 +249,6 @@ const AdsMediaLibraryPage = () => {
     event.target.value = '';
     setSelectedFile(null);
     setFileDetails(null);
-    setGeneratedThumbnail(null);
     setUploadProgress(null);
 
     if (!file) {
@@ -367,12 +271,10 @@ const AdsMediaLibraryPage = () => {
         return;
       }
 
-      const thumbnail = isVideo ? await createVideoThumbnail(normalizedFile) : null;
       setSelectedFile(normalizedFile);
       setFileDetails(details);
-      setGeneratedThumbnail(thumbnail);
       setName((current) => current || normalizedFile.name.replace(/\.[^.]+$/, ''));
-      toast.success(isVideo ? 'Video ready with auto thumbnail' : 'Image ready');
+      toast.success(isVideo ? 'Video ready. Pick an image thumbnail during launch if needed.' : 'Image ready');
     } catch (error) {
       toast.error(error.message);
     } finally {
@@ -380,83 +282,24 @@ const AdsMediaLibraryPage = () => {
     }
   };
 
-  const uploadFileInChunks = async ({ file, label, progressStart = 0, progressEnd = 99 }) => {
-    const uploadId = createUploadId();
-    const totalChunks = Math.ceil(file.size / MEDIA_CHUNK_BYTES);
+  const saveUploadedMediaAsset = async () => {
+    const label = selectedIsVideo ? 'Uploading video to media library' : 'Uploading image to media library';
 
-    for (let chunkIndex = 0; chunkIndex < totalChunks; chunkIndex += 1) {
-      const chunkStart = chunkIndex * MEDIA_CHUNK_BYTES;
-      const chunkEnd = Math.min(chunkStart + MEDIA_CHUNK_BYTES, file.size);
-      const chunk = file.slice(chunkStart, chunkEnd, file.type);
-
-      await adsLaunchApi.uploadMediaChunkWithProgress({
-        uploadId,
-        chunk,
-        chunkIndex,
-        totalChunks,
-      }, {
-        onUploadProgress: (chunkPercent) => {
-          const uploadedBytes = chunkStart + Math.round(chunk.size * (chunkPercent / 100));
-          const filePercent = file.size ? uploadedBytes / file.size : 1;
-          const percent = Math.min(Math.round(progressStart + filePercent * (progressEnd - progressStart)), progressEnd);
-          setUploadProgress({
-            label: `Uploading ${label} ${chunkIndex + 1}/${totalChunks}`,
-            percent,
-          });
-        },
-      });
-    }
-
-    return uploadId;
-  };
-
-  const saveChunkedMediaAsset = async ({ thumbnail }) => {
-    const mediaProgressEnd = selectedIsVideo && thumbnail ? 94 : 99;
-    const mediaUploadId = await uploadFileInChunks({
-      file: selectedFile,
-      label: selectedIsVideo ? 'video' : 'image',
-      progressStart: 0,
-      progressEnd: mediaProgressEnd,
-    });
-
-    let thumbnailUploadId = '';
-    if (thumbnail) {
-      const thumbnailFile = dataUrlToFile(thumbnail.dataUrl, thumbnail.name, thumbnail.type);
-      thumbnailUploadId = await uploadFileInChunks({
-        file: thumbnailFile,
-        label: 'thumbnail',
-        progressStart: mediaProgressEnd,
-        progressEnd: 99,
-      });
-    }
-
-    setUploadProgress({
-      label: 'Saving media in library',
-      percent: 100,
-    });
-
-    return adsLaunchApi.completeChunkedMediaUpload({
+    return adsLaunchApi.uploadMediaAssetWithProgress({
       name: name.trim(),
-      uploadId: mediaUploadId,
-      mediaOriginalName: selectedFile.name,
-      mediaMimeType: selectedFile.type,
-      mediaSize: selectedFile.size,
+      mediaFile: selectedFile,
       mediaMetadata: {
         width: fileDetails.width,
         height: fileDetails.height,
         duration: fileDetails.duration || 0,
       },
-      thumbnailUploadId,
-      thumbnailOriginalName: thumbnail?.name || '',
-      thumbnailMimeType: thumbnail?.type || '',
-      thumbnailSize: thumbnail?.size || 0,
-      thumbnailMetadata: thumbnail
-        ? {
-            width: thumbnail.width,
-            height: thumbnail.height,
-            duration: thumbnail.duration || 0,
-          }
-        : null,
+    }, {
+      onUploadProgress: (percent) => {
+        setUploadProgress({
+          label,
+          percent,
+        });
+      },
     });
   };
 
@@ -476,30 +319,13 @@ const AdsMediaLibraryPage = () => {
       return;
     }
 
-    if (selectedIsVideo && !generatedThumbnail) {
-      toast.error('Video thumbnail is still missing. Select the video again so I can generate it.');
-      return;
-    }
-
     setSaving(true);
     setUploadProgress({
       label: selectedIsVideo ? 'Starting video upload' : 'Starting image upload',
       percent: 0,
     });
     try {
-      const thumbnailPayload = generatedThumbnail
-        ? {
-            name: generatedThumbnail.name,
-            type: generatedThumbnail.type,
-            size: generatedThumbnail.size,
-            dataUrl: generatedThumbnail.dataUrl,
-            width: generatedThumbnail.width,
-            height: generatedThumbnail.height,
-            duration: generatedThumbnail.duration || 0,
-          }
-        : null;
-
-      const data = await saveChunkedMediaAsset({ thumbnail: thumbnailPayload });
+      const data = await saveUploadedMediaAsset();
       toast.success(data.message);
       resetForm();
       await loadMediaAssets();
@@ -562,7 +388,7 @@ const AdsMediaLibraryPage = () => {
             {selectedFile && selectedPreviewUrl ? (
               <div className="overflow-hidden rounded-3xl border border-sky-100 bg-white">
                 {selectedIsVideo ? (
-                  <video src={selectedPreviewUrl} poster={generatedThumbnail?.dataUrl} controls className="h-56 w-full bg-slate-950 object-contain" />
+                  <video src={selectedPreviewUrl} controls className="h-56 w-full bg-slate-950 object-contain" />
                 ) : (
                   <img src={selectedPreviewUrl} alt="Selected media preview" className="h-56 w-full object-cover" />
                 )}
@@ -575,13 +401,13 @@ const AdsMediaLibraryPage = () => {
                         {selectedIsVideo ? ` | ${formatDuration(fileDetails?.duration)}` : ''}
                       </p>
                     </div>
-                    <button type="button" onClick={() => { setSelectedFile(null); setFileDetails(null); setGeneratedThumbnail(null); setUploadProgress(null); }} className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-red-100 text-red-600 transition hover:bg-red-50">
+                    <button type="button" onClick={() => { setSelectedFile(null); setFileDetails(null); setUploadProgress(null); }} className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-red-100 text-red-600 transition hover:bg-red-50">
                       <X size={16} strokeWidth={2.3} />
                     </button>
                   </div>
                   {selectedIsVideo ? (
                     <p className="rounded-xl bg-amber-50 px-3 py-2 text-xs font-bold text-amber-700">
-                      Thumbnail generated automatically from the video, so Dynamic Ads Launch can publish it without extra upload work.
+                      Video will be saved without a thumbnail. Use an image from the media library as the thumbnail during launch.
                     </p>
                   ) : null}
                 </div>

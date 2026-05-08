@@ -65,7 +65,7 @@ const handleMediaUpload = (req, res, next) => {
     }
 
     if (error.code === 'LIMIT_UNEXPECTED_FILE') {
-      next(new HttpError(400, 'Unexpected media upload field. Please upload one media file and one thumbnail.'));
+      next(new HttpError(400, 'Unexpected media upload field. Please upload one media file.'));
       return;
     }
 

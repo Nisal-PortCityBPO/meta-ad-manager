@@ -150,7 +150,7 @@ const TemplatePreviewModal = ({ template, onClose }) => {
 };
 
 const MediaLibraryPicker = ({
-  description = 'Saved media is stored locally. Videos include the generated thumbnail needed by Meta.',
+  description = 'Saved videos are stored without thumbnails. Choose a separate image media asset when a video needs a thumbnail.',
   mode = 'media',
   loading,
   mediaAssets,
@@ -201,7 +201,7 @@ const MediaLibraryPicker = ({
             {mediaAssets.map((mediaAsset) => {
               const isVideo = mediaAsset.mediaType === 'VIDEO';
               const media = mediaAsset.media || {};
-              const canSelect = mode === 'thumbnail' ? !isVideo : !isVideo || Boolean(mediaAsset.thumbnail?.url);
+              const canSelect = mode === 'thumbnail' ? !isVideo : true;
               const selected = selectedMediaAssetId === mediaAsset.id;
 
               return (
@@ -222,7 +222,7 @@ const MediaLibraryPicker = ({
                 >
                   <div className="relative bg-slate-950">
                     {isVideo ? (
-                      <video src={media.url} poster={mediaAsset.thumbnail?.url} className="h-44 w-full object-contain" />
+                      <video src={media.url} className="h-44 w-full object-contain" />
                     ) : (
                       <img src={media.url} alt={mediaAsset.name} className="h-44 w-full object-cover" />
                     )}
@@ -240,8 +240,8 @@ const MediaLibraryPicker = ({
                     <p className="truncate text-sm font-black text-slate-950">{mediaAsset.name}</p>
                     <p className="mt-1 truncate text-xs font-semibold text-slate-400">{media.width}x{media.height} | {formatFileSize(media.size)}</p>
                     {isVideo ? (
-                      <p className={`mt-2 rounded-xl px-3 py-2 text-xs font-bold ${mediaAsset.thumbnail?.url ? 'bg-amber-50 text-amber-700' : 'bg-red-50 text-red-600'}`}>
-                        {mediaAsset.thumbnail?.url ? 'Video thumbnail ready' : 'Missing thumbnail'}
+                      <p className="mt-2 rounded-xl bg-amber-50 px-3 py-2 text-xs font-bold text-amber-700">
+                        Select an image thumbnail separately
                       </p>
                     ) : null}
                   </div>
@@ -750,7 +750,7 @@ const DynamicAdsLaunchPage = () => {
       scheduleEnd: toSchedulePayloadValue(campaignConfig.scheduleEnd),
       callToAction: mediaConfig.callToAction || 'LEARN_MORE',
       media: firstMediaAsset?.media || null,
-      thumbnail: firstThumbnailAsset?.media || firstMediaAsset?.thumbnail || null,
+      thumbnail: firstThumbnailAsset?.media || null,
       staticDefaults: {
         ...defaultStaticDefaults,
         ...(campaignConfig.staticDefaults || {}),
@@ -1104,7 +1104,7 @@ const DynamicAdsLaunchPage = () => {
                             {mediaAsset?.media?.url ? (
                               <span className="h-10 w-10 shrink-0 overflow-hidden rounded-lg bg-slate-950">
                                 {mediaAsset.mediaType === 'VIDEO' ? (
-                                  <video src={mediaAsset.media.url} poster={mediaAsset.thumbnail?.url} className="h-full w-full object-cover" />
+                                  <video src={mediaAsset.media.url} className="h-full w-full object-cover" />
                                 ) : (
                                   <img src={mediaAsset.media.url} alt={mediaAsset.name} className="h-full w-full object-cover" />
                                 )}
