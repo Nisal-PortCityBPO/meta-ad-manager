@@ -174,6 +174,11 @@ export const adsLaunchApi = {
     requestWithUploadProgress('/ads-launch/media', payload, options),
   uploadMediaAssetWithProgress: (payload, options = {}) =>
     requestWithUploadProgress('/ads-launch/media', buildMediaUploadFormData(payload), options),
+  updateMediaAssetBrand: (id, payload) =>
+    apiRequest(`/ads-launch/media/${id}/brand`, {
+      method: 'PATCH',
+      body: payload,
+    }),
   deleteMediaAsset: (id) =>
     apiRequest(`/ads-launch/media/${id}`, {
       method: 'DELETE',

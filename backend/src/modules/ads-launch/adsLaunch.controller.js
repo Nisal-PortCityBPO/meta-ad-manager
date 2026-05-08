@@ -119,6 +119,21 @@ const deleteMediaAsset = asyncHandler(async (req, res) => {
   });
 });
 
+const updateMediaAssetBrand = asyncHandler(async (req, res) => {
+  const mediaAsset = await adsLaunchService.updateMediaAssetBrand({
+    mediaId: req.params.id,
+    brandId: req.body.brandId,
+    brandName: req.body.brandName,
+    actor: req.user,
+    req,
+  });
+
+  res.json({
+    message: mediaAsset.brandId ? 'Media brand updated successfully' : 'Media brand cleared successfully',
+    mediaAsset,
+  });
+});
+
 const createTemplate = asyncHandler(async (req, res) => {
   const template = await adsLaunchService.createTemplate({
     name: req.body.name,
@@ -227,5 +242,6 @@ module.exports = {
   publishLaunch,
   publishLaunchStream,
   uploadMediaChunk,
+  updateMediaAssetBrand,
   updateTemplate,
 };

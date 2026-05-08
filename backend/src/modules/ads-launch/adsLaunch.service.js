@@ -1360,6 +1360,36 @@ async function deleteMediaAsset({ mediaId, actor, req }) {
   });
 }
 
+async function updateMediaAssetBrand({ mediaId, brandId = '', brandName = '', actor, req }) {
+  const mediaAsset = await getMediaAssetDocForActor(mediaId, actor);
+  const previousBrandId = mediaAsset.brandId || '';
+  const previousBrandName = mediaAsset.brandName || '';
+
+  mediaAsset.brandId = normalizeText(brandId);
+  mediaAsset.brandName = mediaAsset.brandId ? normalizeText(brandName) : '';
+  mediaAsset.updatedBy = actor._id;
+  await mediaAsset.save();
+
+  await writeActivityLog({
+    user: actor,
+    action: 'ADS_MEDIA_LIBRARY_BRAND_UPDATED',
+    entity: 'AdsLaunchMedia',
+    entityId: mediaAsset._id.toString(),
+    metadata: {
+      name: mediaAsset.name,
+      mediaType: mediaAsset.mediaType,
+      previousBrandId,
+      previousBrandName,
+      brandId: mediaAsset.brandId,
+      brandName: mediaAsset.brandName,
+    },
+    req,
+  });
+
+  const populated = await AdsLaunchMedia.findById(mediaAsset._id).populate('createdBy', 'name email');
+  return populated.toSafeObject();
+}
+
 async function createTemplate({ name, templateType, config, snapshot, actor, req }) {
   const normalizedName = normalizeText(name);
   if (!normalizedName) {
@@ -3066,5 +3096,6 @@ module.exports = {
   listTemplates,
   publishLaunch,
   saveMediaUploadChunk,
+  updateMediaAssetBrand,
   updateTemplate,
 };

@@ -95,6 +95,7 @@ router.get('/media', adsLaunchController.getMediaAssets);
 router.post('/media', handleMediaUpload, adsLaunchController.createMediaAsset);
 router.post('/media/chunk', handleMediaChunkUpload, adsLaunchController.uploadMediaChunk);
 router.post('/media/complete', adsLaunchController.completeChunkedMediaAsset);
+router.patch('/media/:id/brand', adsLaunchController.updateMediaAssetBrand);
 router.get('/media/:id/:assetKind', adsLaunchController.getMediaAsset);
 router.delete('/media/:id', adsLaunchController.deleteMediaAsset);
 router.get('/templates', adsLaunchController.getTemplates);

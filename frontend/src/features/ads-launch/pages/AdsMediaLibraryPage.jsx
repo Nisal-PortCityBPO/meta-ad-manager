@@ -137,7 +137,7 @@ const readVideoMetadata = (file) =>
     video.src = url;
   });
 
-const MediaCard = ({ mediaAsset, onDelete }) => {
+const MediaCard = ({ brands, brandsLoading, mediaAsset, onBrandChange, onDelete, updatingBrand }) => {
   const isVideo = mediaAsset.mediaType === 'VIDEO';
   const media = mediaAsset.media || {};
   const brandLabel = mediaAsset.brandName || 'Unassigned brand';
@@ -160,7 +160,7 @@ const MediaCard = ({ mediaAsset, onDelete }) => {
           <div className="min-w-0">
             <p className="truncate text-sm font-black text-slate-950">{mediaAsset.name}</p>
             <p className="mt-1 truncate text-xs font-semibold text-slate-400">{media.name}</p>
-            <p className="mt-2 inline-flex rounded-full bg-sky-50 px-3 py-1 text-[11px] font-black uppercase tracking-[0.12em] text-sky-700">
+            <p className={`mt-2 inline-flex rounded-full px-3 py-1 text-[11px] font-black uppercase tracking-[0.12em] ${mediaAsset.brandId ? 'bg-sky-50 text-sky-700' : 'bg-amber-50 text-amber-700'}`}>
               {brandLabel}
             </p>
           </div>
@@ -172,6 +172,26 @@ const MediaCard = ({ mediaAsset, onDelete }) => {
           >
             <Trash2 size={16} strokeWidth={2.3} />
           </button>
+        </div>
+        <div className="mt-3 rounded-2xl border border-sky-100 bg-sky-50/50 p-3">
+          <label htmlFor={`media-brand-${mediaAsset.id}`} className="text-[11px] font-black uppercase tracking-[0.14em] text-sky-700">
+            Quick brand
+          </label>
+          <div className="mt-2 flex items-center gap-2">
+            <select
+              id={`media-brand-${mediaAsset.id}`}
+              value={mediaAsset.brandId || ''}
+              onChange={(event) => onBrandChange(mediaAsset, event.target.value)}
+              disabled={brandsLoading || updatingBrand}
+              className="h-10 min-w-0 flex-1 rounded-xl border border-sky-100 bg-white px-3 text-sm font-bold text-slate-700 outline-none transition focus:border-sky-400 focus:ring-4 focus:ring-sky-100 disabled:opacity-60"
+            >
+              <option value="">Unassigned</option>
+              {brands.map((brand) => (
+                <option key={brand.id} value={brand.id}>{brand.name}</option>
+              ))}
+            </select>
+            {updatingBrand ? <LoaderCircle size={18} className="shrink-0 animate-spin text-sky-600" /> : null}
+          </div>
         </div>
         <div className="mt-3 grid grid-cols-3 gap-2 text-center">
           <div className="rounded-xl bg-sky-50 px-2 py-2">
@@ -212,6 +232,7 @@ const AdsMediaLibraryPage = () => {
   const [selectedPreviewUrl, setSelectedPreviewUrl] = useState('');
   const [fileDetails, setFileDetails] = useState(null);
   const [uploadProgress, setUploadProgress] = useState(null);
+  const [updatingBrandAssetId, setUpdatingBrandAssetId] = useState('');
 
   const selectedIsVideo = selectedFile ? getSupportedMimeType(selectedFile).startsWith('video/') : false;
   const selectedUploadBrand = brands.find((brand) => brand.id === uploadBrandId) || null;
@@ -409,6 +430,34 @@ const AdsMediaLibraryPage = () => {
     }
   };
 
+  const updateMediaBrand = async (mediaAsset, brandId) => {
+    if ((mediaAsset.brandId || '') === brandId) {
+      return;
+    }
+
+    const brand = brands.find((item) => item.id === brandId) || null;
+
+    setUpdatingBrandAssetId(mediaAsset.id);
+    try {
+      const data = await adsLaunchApi.updateMediaAssetBrand(mediaAsset.id, {
+        brandId,
+        brandName: brand?.name || '',
+      });
+      const updatedMediaAsset = data.mediaAsset;
+
+      setMediaAssets((current) =>
+        current
+          .map((item) => (item.id === updatedMediaAsset.id ? updatedMediaAsset : item))
+          .filter((item) => !filterBrandId || item.brandId === filterBrandId)
+      );
+      toast.success(data.message);
+    } catch (requestError) {
+      toast.error(requestError.message);
+    } finally {
+      setUpdatingBrandAssetId('');
+    }
+  };
+
   return (
     <div>
       <DashboardHeader
@@ -572,7 +621,15 @@ const AdsMediaLibraryPage = () => {
           ) : mediaAssets.length ? (
             <div className="grid gap-4 md:grid-cols-2 2xl:grid-cols-3">
               {mediaAssets.map((mediaAsset) => (
-                <MediaCard key={mediaAsset.id} mediaAsset={mediaAsset} onDelete={deleteMediaAsset} />
+                <MediaCard
+                  key={mediaAsset.id}
+                  brands={brands}
+                  brandsLoading={brandsLoading}
+                  mediaAsset={mediaAsset}
+                  onBrandChange={updateMediaBrand}
+                  onDelete={deleteMediaAsset}
+                  updatingBrand={updatingBrandAssetId === mediaAsset.id}
+                />
               ))}
             </div>
           ) : (
