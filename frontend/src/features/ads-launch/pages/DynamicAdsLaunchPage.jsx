@@ -66,6 +66,46 @@ const formatFileSize = (bytes = 0) => {
   return `${Math.max(Math.round(bytes / 1024), 1)} KB`;
 };
 
+const MAX_THUMBNAIL_BYTES = 30 * 1024 * 1024;
+const MIN_THUMBNAIL_DIMENSION = 600;
+
+const readImageMetadata = (file) =>
+  new Promise((resolve, reject) => {
+    const image = new Image();
+    const url = URL.createObjectURL(file);
+
+    image.onload = () => {
+      URL.revokeObjectURL(url);
+      resolve({
+        width: image.naturalWidth,
+        height: image.naturalHeight,
+        duration: 0,
+      });
+    };
+    image.onerror = () => {
+      URL.revokeObjectURL(url);
+      reject(new Error('Could not read thumbnail image dimensions'));
+    };
+    image.src = url;
+  });
+
+const normalizeThumbnailUploadFile = (file) => {
+  const extension = String(file?.name || '').toLowerCase().match(/\.[^.]+$/)?.[0] || '';
+  const isJpg = file?.type === 'image/jpeg' || extension === '.jpg' || extension === '.jpeg';
+
+  if (!isJpg) {
+    throw new Error('Thumbnail upload must be a JPG/JPEG image');
+  }
+
+  if (file.size > MAX_THUMBNAIL_BYTES) {
+    throw new Error('Thumbnail image is too large. Maximum is 30MB.');
+  }
+
+  return file.type === 'image/jpeg'
+    ? file
+    : new File([file], file.name, { type: 'image/jpeg', lastModified: file.lastModified });
+};
+
 const TemplatePreviewModal = ({ template, onClose }) => {
   if (!template) {
     return null;
@@ -157,11 +197,55 @@ const MediaLibraryPicker = ({
   onClose,
   onRefresh,
   onSelect,
+  uploadBrandId = '',
+  uploadBrandName = '',
   selectedMediaAssetId,
 }) => {
+  const [uploadingThumbnail, setUploadingThumbnail] = useState(false);
+  const [thumbnailUploadProgress, setThumbnailUploadProgress] = useState(null);
+
   if (!onClose) {
     return null;
   }
+
+  const uploadThumbnail = async (event) => {
+    const file = event.target.files?.[0] || null;
+    event.target.value = '';
+
+    if (!file) {
+      return;
+    }
+
+    setUploadingThumbnail(true);
+    setThumbnailUploadProgress(0);
+    try {
+      const normalizedFile = normalizeThumbnailUploadFile(file);
+      const metadata = await readImageMetadata(normalizedFile);
+
+      if (metadata.width < MIN_THUMBNAIL_DIMENSION || metadata.height < MIN_THUMBNAIL_DIMENSION) {
+        throw new Error(`Thumbnail must be at least ${MIN_THUMBNAIL_DIMENSION}x${MIN_THUMBNAIL_DIMENSION}px`);
+      }
+
+      const data = await adsLaunchApi.uploadMediaAssetWithProgress({
+        name: normalizedFile.name.replace(/\.[^.]+$/, '') || 'Video thumbnail',
+        brandId: uploadBrandId,
+        brandName: uploadBrandName,
+        mediaFile: normalizedFile,
+        mediaMetadata: metadata,
+      }, {
+        onUploadProgress: (percent) => setThumbnailUploadProgress(percent),
+      });
+
+      toast.success('Thumbnail uploaded and selected');
+      onSelect(data.mediaAsset);
+      onRefresh?.();
+    } catch (error) {
+      toast.error(error.message);
+    } finally {
+      setUploadingThumbnail(false);
+      setThumbnailUploadProgress(null);
+    }
+  };
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/50 px-4 py-6 backdrop-blur-sm">
@@ -171,8 +255,22 @@ const MediaLibraryPicker = ({
             <p className="text-xs font-black uppercase tracking-[0.18em] text-sky-600">Media library</p>
             <h3 className="mt-1 text-xl font-black text-slate-950">{mode === 'thumbnail' ? 'Choose video thumbnail' : 'Choose image or video'}</h3>
             <p className="mt-1 text-sm font-semibold text-slate-500">{description}</p>
+            {mode === 'thumbnail' ? (
+              <p className="mt-2 rounded-xl bg-amber-50 px-3 py-2 text-xs font-bold text-amber-700">
+                Pick an existing image below, or upload a new JPG thumbnail here. The selected video stays saved in the row.
+              </p>
+            ) : null}
           </div>
           <div className="flex flex-wrap items-center gap-2">
+            {mode === 'thumbnail' ? (
+              <>
+                <label htmlFor="dynamic-thumbnail-upload" className={`inline-flex h-10 cursor-pointer items-center gap-2 rounded-xl bg-sky-600 px-4 text-sm font-black text-white transition hover:bg-sky-700 ${uploadingThumbnail ? 'pointer-events-none opacity-70' : ''}`}>
+                  {uploadingThumbnail ? <LoaderCircle size={16} className="animate-spin" /> : <Upload size={16} strokeWidth={2.3} />}
+                  {uploadingThumbnail ? `Uploading ${thumbnailUploadProgress || 0}%` : 'Upload JPG'}
+                </label>
+                <input id="dynamic-thumbnail-upload" type="file" accept="image/jpeg" onChange={uploadThumbnail} disabled={uploadingThumbnail} className="hidden" />
+              </>
+            ) : null}
             <a
               href="/ads-media-library"
               target="_blank"
@@ -801,6 +899,19 @@ const DynamicAdsLaunchPage = () => {
     });
 
     if (missingAssignments.length) {
+      const firstMissingThumbnail = missingAssignments.find((account) => {
+        const assignment = assignments[account.id];
+        const selectedMediaAsset = mediaAssets.find((mediaAsset) => mediaAsset.id === assignment?.mediaAssetId);
+        const hasThumbnailAsset = mediaAssets.some((mediaAsset) => mediaAsset.id === assignment?.thumbnailAssetId && mediaAsset.mediaType === 'IMAGE');
+        return selectedMediaAsset?.mediaType === 'VIDEO' && !hasThumbnailAsset;
+      });
+
+      if (firstMissingThumbnail) {
+        setThumbnailPickerAccountId(firstMissingThumbnail.id);
+        toast.error('Video selected. Choose or upload a JPG thumbnail before publishing.');
+        return;
+      }
+
       toast.error('Every selected account row must have campaign template, media template, media asset, and thumbnail for videos');
       return;
     }
@@ -888,6 +999,8 @@ const DynamicAdsLaunchPage = () => {
           onClose={() => setThumbnailPickerAccountId('')}
           onRefresh={loadMediaAssets}
           onSelect={(mediaAsset) => selectThumbnailAssetForAccount(thumbnailPickerAccountId, mediaAsset)}
+          uploadBrandId={brandId}
+          uploadBrandName={selectedBrand?.name || ''}
           selectedMediaAssetId={assignments[thumbnailPickerAccountId]?.thumbnailAssetId || ''}
         />
       ) : null}
