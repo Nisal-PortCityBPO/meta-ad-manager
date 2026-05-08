@@ -111,9 +111,11 @@ const requestWithUploadProgress = (path, payload, { onUploadProgress } = {}) =>
     xhr.send(isFormData ? payload : JSON.stringify(payload));
   });
 
-const buildMediaUploadFormData = ({ name, mediaFile, mediaMetadata }) => {
+const buildMediaUploadFormData = ({ name, brandId, brandName, mediaFile, mediaMetadata }) => {
   const formData = new FormData();
   formData.append('name', name);
+  formData.append('brandId', brandId || '');
+  formData.append('brandName', brandName || '');
   formData.append('media', mediaFile, mediaFile.name);
   formData.append('mediaMetadata', JSON.stringify(mediaMetadata || {}));
 
@@ -145,7 +147,24 @@ export const adsLaunchApi = {
     apiRequest(`/ads-launch/templates/${id}`, {
       method: 'DELETE',
     }),
-  getMediaAssets: () => apiRequest('/ads-launch/media'),
+  getMediaAssets: (params = {}) => {
+    const query = new URLSearchParams();
+
+    if (params.brandId) {
+      query.set('brandId', params.brandId);
+    }
+
+    if (params.search) {
+      query.set('search', params.search);
+    }
+
+    if (params.includeUnassigned) {
+      query.set('includeUnassigned', 'true');
+    }
+
+    const queryString = query.toString();
+    return apiRequest(`/ads-launch/media${queryString ? `?${queryString}` : ''}`);
+  },
   createMediaAsset: (payload) =>
     apiRequest('/ads-launch/media', {
       method: 'POST',

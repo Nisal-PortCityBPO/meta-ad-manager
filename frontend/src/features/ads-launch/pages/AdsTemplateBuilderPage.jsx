@@ -1,6 +1,7 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import toast from 'react-hot-toast';
 import { LoaderCircle, Pencil, Plus, Save, Settings2, Trash2, X } from 'lucide-react';
+import { businessDataApi } from '../../dashboard/api/businessDataApi';
 import DashboardHeader from '../../dashboard/components/DashboardHeader';
 import DashboardPanel from '../../dashboard/components/DashboardPanel';
 import { adsLaunchApi } from '../api/adsLaunchApi';
@@ -13,6 +14,7 @@ const TEMPLATE_TYPES = {
 
 const campaignDefaults = {
   name: '',
+  brandId: '',
   launchLabel: '',
   countries: ['ID'],
   objective: 'OUTCOME_TRAFFIC',
@@ -57,6 +59,7 @@ const campaignStatusOptions = [
 
 const mediaDefaults = {
   name: '',
+  brandId: '',
   headline: '',
   primaryText: '',
   description: '',
@@ -276,6 +279,9 @@ const TemplateCard = ({ template, onDelete, onEdit }) => {
           <p className="truncate text-sm font-black text-slate-950">{template.name}</p>
           <div className="mt-1 flex flex-wrap items-center gap-2">
             <p className="text-xs font-semibold uppercase tracking-[0.14em] text-sky-600">{template.templateType}</p>
+            <span className="rounded-full bg-sky-50 px-2.5 py-1 text-[11px] font-black text-sky-700">
+              {template.snapshot?.brandName || 'Unassigned brand'}
+            </span>
             {isCampaignTemplate ? (
               <span className={`rounded-full px-2.5 py-1 text-[11px] font-black ${getCampaignStatusBadgeClass(campaignStatus)}`}>
                 {campaignStatus}
@@ -319,9 +325,20 @@ const AdsTemplateBuilderPage = () => {
   const [editingMediaTemplateId, setEditingMediaTemplateId] = useState('');
   const [urlParameterDraft, setUrlParameterDraft] = useState({ key: '', value: '' });
   const [savingType, setSavingType] = useState('');
+  const [brands, setBrands] = useState([]);
+  const [brandsLoading, setBrandsLoading] = useState(true);
+  const [templateBrandFilter, setTemplateBrandFilter] = useState('');
 
-  const campaignTemplates = useMemo(() => templates.filter((template) => template.templateType === TEMPLATE_TYPES.CAMPAIGN), [templates]);
-  const mediaTemplates = useMemo(() => templates.filter((template) => template.templateType === TEMPLATE_TYPES.MEDIA), [templates]);
+  const campaignTemplateBrand = brands.find((brand) => brand.id === campaignForm.brandId) || null;
+  const mediaTemplateBrand = brands.find((brand) => brand.id === mediaForm.brandId) || null;
+  const campaignTemplates = useMemo(
+    () => templates.filter((template) => template.templateType === TEMPLATE_TYPES.CAMPAIGN && (!templateBrandFilter || template.config?.brandId === templateBrandFilter)),
+    [templateBrandFilter, templates]
+  );
+  const mediaTemplates = useMemo(
+    () => templates.filter((template) => template.templateType === TEMPLATE_TYPES.MEDIA && (!templateBrandFilter || template.config?.brandId === templateBrandFilter)),
+    [templateBrandFilter, templates]
+  );
   const selectedCampaignCountries = useMemo(() => campaignForm.countries || ['ID'], [campaignForm.countries]);
   const availableCampaignCountries = useMemo(
     () => countryOptions.filter((country) => !selectedCampaignCountries.includes(country.value)),
@@ -331,6 +348,28 @@ const AdsTemplateBuilderPage = () => {
   const campaignPixelRequired = campaignForm.objective === 'OUTCOME_LEADS' || campaignForm.objective === 'OUTCOME_SALES';
   const mediaEditMode = Boolean(editingMediaTemplateId);
   const campaignEditMode = Boolean(editingCampaignTemplateId);
+
+  useEffect(() => {
+    let mounted = true;
+
+    businessDataApi
+      .getBrands()
+      .then((data) => {
+        if (mounted) {
+          setBrands(data.brands || []);
+        }
+      })
+      .catch((requestError) => toast.error(requestError.message))
+      .finally(() => {
+        if (mounted) {
+          setBrandsLoading(false);
+        }
+      });
+
+    return () => {
+      mounted = false;
+    };
+  }, []);
 
   const updateCampaignField = (field, value) => {
     setCampaignForm((current) => ({
@@ -455,6 +494,7 @@ const AdsTemplateBuilderPage = () => {
     setCampaignForm({
       ...createCampaignDefaults(),
       name: template.name || '',
+      brandId: config.brandId || '',
       launchLabel: config.launchLabel || '',
       countries,
       objective: TRAFFIC_OBJECTIVE,
@@ -477,6 +517,7 @@ const AdsTemplateBuilderPage = () => {
     setMediaForm({
       ...createMediaDefaults(),
       name: template.name || '',
+      brandId: config.brandId || '',
       headline: config.headline || '',
       primaryText: config.primaryText || '',
       description: config.description || '',
@@ -496,6 +537,11 @@ const AdsTemplateBuilderPage = () => {
       return;
     }
 
+    if (!campaignForm.brandId) {
+      toast.error('Select the ads brand for this campaign template');
+      return;
+    }
+
     setSavingType(TEMPLATE_TYPES.CAMPAIGN);
     try {
       const countries = (campaignForm.countries || [])
@@ -505,6 +551,7 @@ const AdsTemplateBuilderPage = () => {
         name: campaignForm.name.trim(),
         templateType: TEMPLATE_TYPES.CAMPAIGN,
         config: {
+          brandId: campaignForm.brandId,
           launchLabel: campaignForm.launchLabel.trim(),
           country: countries[0] || 'ID',
           countries: countries.length ? countries : ['ID'],
@@ -515,7 +562,9 @@ const AdsTemplateBuilderPage = () => {
           scheduleEnd: toSchedulePayloadValue(campaignForm.scheduleEnd),
           staticDefaults: campaignForm.staticDefaults,
         },
-        snapshot: {},
+        snapshot: {
+          brandName: campaignTemplateBrand?.name || '',
+        },
       };
       const data = campaignEditMode
         ? await adsLaunchApi.updateTemplate(editingCampaignTemplateId, payload)
@@ -536,6 +585,11 @@ const AdsTemplateBuilderPage = () => {
       return;
     }
 
+    if (!mediaForm.brandId) {
+      toast.error('Select the ads brand for this media template');
+      return;
+    }
+
     const urlParameterError = getUrlParameterValidationError(mediaForm.urlParameters);
     if (urlParameterError) {
       toast.error(urlParameterError);
@@ -548,6 +602,7 @@ const AdsTemplateBuilderPage = () => {
         name: mediaForm.name.trim(),
         templateType: TEMPLATE_TYPES.MEDIA,
         config: {
+          brandId: mediaForm.brandId,
           headline: mediaForm.headline.trim(),
           primaryText: mediaForm.primaryText.trim(),
           description: mediaForm.description.trim(),
@@ -558,6 +613,7 @@ const AdsTemplateBuilderPage = () => {
         },
         snapshot: {
           clearMedia: true,
+          brandName: mediaTemplateBrand?.name || '',
         },
       };
       const data = mediaEditMode
@@ -602,6 +658,29 @@ const AdsTemplateBuilderPage = () => {
 
       {error ? <p className="mb-4 rounded-xl bg-red-50 px-4 py-3 text-sm font-semibold text-red-700">{error}</p> : null}
 
+      <DashboardPanel title="Template filters" className="mb-4">
+        <div className="grid gap-3 sm:grid-cols-[minmax(220px,360px)_1fr] sm:items-end">
+          <div className="space-y-2">
+            <FieldLabel htmlFor="template-brand-filter">Brand</FieldLabel>
+            <select
+              id="template-brand-filter"
+              value={templateBrandFilter}
+              onChange={(event) => setTemplateBrandFilter(event.target.value)}
+              disabled={brandsLoading}
+              className="h-12 w-full rounded-xl border border-sky-100 bg-white px-4 outline-none focus:border-sky-400 focus:ring-4 focus:ring-sky-100"
+            >
+              <option value="">All brands</option>
+              {brands.map((brand) => (
+                <option key={brand.id} value={brand.id}>{brand.name}</option>
+              ))}
+            </select>
+          </div>
+          <p className="rounded-xl bg-sky-50 px-4 py-3 text-sm font-semibold text-slate-500">
+            Templates are grouped by ads brand so Dynamic Ads Launch only shows the right building blocks for the selected brand.
+          </p>
+        </div>
+      </DashboardPanel>
+
       <div className="grid gap-4 2xl:grid-cols-[minmax(0,1fr)_420px]">
         <div className="space-y-4">
           <DashboardPanel
@@ -615,6 +694,15 @@ const AdsTemplateBuilderPage = () => {
             }
           >
             <div className="grid gap-4 xl:grid-cols-3">
+              <div className="space-y-2">
+                <FieldLabel htmlFor="campaign-template-brand">Ads brand</FieldLabel>
+                <select id="campaign-template-brand" value={campaignForm.brandId} onChange={(event) => updateCampaignField('brandId', event.target.value)} disabled={brandsLoading} className="h-12 w-full rounded-xl border border-sky-100 px-4 outline-none focus:border-sky-400 focus:ring-4 focus:ring-sky-100">
+                  <option value="">Select brand</option>
+                  {brands.map((brand) => (
+                    <option key={brand.id} value={brand.id}>{brand.name}</option>
+                  ))}
+                </select>
+              </div>
               <div className="space-y-2">
                 <FieldLabel htmlFor="campaign-template-name">Template name</FieldLabel>
                 <input id="campaign-template-name" value={campaignForm.name} onChange={(event) => updateCampaignField('name', event.target.value)} className="h-12 w-full rounded-xl border border-sky-100 px-4 outline-none focus:border-sky-400 focus:ring-4 focus:ring-sky-100" placeholder="ID Traffic 21+" />
@@ -740,6 +828,12 @@ const AdsTemplateBuilderPage = () => {
             }
           >
             <div className="grid gap-4 xl:grid-cols-2">
+              <select value={mediaForm.brandId} onChange={(event) => updateMediaField('brandId', event.target.value)} disabled={brandsLoading} className="h-12 rounded-xl border border-sky-100 px-4 outline-none focus:border-sky-400 focus:ring-4 focus:ring-sky-100">
+                <option value="">Select ads brand</option>
+                {brands.map((brand) => (
+                  <option key={brand.id} value={brand.id}>{brand.name}</option>
+                ))}
+              </select>
               <input value={mediaForm.name} onChange={(event) => updateMediaField('name', event.target.value)} className="h-12 rounded-xl border border-sky-100 px-4 outline-none focus:border-sky-400 focus:ring-4 focus:ring-sky-100" placeholder="Template name" />
               <input value={mediaForm.headline} onChange={(event) => updateMediaField('headline', event.target.value)} className="h-12 rounded-xl border border-sky-100 px-4 outline-none focus:border-sky-400 focus:ring-4 focus:ring-sky-100" placeholder="Headline" />
               <textarea value={mediaForm.primaryText} onChange={(event) => updateMediaField('primaryText', event.target.value)} className="min-h-24 rounded-xl border border-sky-100 px-4 py-3 outline-none focus:border-sky-400 focus:ring-4 focus:ring-sky-100 xl:col-span-2" placeholder="Primary text" />

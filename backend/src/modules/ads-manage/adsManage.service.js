@@ -133,6 +133,25 @@ async function postToMeta({ token, path, params = {} }) {
   return payload;
 }
 
+async function getFromMeta({ token, path, params = {} }) {
+  const url = buildGraphUrl(path, {
+    access_token: token.accessToken,
+    ...params,
+  });
+
+  await waitForMetaApiPacing();
+
+  const response = await fetch(url);
+  await recordApiCall(token);
+  const payload = await response.json().catch(() => ({}));
+
+  if (!response.ok || payload.error) {
+    throw new HttpError(400, buildMetaErrorMessage(path, payload));
+  }
+
+  return payload;
+}
+
 function getBudgetMultiplier(currency) {
   return ZERO_DECIMAL_CURRENCIES.has(String(currency || '').toUpperCase()) ? 1 : 100;
 }
@@ -162,6 +181,79 @@ function mapAssetForHistory(asset) {
     type: normalizeText(asset.type),
     size: Number(asset.size || asset.buffer?.length || 0),
   };
+}
+
+function mapLaunchForHistory({ launch, media, thumbnail, accountLaunch = null, retryPayload = null }) {
+  return {
+    launchLabel: launch.launchLabel,
+    templateId: launch.templateId || '',
+    campaignTemplateId: accountLaunch?.campaignTemplateId || '',
+    mediaTemplateId: accountLaunch?.mediaTemplateId || '',
+    mediaAssetId: accountLaunch?.mediaAssetId || launch.mediaAssetId || '',
+    thumbnailAssetId: accountLaunch?.thumbnailAssetId || launch.thumbnailAssetId || '',
+    brandId: launch.brandId || '',
+    brandName: launch.brandName || '',
+    countries: launch.countries || [],
+    countryLabel: launch.countryLabel || (launch.countries || []).join(', '),
+    dailyBudget: launch.dailyBudget,
+    page: {
+      id: accountLaunch?.pageId || launch.pageId || '',
+      name: accountLaunch?.pageName || launch.pageName || '',
+    },
+    pixel: {
+      id: accountLaunch?.pixelId || launch.pixelId || '',
+      name: accountLaunch?.pixelName || launch.pixelName || '',
+    },
+    websiteEvent: launch.websiteEvent || '',
+    headline: launch.headline,
+    primaryText: launch.primaryText,
+    description: launch.description,
+    websiteUrl: launch.websiteUrl,
+    displayUrl: launch.displayUrl,
+    urlParameters: launch.urlParameters || '',
+    scheduleStart: launch.scheduleStart || '',
+    scheduleEnd: launch.scheduleEnd || '',
+    callToAction: launch.callToAction,
+    media: mapAssetForHistory(media),
+    thumbnail: mapAssetForHistory(thumbnail),
+    staticDefaults: launch.staticDefaults || {},
+    retryPayload,
+  };
+}
+
+function buildSingleAccountRetryPayload({ launch, account, accountLaunch = null }) {
+  const payload = {
+    ...launch,
+    media: null,
+    thumbnail: null,
+    selectedAdAccountIds: [account.id],
+    selectedAdAccounts: [
+      {
+        id: account.id,
+        accountId: account.accountId || String(account.id || '').replace(/^act_/, ''),
+        name: account.name || account.id,
+        currency: account.currency || '',
+      },
+    ],
+  };
+
+  if (accountLaunch) {
+    payload.accountLaunches = [
+      {
+        adAccountId: account.id,
+        campaignTemplateId: accountLaunch.campaignTemplateId || '',
+        mediaTemplateId: accountLaunch.mediaTemplateId || '',
+        mediaAssetId: accountLaunch.mediaAssetId || '',
+        thumbnailAssetId: accountLaunch.thumbnailAssetId || '',
+        pageId: accountLaunch.pageId || payload.pageId || '',
+        pageName: accountLaunch.pageName || payload.pageName || '',
+        pixelId: accountLaunch.pixelId || payload.pixelId || '',
+        pixelName: accountLaunch.pixelName || payload.pixelName || '',
+      },
+    ];
+  }
+
+  return payload;
 }
 
 function pushAction({ action, status = '', message = '', actor = null }) {
@@ -299,7 +391,7 @@ async function rememberMetaActionFailure({ campaign, action, error, actor }) {
   await campaign.save();
 }
 
-async function recordPublishedCampaign({ token, launch, account, names, campaign, adSet, creative, ad, media, thumbnail, actor }) {
+async function recordPublishedCampaign({ token, launch, account, names, campaign, adSet, creative, ad, media, thumbnail, accountLaunch = null, actor }) {
   const status = normalizeText(launch.staticDefaults?.campaignStatus) || 'PAUSED';
   const budgetLevel = normalizeText(launch.staticDefaults?.budgetLevel) === 'CAMPAIGN' ? 'Campaign daily' : 'Ad set daily';
   const campaignId = normalizeText(campaign?.id);
@@ -352,36 +444,13 @@ async function recordPublishedCampaign({ token, launch, account, names, campaign
           cpm: '0',
         },
         specialAdCategories: getSpecialAdCategories(launch.staticDefaults?.specialAdCategories),
-        launch: {
-          launchLabel: launch.launchLabel,
-          templateId: launch.templateId || '',
-          brandId: launch.brandId || '',
-          brandName: launch.brandName || '',
-          countries: launch.countries || [],
-          countryLabel: launch.countryLabel || (launch.countries || []).join(', '),
-          dailyBudget: launch.dailyBudget,
-          page: {
-            id: launch.pageId,
-            name: launch.pageName || '',
-          },
-          pixel: {
-            id: launch.pixelId || '',
-            name: launch.pixelName || '',
-          },
-          websiteEvent: launch.websiteEvent || '',
-          headline: launch.headline,
-          primaryText: launch.primaryText,
-          description: launch.description,
-          websiteUrl: launch.websiteUrl,
-          displayUrl: launch.displayUrl,
-          urlParameters: launch.urlParameters || '',
-          scheduleStart: launch.scheduleStart || '',
-          scheduleEnd: launch.scheduleEnd || '',
-          callToAction: launch.callToAction,
-          media: mapAssetForHistory(media),
-          thumbnail: mapAssetForHistory(thumbnail),
-          staticDefaults: launch.staticDefaults || {},
-        },
+        launch: mapLaunchForHistory({
+          launch,
+          media,
+          thumbnail,
+          accountLaunch,
+          retryPayload: null,
+        }),
         source: 'ADS_LAUNCH',
         duplicatedFromCampaignId: '',
         deletedAt: null,
@@ -405,6 +474,96 @@ async function recordPublishedCampaign({ token, launch, account, names, campaign
       setDefaultsOnInsert: true,
     }
   );
+
+  return history.toSafeObject();
+}
+
+async function recordFailedLaunch({ token, launch, account, names = {}, campaign = null, adSet = null, creative = null, ad = null, media = null, thumbnail = null, accountLaunch = null, error, actor, req }) {
+  const campaignId = normalizeText(campaign?.id) || `failed_${token.id}_${account.id}_${Date.now()}`;
+  const failedName = names.campaignName || launch.launchLabel || `Failed launch | ${account.name || account.id}`;
+  const retryPayload = buildSingleAccountRetryPayload({
+    launch,
+    account,
+    accountLaunch,
+  });
+  const now = new Date();
+
+  const history = await ManagedCampaign.findOneAndUpdate(
+    {
+      campaignId,
+    },
+    {
+      $set: {
+        tokenId: token.id,
+        tokenLabel: token.label || '',
+        campaignId,
+        name: failedName,
+        status: 'FAILED',
+        effectiveStatus: 'FAILED',
+        objective: launch.objective,
+        buyingType: launch.staticDefaults?.buyingType || 'AUCTION',
+        adAccount: {
+          id: account.id,
+          accountId: account.accountId || String(account.id || '').replace(/^act_/, ''),
+          name: account.name || account.id,
+          currency: account.currency || '',
+        },
+        adSetId: normalizeText(adSet?.id),
+        adSetName: names.adSetName || '',
+        creativeId: normalizeText(creative?.id),
+        creativeName: names.adName || '',
+        adId: normalizeText(ad?.id),
+        adName: names.adName || '',
+        budget: {
+          type: normalizeText(launch.staticDefaults?.budgetLevel) === 'CAMPAIGN' ? 'Campaign daily' : 'Ad set daily',
+          amount: toStoredBudgetAmount(launch.dailyBudget, account.currency),
+          currency: account.currency || '',
+        },
+        specialAdCategories: getSpecialAdCategories(launch.staticDefaults?.specialAdCategories),
+        launch: mapLaunchForHistory({
+          launch,
+          media,
+          thumbnail,
+          accountLaunch,
+          retryPayload,
+        }),
+        source: 'ADS_LAUNCH_FAILED',
+        deletedAt: null,
+        lastActionAt: now,
+        lastMetaError: error?.message || 'Publish failed',
+        createdBy: actor?._id || null,
+        updatedBy: actor?._id || null,
+      },
+      $push: {
+        actionHistory: pushAction({
+          action: 'PUBLISH_FAILED',
+          status: 'FAILED',
+          message: error?.message || 'Publish failed',
+          actor,
+        }),
+      },
+    },
+    {
+      new: true,
+      upsert: true,
+      setDefaultsOnInsert: true,
+    }
+  );
+
+  await writeActivityLog({
+    user: actor,
+    action: 'ADS_LAUNCH_PUBLISH_FAILED_SAVED',
+    entity: 'ManagedCampaign',
+    entityId: history._id.toString(),
+    metadata: {
+      campaignId,
+      adAccountId: account.id,
+      adAccountName: account.name || account.id,
+      launchLabel: launch.launchLabel,
+      error: error?.message || 'Publish failed',
+    },
+    req,
+  });
 
   return history.toSafeObject();
 }
@@ -701,10 +860,172 @@ async function deleteCampaign({ tokenId, campaignId, actor, req }) {
   }
 }
 
+async function syncCampaignDetails({ tokenId, campaignId, actor, req }) {
+  const campaign = await getCampaignForAction({ tokenId, campaignId });
+
+  if (campaign.campaignId.startsWith('failed_')) {
+    throw new HttpError(400, 'This failed launch has no Meta campaign id to fetch yet');
+  }
+
+  const token = await tokenService.getActiveTokenWithSecret(tokenId);
+
+  try {
+    const payload = await getFromMeta({
+      token,
+      path: campaign.campaignId,
+      params: {
+        fields:
+          'id,name,status,effective_status,objective,buying_type,daily_budget,lifetime_budget,budget_remaining,spend_cap,insights.date_preset(maximum).limit(1){spend,impressions,reach,clicks,ctr,cpc,cpm}',
+      },
+    });
+    const insights = Array.isArray(payload.insights?.data) ? payload.insights.data[0] || {} : {};
+    const budgetAmount = payload.daily_budget || payload.lifetime_budget || campaign.budget?.amount || '';
+
+    campaign.name = normalizeText(payload.name) || campaign.name;
+    campaign.status = normalizeText(payload.status) || campaign.status;
+    campaign.effectiveStatus = normalizeText(payload.effective_status) || campaign.effectiveStatus;
+    campaign.objective = normalizeText(payload.objective) || campaign.objective;
+    campaign.buyingType = normalizeText(payload.buying_type) || campaign.buyingType;
+    campaign.budget = {
+      ...(campaign.budget || {}),
+      type: payload.lifetime_budget ? 'Campaign lifetime' : campaign.budget?.type || 'Daily',
+      amount: normalizeText(budgetAmount),
+      currency: campaign.budget?.currency || campaign.adAccount?.currency || '',
+    };
+    campaign.budgetRemaining = normalizeText(payload.budget_remaining);
+    campaign.spendCap = normalizeText(payload.spend_cap);
+    campaign.insights = {
+      spend: normalizeText(insights.spend) || '0',
+      impressions: normalizeText(insights.impressions) || '0',
+      reach: normalizeText(insights.reach) || '0',
+      clicks: normalizeText(insights.clicks) || '0',
+      ctr: normalizeText(insights.ctr) || '0',
+      cpc: normalizeText(insights.cpc) || '0',
+      cpm: normalizeText(insights.cpm) || '0',
+    };
+    campaign.updatedBy = actor?._id || null;
+    campaign.lastActionAt = new Date();
+    campaign.lastMetaError = '';
+    campaign.actionHistory.push(
+      pushAction({
+        action: 'META_DETAILS_FETCHED',
+        status: campaign.status,
+        message: 'Fetched latest campaign status and basic insights from Meta',
+        actor,
+      })
+    );
+    await campaign.save();
+
+    await writeActivityLog({
+      user: actor,
+      action: 'ADS_MANAGE_CAMPAIGN_SYNCED',
+      entity: 'Campaign',
+      entityId: campaign.campaignId,
+      metadata: {
+        status: campaign.status,
+        effectiveStatus: campaign.effectiveStatus,
+      },
+      req,
+    });
+
+    return {
+      message: 'Campaign details fetched from Meta',
+      campaign: campaign.toSafeObject(),
+      meta: payload,
+    };
+  } catch (error) {
+    await rememberMetaActionFailure({
+      campaign,
+      action: 'META_DETAILS_FETCH_FAILED',
+      error,
+      actor,
+    });
+    throw error;
+  }
+}
+
+async function retryFailedLaunch({ tokenId, campaignId, actor, req, tokenType = null }) {
+  const campaign = await getCampaignForAction({ tokenId, campaignId });
+
+  if (campaign.status !== 'FAILED') {
+    throw new HttpError(400, 'Only failed launch records can be retried');
+  }
+
+  const retryPayload = campaign.launch?.retryPayload;
+  if (!retryPayload || typeof retryPayload !== 'object') {
+    throw new HttpError(400, 'This failed launch does not have enough saved data to retry');
+  }
+
+  campaign.actionHistory.push(
+    pushAction({
+      action: 'RETRY_REQUESTED',
+      status: 'FAILED',
+      message: 'Retry requested from Ads Manage',
+      actor,
+    })
+  );
+  campaign.lastActionAt = new Date();
+  await campaign.save();
+
+  try {
+    const adsLaunchService = require('../ads-launch/adsLaunch.service');
+    const result = await adsLaunchService.publishLaunch({
+      payload: retryPayload,
+      actor,
+      req,
+      tokenType,
+    });
+
+    campaign.status = 'RETRIED';
+    campaign.effectiveStatus = 'RETRIED';
+    campaign.lastMetaError = '';
+    campaign.updatedBy = actor?._id || null;
+    campaign.lastActionAt = new Date();
+    campaign.actionHistory.push(
+      pushAction({
+        action: 'RETRY_SUCCEEDED',
+        status: 'RETRIED',
+        message: result.message || 'Retry completed',
+        actor,
+      })
+    );
+    await campaign.save();
+
+    await writeActivityLog({
+      user: actor,
+      action: 'ADS_MANAGE_FAILED_LAUNCH_RETRIED',
+      entity: 'ManagedCampaign',
+      entityId: campaign._id.toString(),
+      metadata: {
+        campaignId: campaign.campaignId,
+        resultSummary: result.summary,
+      },
+      req,
+    });
+
+    return {
+      message: result.message || 'Retry completed',
+      campaign: campaign.toSafeObject(),
+      result,
+    };
+  } catch (error) {
+    await rememberMetaActionFailure({
+      campaign,
+      action: 'RETRY_FAILED',
+      error,
+      actor,
+    });
+    throw error;
+  }
+}
+
 module.exports = {
   deleteCampaign,
   duplicateCampaign,
   listCampaigns,
+  recordFailedLaunch,
   recordPublishedCampaign,
+  retryFailedLaunch,
+  syncCampaignDetails,
   updateCampaignStatus,
 };

@@ -38,13 +38,15 @@ export const PublishProgressProvider = ({ children }) => {
   };
 
   const completePublish = (result) => {
+    const failedCount = Number(result?.summary?.failed || result?.failed?.length || 0);
     setLatestResult(result);
+    setLatestError(failedCount > 0 ? `${failedCount} ad account${failedCount === 1 ? '' : 's'} failed during publish` : '');
     setIsPublishing(false);
     setShowStartPopup(false);
     setProgress((current) => ({
       ...(current || {}),
       type: 'progress',
-      status: 'completed',
+      status: failedCount > 0 ? 'failed' : 'completed',
       step: 'complete',
       message: result.message,
       progress: {

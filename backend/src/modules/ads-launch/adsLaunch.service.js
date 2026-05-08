@@ -1179,10 +1179,32 @@ async function getMediaAssetDocForActor(mediaId, actor) {
   return mediaAsset;
 }
 
-async function listMediaAssets({ actor }) {
-  const mediaAssets = await AdsLaunchMedia.find({
+async function listMediaAssets({ actor, brandId = '', search = '', includeUnassigned = false }) {
+  const query = {
     ...mediaLibraryAccessFilter(actor),
-  })
+  };
+  const normalizedBrandId = normalizeText(brandId);
+  const normalizedSearch = normalizeText(search);
+
+  if (normalizedBrandId) {
+    query.brandId = includeUnassigned
+      ? {
+          $in: [normalizedBrandId, ''],
+        }
+      : normalizedBrandId;
+  }
+
+  if (normalizedSearch) {
+    const escapedSearch = normalizedSearch.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const searchRegex = new RegExp(escapedSearch, 'i');
+    query.$or = [
+      { name: searchRegex },
+      { brandName: searchRegex },
+      { 'media.name': searchRegex },
+    ];
+  }
+
+  const mediaAssets = await AdsLaunchMedia.find(query)
     .populate('createdBy', 'name email')
     .sort({ updatedAt: -1 });
 
@@ -1191,6 +1213,8 @@ async function listMediaAssets({ actor }) {
 
 async function createMediaAsset({
   name,
+  brandId,
+  brandName,
   media,
   uploadedMedia = null,
   uploadedThumbnail = null,
@@ -1221,6 +1245,8 @@ async function createMediaAsset({
   const mediaAsset = new AdsLaunchMedia({
     name: normalizedName,
     mediaType,
+    brandId: normalizeText(brandId),
+    brandName: normalizeText(brandName),
     createdBy: actor._id,
     updatedBy: actor._id,
   });
@@ -1258,6 +1284,8 @@ async function createMediaAsset({
     entityId: mediaAsset._id.toString(),
     metadata: {
       name: mediaAsset.name,
+      brandId: mediaAsset.brandId,
+      brandName: mediaAsset.brandName,
       mediaType: mediaAsset.mediaType,
       width: mediaAsset.media?.width || 0,
       height: mediaAsset.media?.height || 0,
@@ -1271,6 +1299,8 @@ async function createMediaAsset({
 
 async function completeChunkedMediaAsset({
   name,
+  brandId,
+  brandName,
   uploadId,
   mediaOriginalName,
   mediaMimeType,
@@ -1296,6 +1326,8 @@ async function completeChunkedMediaAsset({
 
     return await createMediaAsset({
       name,
+      brandId,
+      brandName,
       uploadedMedia,
       mediaMetadata,
       actor,
@@ -2767,10 +2799,18 @@ async function publishLaunch({ payload, actor, req, onProgress = null, tokenType
       adAccountName: selectedAccount.name,
       accountLabel,
     };
+    const accountTemplate = accountLaunchMap.get(adAccountId);
+    let accountResolved = null;
+    let effectiveLaunch = launch;
+    let creativeAssets = baseCreativeAssets;
+    let names = {};
+    let campaign = null;
+    let adSet = null;
+    let creative = null;
+    let ad = null;
 
     try {
-      const accountTemplate = accountLaunchMap.get(adAccountId);
-      const accountResolved = usesAccountTemplates
+      accountResolved = usesAccountTemplates
         ? await resolveAccountLaunchFromTemplates({
             baseLaunch: launch,
             accountLaunch: accountTemplate,
@@ -2783,8 +2823,8 @@ async function publishLaunch({ payload, actor, req, onProgress = null, tokenType
             campaignTemplate: null,
             mediaTemplate: null,
           };
-      const effectiveLaunch = accountResolved.effectiveLaunch;
-      const creativeAssets = accountResolved.creativeAssets;
+      effectiveLaunch = accountResolved.effectiveLaunch;
+      creativeAssets = accountResolved.creativeAssets;
 
       ensureCreativeAssetsArePublishable(creativeAssets);
 
@@ -2792,7 +2832,7 @@ async function publishLaunch({ payload, actor, req, onProgress = null, tokenType
         throw new HttpError(400, 'Video publishing requires a thumbnail image');
       }
 
-      const names = buildNames({
+      names = buildNames({
         launchLabel: effectiveLaunch.launchLabel,
         countryLabel: effectiveLaunch.countryLabel || effectiveLaunch.countries.join(', '),
         adAccountName: selectedAccount.name,
@@ -2807,7 +2847,7 @@ async function publishLaunch({ payload, actor, req, onProgress = null, tokenType
         message: `${accountLabel}: starting`,
       });
 
-      const campaign = await runPublishStep('Campaign creation', () =>
+      campaign = await runPublishStep('Campaign creation', () =>
         createCampaign({
           token,
           adAccountId,
@@ -2822,7 +2862,7 @@ async function publishLaunch({ payload, actor, req, onProgress = null, tokenType
         'campaign'
       );
 
-      const adSet = await runPublishStep('Ad set creation', () =>
+      adSet = await runPublishStep('Ad set creation', () =>
         createAdSet({
           token,
           adAccountId,
@@ -2844,7 +2884,7 @@ async function publishLaunch({ payload, actor, req, onProgress = null, tokenType
         'ad-set'
       );
 
-      const creative = await createAdCreative({
+      creative = await createAdCreative({
         token,
         adAccountId,
         name: names.adName,
@@ -2863,7 +2903,7 @@ async function publishLaunch({ payload, actor, req, onProgress = null, tokenType
         progressContext,
       });
 
-      const ad = await runPublishStep('Ad creation', () =>
+      ad = await runPublishStep('Ad creation', () =>
         createAd({
           token,
           adAccountId,
@@ -2892,6 +2932,7 @@ async function publishLaunch({ payload, actor, req, onProgress = null, tokenType
           ad,
           media: creativeAssets.media,
           thumbnail: creativeAssets.thumbnail,
+          accountLaunch: accountTemplate,
           actor,
         });
       } catch (error) {
@@ -2933,6 +2974,34 @@ async function publishLaunch({ payload, actor, req, onProgress = null, tokenType
         adAccountName: selectedAccount.name,
         message: error.message,
       });
+      try {
+        const failureRecord = await adsManageService.recordFailedLaunch({
+          token,
+          launch: effectiveLaunch || launch,
+          account: selectedAccount,
+          names,
+          campaign,
+          adSet,
+          creative,
+          ad,
+          media: creativeAssets?.media || null,
+          thumbnail: creativeAssets?.thumbnail || null,
+          accountLaunch: accountTemplate,
+          error,
+          actor,
+          req,
+        });
+        failed[failed.length - 1].historyRecordId = failureRecord?.recordId || null;
+      } catch (historyError) {
+        failed[failed.length - 1].historyError = historyError.message;
+        progress.info({
+          ...progressContext,
+          step: 'history',
+          status: 'failed',
+          error: historyError.message,
+          message: `${accountLabel}: failed publish history save failed`,
+        });
+      }
       progress.info({
         ...progressContext,
         step: 'account',

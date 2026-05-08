@@ -48,9 +48,34 @@ const deleteCampaign = asyncHandler(async (req, res) => {
   res.json(result);
 });
 
+const syncCampaignDetails = asyncHandler(async (req, res) => {
+  const result = await adsManageService.syncCampaignDetails({
+    tokenId: req.body.tokenId,
+    campaignId: req.params.campaignId,
+    actor: req.user,
+    req,
+  });
+
+  res.json(result);
+});
+
+const retryFailedLaunch = asyncHandler(async (req, res) => {
+  const result = await adsManageService.retryFailedLaunch({
+    tokenId: req.body.tokenId,
+    campaignId: req.params.campaignId,
+    tokenType: req.body.tokenType,
+    actor: req.user,
+    req,
+  });
+
+  res.json(result);
+});
+
 module.exports = {
   deleteCampaign,
   duplicateCampaign,
   listCampaigns,
+  retryFailedLaunch,
+  syncCampaignDetails,
   updateCampaignStatus,
 };

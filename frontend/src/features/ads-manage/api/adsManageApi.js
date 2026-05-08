@@ -11,6 +11,16 @@ export const adsManageApi = {
       method: 'POST',
       body: payload,
     }),
+  syncCampaignDetails: (campaignId, payload) =>
+    apiRequest(`/ads-manage/campaigns/${campaignId}/sync`, {
+      method: 'POST',
+      body: payload,
+    }),
+  retryFailedLaunch: (campaignId, payload) =>
+    apiRequest(`/ads-manage/campaigns/${campaignId}/retry`, {
+      method: 'POST',
+      body: payload,
+    }),
   duplicateCampaign: (campaignId, payload) =>
     apiRequest(`/ads-manage/campaigns/${campaignId}/duplicate`, {
       method: 'POST',

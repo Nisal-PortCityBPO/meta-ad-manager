@@ -140,6 +140,26 @@ const launchDetailsSchema = new mongoose.Schema(
       default: '',
       trim: true,
     },
+    campaignTemplateId: {
+      type: String,
+      default: '',
+      trim: true,
+    },
+    mediaTemplateId: {
+      type: String,
+      default: '',
+      trim: true,
+    },
+    mediaAssetId: {
+      type: String,
+      default: '',
+      trim: true,
+    },
+    thumbnailAssetId: {
+      type: String,
+      default: '',
+      trim: true,
+    },
     brandId: {
       type: String,
       default: '',
@@ -233,6 +253,10 @@ const launchDetailsSchema = new mongoose.Schema(
     staticDefaults: {
       type: mongoose.Schema.Types.Mixed,
       default: () => ({}),
+    },
+    retryPayload: {
+      type: mongoose.Schema.Types.Mixed,
+      default: null,
     },
   },
   {
@@ -454,6 +478,16 @@ managedCampaignSchema.methods.toSafeObject = function toSafeObject() {
     deletedAt: this.deletedAt,
     lastActionAt: this.lastActionAt,
     lastMetaError: this.lastMetaError,
+    actionHistory: Array.isArray(this.actionHistory)
+      ? this.actionHistory
+          .slice(-10)
+          .map((item) => ({
+            action: item.action,
+            status: item.status,
+            message: item.message,
+            at: item.at,
+          }))
+      : [],
     createdTime: this.createdAt,
     updatedTime: this.updatedAt,
     createdAt: this.createdAt,

@@ -61,6 +61,17 @@ const adsLaunchMediaSchema = new mongoose.Schema(
       required: true,
       trim: true,
     },
+    brandId: {
+      type: String,
+      default: '',
+      trim: true,
+      index: true,
+    },
+    brandName: {
+      type: String,
+      default: '',
+      trim: true,
+    },
     media: {
       type: adsMediaAssetSchema,
       required: true,
@@ -85,6 +96,8 @@ const adsLaunchMediaSchema = new mongoose.Schema(
   }
 );
 
+adsLaunchMediaSchema.index({ brandId: 1, updatedAt: -1 });
+
 adsLaunchMediaSchema.methods.toSafeObject = function toSafeObject() {
   const id = this._id.toString();
   const mapAsset = (asset, assetKind) => {
@@ -107,6 +120,8 @@ adsLaunchMediaSchema.methods.toSafeObject = function toSafeObject() {
     id,
     name: this.name,
     mediaType: this.mediaType,
+    brandId: this.brandId || '',
+    brandName: this.brandName || '',
     media: mapAsset(this.media, 'file'),
     thumbnail: mapAsset(this.thumbnail, 'thumbnail'),
     createdBy: this.createdBy
