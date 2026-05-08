@@ -33,6 +33,30 @@ const getMediaAssets = asyncHandler(async (req, res) => {
   res.json({ mediaAssets });
 });
 
+const getMediaFolders = asyncHandler(async (req, res) => {
+  const mediaFolders = await adsLaunchService.listMediaFolders({
+    actor: req.user,
+  });
+
+  res.json({ mediaFolders });
+});
+
+const createMediaFolder = asyncHandler(async (req, res) => {
+  const mediaFolder = await adsLaunchService.createMediaFolder({
+    name: req.body.name,
+    parentId: req.body.parentId,
+    brandId: req.body.brandId,
+    brandName: req.body.brandName,
+    actor: req.user,
+    req,
+  });
+
+  res.status(201).json({
+    message: 'Folder created successfully',
+    mediaFolder,
+  });
+});
+
 const getMediaAsset = asyncHandler(async (req, res) => {
   const asset = await adsLaunchService.getMediaAssetForActor({
     mediaId: req.params.id,
@@ -53,6 +77,7 @@ const createMediaAsset = asyncHandler(async (req, res) => {
     name: req.body.name,
     brandId: req.body.brandId,
     brandName: req.body.brandName,
+    folderId: req.body.folderId,
     media: req.body.media,
     thumbnail: req.body.thumbnail,
     uploadedMedia,
@@ -86,6 +111,7 @@ const completeChunkedMediaAsset = asyncHandler(async (req, res) => {
     name: req.body.name,
     brandId: req.body.brandId,
     brandName: req.body.brandName,
+    folderId: req.body.folderId,
     uploadId: req.body.uploadId,
     mediaOriginalName: req.body.mediaOriginalName,
     mediaMimeType: req.body.mediaMimeType,
@@ -232,11 +258,13 @@ const publishLaunchStream = async (req, res, next) => {
 module.exports = {
   completeChunkedMediaAsset,
   createMediaAsset,
+  createMediaFolder,
   createTemplate,
   deleteMediaAsset,
   deleteTemplate,
   getMediaAsset,
   getMediaAssets,
+  getMediaFolders,
   getTemplates,
   getTemplateAsset,
   publishLaunch,

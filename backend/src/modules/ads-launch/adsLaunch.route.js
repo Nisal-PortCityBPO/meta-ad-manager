@@ -91,6 +91,8 @@ const handleMediaChunkUpload = (req, res, next) => {
 
 router.use(authenticate, authorize(USER_ROLES.SUPER_ADMIN, USER_ROLES.ADMIN));
 
+router.get('/media-folders', adsLaunchController.getMediaFolders);
+router.post('/media-folders', adsLaunchController.createMediaFolder);
 router.get('/media', adsLaunchController.getMediaAssets);
 router.post('/media', handleMediaUpload, adsLaunchController.createMediaAsset);
 router.post('/media/chunk', handleMediaChunkUpload, adsLaunchController.uploadMediaChunk);

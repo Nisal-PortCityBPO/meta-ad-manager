@@ -1,11 +1,27 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import toast from 'react-hot-toast';
-import { ImageIcon, LoaderCircle, Plus, RefreshCw, Trash2, Upload, Video, X } from 'lucide-react';
+import {
+  ChevronDown,
+  ChevronRight,
+  FileUp,
+  Folder,
+  FolderOpen,
+  FolderPlus,
+  HardDrive,
+  ImageIcon,
+  LoaderCircle,
+  RefreshCw,
+  Search,
+  Trash2,
+  UploadCloud,
+  Video,
+} from 'lucide-react';
 import { businessDataApi } from '../../dashboard/api/businessDataApi';
 import DashboardHeader from '../../dashboard/components/DashboardHeader';
 import DashboardPanel from '../../dashboard/components/DashboardPanel';
 import { adsLaunchApi } from '../api/adsLaunchApi';
 
+const ROOT_FOLDER_ID = 'root';
 const MIN_DIMENSION = 600;
 const MIN_ASPECT_RATIO = 0.56;
 const MAX_ASPECT_RATIO = 1.92;
@@ -34,6 +50,8 @@ const getSupportedMimeType = (file) => {
 
   return MIME_TYPE_BY_EXTENSION[getFileExtension(file?.name)] || reportedType;
 };
+
+const getMediaDisplayName = (fileName = '') => fileName.replace(/\.[^.]+$/, '') || 'Untitled media';
 
 const formatFileSize = (bytes = 0) => {
   if (!bytes) {
@@ -137,80 +155,183 @@ const readVideoMetadata = (file) =>
     video.src = url;
   });
 
-const MediaCard = ({ brands, brandsLoading, mediaAsset, onBrandChange, onDelete, updatingBrand }) => {
+const buildFolderGroups = (folders) =>
+  folders.reduce((groups, folder) => {
+    const parentKey = folder.parentId || ROOT_FOLDER_ID;
+    const nextGroup = groups.get(parentKey) || [];
+    nextGroup.push(folder);
+    groups.set(parentKey, nextGroup);
+    return groups;
+  }, new Map());
+
+const buildFolderPath = ({ folderId, foldersById }) => {
+  if (!folderId) {
+    return [{ id: null, name: 'Saved media' }];
+  }
+
+  const path = [];
+  let current = foldersById.get(folderId);
+
+  while (current) {
+    path.unshift(current);
+    current = current.parentId ? foldersById.get(current.parentId) : null;
+  }
+
+  return [{ id: null, name: 'Saved media' }, ...path];
+};
+
+const FolderTreeNode = ({
+  folder,
+  foldersByParent,
+  expandedFolderIds,
+  selectedFolderId,
+  onSelectFolder,
+  onToggleFolder,
+  level = 0,
+}) => {
+  const children = foldersByParent.get(folder.id) || [];
+  const isExpanded = expandedFolderIds.has(folder.id);
+  const isSelected = selectedFolderId === folder.id;
+
+  return (
+    <div>
+      <div
+        className={`group flex h-9 cursor-pointer items-center gap-1 rounded-lg px-2 text-sm transition ${
+          isSelected ? 'bg-sky-100 text-sky-800' : 'text-slate-700 hover:bg-sky-50'
+        }`}
+        style={{ paddingLeft: `${Math.max(level * 14, 8)}px` }}
+        onClick={() => onSelectFolder(folder.id)}
+      >
+        <button
+          type="button"
+          onClick={(event) => {
+            event.stopPropagation();
+            onToggleFolder(folder.id);
+          }}
+          className="flex h-6 w-6 items-center justify-center rounded-md text-slate-500 transition hover:bg-white"
+          title={isExpanded ? 'Collapse folder' : 'Expand folder'}
+        >
+          {children.length ? (
+            isExpanded ? <ChevronDown size={15} /> : <ChevronRight size={15} />
+          ) : (
+            <span className="h-4 w-4" />
+          )}
+        </button>
+        {isExpanded ? <FolderOpen size={17} className="text-sky-600" /> : <Folder size={17} className="text-sky-600" />}
+        <span className="min-w-0 flex-1 truncate font-bold">{folder.name}</span>
+      </div>
+      {isExpanded
+        ? children.map((childFolder) => (
+            <FolderTreeNode
+              key={childFolder.id}
+              folder={childFolder}
+              foldersByParent={foldersByParent}
+              expandedFolderIds={expandedFolderIds}
+              selectedFolderId={selectedFolderId}
+              onSelectFolder={onSelectFolder}
+              onToggleFolder={onToggleFolder}
+              level={level + 1}
+            />
+          ))
+        : null}
+    </div>
+  );
+};
+
+const FolderTile = ({ folder, folderCount, mediaCount, onOpen }) => (
+  <button
+    type="button"
+    onClick={() => onOpen(folder.id)}
+    className="group flex min-h-28 flex-col items-start rounded-2xl border border-sky-100 bg-white p-4 text-left shadow-sm shadow-sky-100/70 transition hover:-translate-y-0.5 hover:border-sky-300 hover:shadow-md hover:shadow-sky-100"
+  >
+    <span className="flex h-12 w-14 items-center justify-center rounded-2xl bg-amber-50 text-amber-600 transition group-hover:bg-amber-100">
+      <Folder size={28} fill="currentColor" strokeWidth={1.4} />
+    </span>
+    <span className="mt-3 w-full truncate text-sm font-black text-slate-950">{folder.name}</span>
+    <span className="mt-1 text-xs font-semibold text-slate-400">
+      {folderCount} folders | {mediaCount} media
+    </span>
+  </button>
+);
+
+const MediaTile = ({ brands, brandsLoading, mediaAsset, onBrandChange, onDelete, updatingBrand }) => {
   const isVideo = mediaAsset.mediaType === 'VIDEO';
   const media = mediaAsset.media || {};
   const brandLabel = mediaAsset.brandName || 'Unassigned brand';
+  const folderLocked = Boolean(mediaAsset.folderId);
 
   return (
-    <div className="overflow-hidden rounded-3xl border border-sky-100 bg-white shadow-sm shadow-sky-100/70">
-      <div className="relative bg-slate-950">
+    <div className="group overflow-hidden rounded-2xl border border-sky-100 bg-white shadow-sm shadow-sky-100/70 transition hover:-translate-y-0.5 hover:shadow-md hover:shadow-sky-100">
+      <div className="relative flex h-40 items-center justify-center bg-slate-950">
         {isVideo ? (
-          <video src={media.url} controls className="h-56 w-full object-contain" />
+          <video src={media.url} controls className="h-full w-full object-contain" />
         ) : (
-          <img src={media.url} alt={mediaAsset.name} className="h-56 w-full object-cover" />
+          <img src={media.url} alt={mediaAsset.name} className="h-full w-full object-cover" />
         )}
-        <span className={`absolute left-3 top-3 inline-flex items-center gap-2 rounded-full px-3 py-1 text-xs font-black ${isVideo ? 'bg-amber-50 text-amber-700' : 'bg-sky-50 text-sky-700'}`}>
-          {isVideo ? <Video size={14} strokeWidth={2.4} /> : <ImageIcon size={14} strokeWidth={2.4} />}
+        <span className={`absolute left-3 top-3 inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-[11px] font-black ${isVideo ? 'bg-amber-50 text-amber-700' : 'bg-sky-50 text-sky-700'}`}>
+          {isVideo ? <Video size={13} /> : <ImageIcon size={13} />}
           {isVideo ? 'Video' : 'Image'}
         </span>
+        <button
+          type="button"
+          onClick={() => onDelete(mediaAsset)}
+          className="absolute right-3 top-3 flex h-8 w-8 items-center justify-center rounded-xl bg-white/95 text-red-600 opacity-0 shadow-sm transition hover:bg-red-50 group-hover:opacity-100"
+          title="Delete media"
+        >
+          <Trash2 size={15} strokeWidth={2.3} />
+        </button>
       </div>
       <div className="p-4">
-        <div className="flex items-start justify-between gap-3">
-          <div className="min-w-0">
-            <p className="truncate text-sm font-black text-slate-950">{mediaAsset.name}</p>
-            <p className="mt-1 truncate text-xs font-semibold text-slate-400">{media.name}</p>
-            <p className={`mt-2 inline-flex rounded-full px-3 py-1 text-[11px] font-black uppercase tracking-[0.12em] ${mediaAsset.brandId ? 'bg-sky-50 text-sky-700' : 'bg-amber-50 text-amber-700'}`}>
-              {brandLabel}
-            </p>
+        <p className="truncate text-sm font-black text-slate-950">{mediaAsset.name}</p>
+        <p className="mt-1 truncate text-xs font-semibold text-slate-400">{media.name}</p>
+        <p className={`mt-2 inline-flex rounded-full px-3 py-1 text-[11px] font-black uppercase tracking-[0.12em] ${mediaAsset.brandId ? 'bg-sky-50 text-sky-700' : 'bg-amber-50 text-amber-700'}`}>
+          {brandLabel}
+        </p>
+
+        {folderLocked ? (
+          <div className="mt-3 rounded-2xl border border-sky-100 bg-sky-50/50 p-3">
+            <p className="text-[11px] font-black uppercase tracking-[0.14em] text-sky-700">Folder brand</p>
+            <p className="mt-2 text-sm font-bold text-slate-700">{brandLabel}</p>
           </div>
-          <button
-            type="button"
-            onClick={() => onDelete(mediaAsset)}
-            className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-red-100 text-red-600 transition hover:bg-red-50"
-            title="Delete media"
-          >
-            <Trash2 size={16} strokeWidth={2.3} />
-          </button>
-        </div>
-        <div className="mt-3 rounded-2xl border border-sky-100 bg-sky-50/50 p-3">
-          <label htmlFor={`media-brand-${mediaAsset.id}`} className="text-[11px] font-black uppercase tracking-[0.14em] text-sky-700">
-            Quick brand
-          </label>
-          <div className="mt-2 flex items-center gap-2">
-            <select
-              id={`media-brand-${mediaAsset.id}`}
-              value={mediaAsset.brandId || ''}
-              onChange={(event) => onBrandChange(mediaAsset, event.target.value)}
-              disabled={brandsLoading || updatingBrand}
-              className="h-10 min-w-0 flex-1 rounded-xl border border-sky-100 bg-white px-3 text-sm font-bold text-slate-700 outline-none transition focus:border-sky-400 focus:ring-4 focus:ring-sky-100 disabled:opacity-60"
-            >
-              <option value="">Unassigned</option>
-              {brands.map((brand) => (
-                <option key={brand.id} value={brand.id}>{brand.name}</option>
-              ))}
-            </select>
-            {updatingBrand ? <LoaderCircle size={18} className="shrink-0 animate-spin text-sky-600" /> : null}
+        ) : (
+          <div className="mt-3 rounded-2xl border border-sky-100 bg-sky-50/50 p-3">
+            <label htmlFor={`media-brand-${mediaAsset.id}`} className="text-[11px] font-black uppercase tracking-[0.14em] text-sky-700">
+              Quick brand
+            </label>
+            <div className="mt-2 flex items-center gap-2">
+              <select
+                id={`media-brand-${mediaAsset.id}`}
+                value={mediaAsset.brandId || ''}
+                onChange={(event) => onBrandChange(mediaAsset, event.target.value)}
+                disabled={brandsLoading || updatingBrand}
+                className="h-10 min-w-0 flex-1 rounded-xl border border-sky-100 bg-white px-3 text-sm font-bold text-slate-700 outline-none transition focus:border-sky-400 focus:ring-4 focus:ring-sky-100 disabled:opacity-60"
+              >
+                <option value="">Unassigned</option>
+                {brands.map((brand) => (
+                  <option key={brand.id} value={brand.id}>{brand.name}</option>
+                ))}
+              </select>
+              {updatingBrand ? <LoaderCircle size={18} className="shrink-0 animate-spin text-sky-600" /> : null}
+            </div>
           </div>
-        </div>
+        )}
+
         <div className="mt-3 grid grid-cols-3 gap-2 text-center">
           <div className="rounded-xl bg-sky-50 px-2 py-2">
-            <p className="text-[10px] font-black uppercase tracking-[0.12em] text-sky-600">Size</p>
+            <p className="text-[10px] font-black uppercase text-sky-600">Size</p>
             <p className="mt-1 text-xs font-bold text-slate-700">{formatFileSize(media.size)}</p>
           </div>
           <div className="rounded-xl bg-sky-50 px-2 py-2">
-            <p className="text-[10px] font-black uppercase tracking-[0.12em] text-sky-600">Pixels</p>
+            <p className="text-[10px] font-black uppercase text-sky-600">Pixels</p>
             <p className="mt-1 text-xs font-bold text-slate-700">{media.width}x{media.height}</p>
           </div>
           <div className="rounded-xl bg-sky-50 px-2 py-2">
-            <p className="text-[10px] font-black uppercase tracking-[0.12em] text-sky-600">Ratio</p>
+            <p className="text-[10px] font-black uppercase text-sky-600">Ratio</p>
             <p className="mt-1 text-xs font-bold text-slate-700">{getAspectRatio(media).toFixed(2)}:1</p>
           </div>
         </div>
         {isVideo ? (
-          <p className="mt-3 rounded-xl bg-amber-50 px-3 py-2 text-xs font-bold text-amber-700">
-            Video saved without a thumbnail. Select an image media asset as the thumbnail during launch.
-          </p>
+          <p className="mt-2 text-xs font-semibold text-amber-700">{formatDuration(media.duration)} video</p>
         ) : null}
       </div>
     </div>
@@ -218,47 +339,83 @@ const MediaCard = ({ brands, brandsLoading, mediaAsset, onBrandChange, onDelete,
 };
 
 const AdsMediaLibraryPage = () => {
+  const fileInputRef = useRef(null);
   const [mediaAssets, setMediaAssets] = useState([]);
+  const [mediaFolders, setMediaFolders] = useState([]);
   const [loading, setLoading] = useState(true);
   const [brands, setBrands] = useState([]);
   const [brandsLoading, setBrandsLoading] = useState(true);
-  const [saving, setSaving] = useState(false);
-  const [processingFile, setProcessingFile] = useState(false);
-  const [name, setName] = useState('');
-  const [uploadBrandId, setUploadBrandId] = useState('');
   const [filterBrandId, setFilterBrandId] = useState('');
   const [searchTerm, setSearchTerm] = useState('');
-  const [selectedFile, setSelectedFile] = useState(null);
-  const [selectedPreviewUrl, setSelectedPreviewUrl] = useState('');
-  const [fileDetails, setFileDetails] = useState(null);
+  const [folderBrandId, setFolderBrandId] = useState('');
+  const [selectedFolderId, setSelectedFolderId] = useState(null);
+  const [expandedFolderIds, setExpandedFolderIds] = useState(new Set());
+  const [newFolderName, setNewFolderName] = useState('');
+  const [creatingFolder, setCreatingFolder] = useState(false);
+  const [uploading, setUploading] = useState(false);
+  const [dragActive, setDragActive] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(null);
   const [updatingBrandAssetId, setUpdatingBrandAssetId] = useState('');
 
-  const selectedIsVideo = selectedFile ? getSupportedMimeType(selectedFile).startsWith('video/') : false;
-  const selectedUploadBrand = brands.find((brand) => brand.id === uploadBrandId) || null;
-  const validationError = useMemo(
-    () => (selectedFile && fileDetails ? getValidationError({ file: selectedFile, ...fileDetails }) : ''),
-    [fileDetails, selectedFile]
+  const filteredMediaFolders = useMemo(
+    () => mediaFolders.filter((folder) => !filterBrandId || folder.brandId === filterBrandId),
+    [filterBrandId, mediaFolders]
+  );
+  const foldersById = useMemo(
+    () => new Map(filteredMediaFolders.map((folder) => [folder.id, folder])),
+    [filteredMediaFolders]
+  );
+  const foldersByParent = useMemo(() => buildFolderGroups(filteredMediaFolders), [filteredMediaFolders]);
+  const breadcrumbs = useMemo(
+    () => buildFolderPath({ folderId: selectedFolderId, foldersById }),
+    [foldersById, selectedFolderId]
+  );
+  const selectedFolder = selectedFolderId ? foldersById.get(selectedFolderId) : null;
+  const selectedFolderBrand = selectedFolder?.brandId
+    ? { id: selectedFolder.brandId, name: selectedFolder.brandName || 'Selected folder brand' }
+    : brands.find((brand) => brand.id === folderBrandId) || null;
+  const currentFolderKey = selectedFolderId || ROOT_FOLDER_ID;
+  const visibleFolders = foldersByParent.get(currentFolderKey) || [];
+  const visibleMediaAssets = useMemo(
+    () => mediaAssets.filter((mediaAsset) => (mediaAsset.folderId || null) === (selectedFolderId || null)),
+    [mediaAssets, selectedFolderId]
   );
 
-  const loadMediaAssets = async () => {
+  const getFolderMediaCount = (folderId) =>
+    mediaAssets.filter((mediaAsset) => (mediaAsset.folderId || null) === folderId).length;
+
+  const loadLibrary = useCallback(async () => {
     setLoading(true);
     try {
-      const data = await adsLaunchApi.getMediaAssets({
-        brandId: filterBrandId,
-        search: searchTerm,
-      });
-      setMediaAssets(data.mediaAssets || []);
+      const [mediaData, folderData] = await Promise.all([
+        adsLaunchApi.getMediaAssets({
+          brandId: filterBrandId,
+          search: searchTerm,
+        }),
+        adsLaunchApi.getMediaFolders(),
+      ]);
+
+      const nextFolders = folderData.mediaFolders || [];
+      const nextVisibleFolders = nextFolders.filter((folder) => !filterBrandId || folder.brandId === filterBrandId);
+      setMediaAssets(mediaData.mediaAssets || []);
+      setMediaFolders(nextFolders);
+      setSelectedFolderId((currentFolderId) =>
+        currentFolderId && !nextVisibleFolders.some((folder) => folder.id === currentFolderId) ? null : currentFolderId
+      );
     } catch (requestError) {
       toast.error(requestError.message);
     } finally {
       setLoading(false);
     }
-  };
+  }, [filterBrandId, searchTerm]);
 
   useEffect(() => {
-    loadMediaAssets();
-  }, [filterBrandId]);
+    const timeoutId = window.setTimeout(() => {
+      loadLibrary();
+    }, 0);
+
+    return () => window.clearTimeout(timeoutId);
+  }, [loadLibrary]);
 
   useEffect(() => {
     let mounted = true;
@@ -273,11 +430,9 @@ const AdsMediaLibraryPage = () => {
         const nextBrands = data.brands || [];
         setBrands(nextBrands);
 
-        if (!uploadBrandId && filterBrandId) {
-          setUploadBrandId(filterBrandId);
-        } else if (!uploadBrandId && nextBrands.length === 1) {
-          setUploadBrandId(nextBrands[0].id);
-          setFilterBrandId(nextBrands[0].id);
+        if (nextBrands.length === 1) {
+          setFolderBrandId((current) => current || nextBrands[0].id);
+          setFilterBrandId((current) => current || nextBrands[0].id);
         }
       })
       .catch((requestError) => toast.error(requestError.message))
@@ -292,128 +447,185 @@ const AdsMediaLibraryPage = () => {
     };
   }, []);
 
-  useEffect(() => {
-    if (!selectedFile) {
-      setSelectedPreviewUrl('');
-      return undefined;
-    }
-
-    const previewUrl = URL.createObjectURL(selectedFile);
-    setSelectedPreviewUrl(previewUrl);
-
-    return () => URL.revokeObjectURL(previewUrl);
-  }, [selectedFile]);
-
-  const resetForm = () => {
-    setName('');
-    setSelectedFile(null);
-    setFileDetails(null);
-    setUploadProgress(null);
-  };
-
-  const handleFileChange = async (event) => {
-    const file = event.target.files?.[0] || null;
-    event.target.value = '';
-    setSelectedFile(null);
-    setFileDetails(null);
-    setUploadProgress(null);
-
-    if (!file) {
-      return;
-    }
-
-    setProcessingFile(true);
-    try {
-      const supportedMimeType = getSupportedMimeType(file);
-      const normalizedFile =
-        supportedMimeType && file.type !== supportedMimeType
-          ? new File([file], file.name, { type: supportedMimeType, lastModified: file.lastModified })
-          : file;
-      const isVideo = supportedMimeType.startsWith('video/');
-      const details = isVideo ? await readVideoMetadata(normalizedFile) : await readImageMetadata(normalizedFile);
-      const nextValidationError = getValidationError({ file: normalizedFile, ...details });
-
-      if (nextValidationError) {
-        toast.error(nextValidationError);
-        return;
+  const toggleFolder = (folderId) => {
+    setExpandedFolderIds((current) => {
+      const next = new Set(current);
+      if (next.has(folderId)) {
+        next.delete(folderId);
+      } else {
+        next.add(folderId);
       }
-
-      setSelectedFile(normalizedFile);
-      setFileDetails(details);
-      setName((current) => current || normalizedFile.name.replace(/\.[^.]+$/, ''));
-      toast.success(isVideo ? 'Video ready. Pick an image thumbnail during launch if needed.' : 'Image ready');
-    } catch (error) {
-      toast.error(error.message);
-    } finally {
-      setProcessingFile(false);
-    }
-  };
-
-  const saveUploadedMediaAsset = async () => {
-    const label = selectedIsVideo ? 'Uploading video to media library' : 'Uploading image to media library';
-
-    return adsLaunchApi.uploadMediaAssetWithProgress({
-      name: name.trim(),
-      brandId: uploadBrandId,
-      brandName: selectedUploadBrand?.name || '',
-      mediaFile: selectedFile,
-      mediaMetadata: {
-        width: fileDetails.width,
-        height: fileDetails.height,
-        duration: fileDetails.duration || 0,
-      },
-    }, {
-      onUploadProgress: (percent) => {
-        setUploadProgress({
-          label,
-          percent,
-        });
-      },
+      return next;
     });
   };
 
-  const saveMediaAsset = async () => {
-    if (!name.trim()) {
-      toast.error('Give this media a library name');
+  const selectFolder = (folderId) => {
+    setSelectedFolderId(folderId);
+    if (folderId) {
+      setExpandedFolderIds((current) => new Set(current).add(folderId));
+    }
+  };
+
+  const createFolder = async () => {
+    const folderName = newFolderName.trim();
+
+    if (!folderName) {
+      toast.error('Give the folder a name');
       return;
     }
 
-    if (!uploadBrandId) {
-      toast.error('Select the ads brand for this media');
+    if (!selectedFolderId && !folderBrandId) {
+      toast.error('Select a brand for the top-level folder');
       return;
     }
 
-    if (!selectedFile || !fileDetails) {
-      toast.error('Select an image or video first');
-      return;
-    }
+    const rootBrand = brands.find((brand) => brand.id === folderBrandId) || null;
 
-    if (validationError) {
-      toast.error(validationError);
-      return;
-    }
-
-    setSaving(true);
-    setUploadProgress({
-      label: selectedIsVideo ? 'Starting video upload' : 'Starting image upload',
-      percent: 0,
-    });
+    setCreatingFolder(true);
     try {
-      const data = await saveUploadedMediaAsset();
+      const data = await adsLaunchApi.createMediaFolder({
+        name: folderName,
+        parentId: selectedFolderId,
+        brandId: selectedFolderId ? '' : folderBrandId,
+        brandName: selectedFolderId ? '' : rootBrand?.name || '',
+      });
       toast.success(data.message);
-      resetForm();
-      await loadMediaAssets();
+      setNewFolderName('');
+      await loadLibrary();
+      if (data.mediaFolder?.id) {
+        selectFolder(data.mediaFolder.id);
+      }
     } catch (requestError) {
       toast.error(requestError.message);
     } finally {
-      setSaving(false);
+      setCreatingFolder(false);
+    }
+  };
+
+  const prepareMediaFile = async (file) => {
+    const supportedMimeType = getSupportedMimeType(file);
+    const isVideo = VIDEO_MIME_TYPES.has(supportedMimeType);
+    const isImage = IMAGE_MIME_TYPES.has(supportedMimeType);
+
+    if (!isVideo && !isImage) {
+      throw new Error(`${file.name}: use JPG/JPEG images or MP4/MOV videos.`);
+    }
+
+    const normalizedFile =
+      supportedMimeType && file.type !== supportedMimeType
+        ? new File([file], file.name, { type: supportedMimeType, lastModified: file.lastModified })
+        : file;
+    const details = isVideo ? await readVideoMetadata(normalizedFile) : await readImageMetadata(normalizedFile);
+    const validationError = getValidationError({ file: normalizedFile, ...details });
+
+    if (validationError) {
+      throw new Error(`${file.name}: ${validationError}`);
+    }
+
+    return {
+      file: normalizedFile,
+      details,
+    };
+  };
+
+  const uploadFiles = async (fileList) => {
+    const files = Array.from(fileList || []).filter(Boolean);
+
+    if (!files.length) {
+      return;
+    }
+
+    if (!selectedFolderId || !selectedFolderBrand?.id) {
+      toast.error('Select a brand folder before uploading media');
+      return;
+    }
+
+    setUploading(true);
+    let uploadedCount = 0;
+    let failedCount = 0;
+
+    try {
+      for (let index = 0; index < files.length; index += 1) {
+        const file = files[index];
+        setUploadProgress({
+          label: `Preparing ${file.name}`,
+          percent: 0,
+          index: index + 1,
+          total: files.length,
+        });
+
+        try {
+          const prepared = await prepareMediaFile(file);
+          await adsLaunchApi.uploadMediaAssetWithProgress(
+            {
+              name: getMediaDisplayName(prepared.file.name),
+              brandId: selectedFolderBrand.id,
+              brandName: selectedFolderBrand.name || '',
+              folderId: selectedFolderId,
+              mediaFile: prepared.file,
+              mediaMetadata: {
+                width: prepared.details.width,
+                height: prepared.details.height,
+                duration: prepared.details.duration || 0,
+              },
+            },
+            {
+              onUploadProgress: (percent) => {
+                setUploadProgress({
+                  label: `Uploading ${prepared.file.name}`,
+                  percent,
+                  index: index + 1,
+                  total: files.length,
+                });
+              },
+            }
+          );
+          uploadedCount += 1;
+        } catch (error) {
+          failedCount += 1;
+          toast.error(error.message);
+        }
+      }
+
+      if (uploadedCount) {
+        toast.success(`${uploadedCount} media file${uploadedCount === 1 ? '' : 's'} uploaded`);
+      }
+      if (failedCount && !uploadedCount) {
+        toast.error('No media files were uploaded');
+      }
+      await loadLibrary();
+    } finally {
+      setUploading(false);
       setUploadProgress(null);
     }
   };
 
+  const handleFileInputChange = (event) => {
+    uploadFiles(event.target.files);
+    event.target.value = '';
+  };
+
+  const handleDragOver = (event) => {
+    event.preventDefault();
+    setDragActive(true);
+  };
+
+  const handleDragLeave = (event) => {
+    if (event.currentTarget.contains(event.relatedTarget)) {
+      return;
+    }
+    setDragActive(false);
+  };
+
+  const handleDrop = (event) => {
+    event.preventDefault();
+    setDragActive(false);
+    uploadFiles(event.dataTransfer.files);
+  };
+
   const submitSearch = (event) => {
     event.preventDefault();
-    loadMediaAssets();
+    loadLibrary();
   };
 
   const deleteMediaAsset = async (mediaAsset) => {
@@ -424,7 +636,7 @@ const AdsMediaLibraryPage = () => {
     try {
       const data = await adsLaunchApi.deleteMediaAsset(mediaAsset.id);
       toast.success(data.message);
-      await loadMediaAssets();
+      await loadLibrary();
     } catch (requestError) {
       toast.error(requestError.message);
     }
@@ -462,9 +674,14 @@ const AdsMediaLibraryPage = () => {
     <div>
       <DashboardHeader
         title="Ads Media Library"
-        description="Add Meta-ready images and videos once, then reuse them per ad account in Dynamic Ads Launch."
+        description="Organize Meta-ready images and videos in folders, then reuse them per ad account in Dynamic Ads Launch."
         action={
-          <button type="button" onClick={loadMediaAssets} disabled={loading} className="flex h-11 items-center gap-2 rounded-xl border border-sky-100 bg-white px-4 text-sm font-bold text-slate-700 transition hover:bg-sky-50 disabled:opacity-60">
+          <button
+            type="button"
+            onClick={loadLibrary}
+            disabled={loading}
+            className="flex h-11 items-center gap-2 rounded-xl border border-sky-100 bg-white px-4 text-sm font-bold text-slate-700 transition hover:bg-sky-50 disabled:opacity-60"
+          >
             <RefreshCw size={17} className={loading ? 'animate-spin' : ''} />
             Refresh
           </button>
@@ -481,9 +698,8 @@ const AdsMediaLibraryPage = () => {
               onChange={(event) => {
                 const nextBrandId = event.target.value;
                 setFilterBrandId(nextBrandId);
-                if (nextBrandId && !uploadBrandId) {
-                  setUploadBrandId(nextBrandId);
-                }
+                setSelectedFolderId(null);
+                setFolderBrandId(nextBrandId);
               }}
               disabled={brandsLoading}
               className="h-12 w-full rounded-xl border border-sky-100 bg-white px-4 outline-none transition focus:border-sky-400 focus:ring-4 focus:ring-sky-100"
@@ -497,13 +713,16 @@ const AdsMediaLibraryPage = () => {
 
           <div className="space-y-2">
             <label htmlFor="media-search" className="text-sm font-semibold text-slate-700">Search media</label>
-            <input
-              id="media-search"
-              value={searchTerm}
-              onChange={(event) => setSearchTerm(event.target.value)}
-              className="h-12 w-full rounded-xl border border-sky-100 bg-white px-4 outline-none transition focus:border-sky-400 focus:ring-4 focus:ring-sky-100"
-              placeholder="Search name, file, or brand"
-            />
+            <div className="relative">
+              <Search size={17} className="pointer-events-none absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" />
+              <input
+                id="media-search"
+                value={searchTerm}
+                onChange={(event) => setSearchTerm(event.target.value)}
+                className="h-12 w-full rounded-xl border border-sky-100 bg-white pl-11 pr-4 outline-none transition focus:border-sky-400 focus:ring-4 focus:ring-sky-100"
+                placeholder="Search name, file, or brand"
+              />
+            </div>
           </div>
 
           <button
@@ -517,128 +736,227 @@ const AdsMediaLibraryPage = () => {
         </form>
       </DashboardPanel>
 
-      <div className="grid gap-4 xl:grid-cols-[420px_minmax(0,1fr)]">
-        <DashboardPanel title="Add media">
-          <div className="space-y-4">
-            <div className="space-y-2">
-              <label htmlFor="media-upload-brand" className="text-sm font-semibold text-slate-700">Ads brand</label>
-              <select
-                id="media-upload-brand"
-                value={uploadBrandId}
-                onChange={(event) => setUploadBrandId(event.target.value)}
-                disabled={brandsLoading}
-                className="h-12 w-full rounded-xl border border-sky-100 bg-white px-4 outline-none transition focus:border-sky-400 focus:ring-4 focus:ring-sky-100"
-              >
-                <option value="">Select brand for this media</option>
-                {brands.map((brand) => (
-                  <option key={brand.id} value={brand.id}>{brand.name}</option>
-                ))}
-              </select>
-            </div>
-
-            <div className="space-y-2">
-              <label htmlFor="media-library-name" className="text-sm font-semibold text-slate-700">Library name</label>
-              <input
-                id="media-library-name"
-                value={name}
-                onChange={(event) => setName(event.target.value)}
-                className="h-12 w-full rounded-xl border border-sky-100 px-4 outline-none transition focus:border-sky-400 focus:ring-4 focus:ring-sky-100"
-                placeholder="CoreSelf square image 01"
-              />
-            </div>
-
-            <label htmlFor="media-library-file" className="flex min-h-52 cursor-pointer flex-col items-center justify-center rounded-3xl border border-dashed border-sky-200 bg-sky-50/70 px-5 py-6 text-center transition hover:border-sky-400 hover:bg-sky-50">
-              {processingFile ? <LoaderCircle size={28} className="animate-spin text-sky-600" /> : <Upload size={28} strokeWidth={2.1} className="text-sky-600" />}
-              <p className="mt-3 text-sm font-black text-slate-950">{selectedFile ? 'Replace media' : 'Select image or video'}</p>
-              <p className="mt-1 text-xs font-semibold text-slate-500">JPG/JPEG images only, or MP4/MOV videos. Minimum 600x600, ratio 9:16 to 1.91:1.</p>
-            </label>
-            <input id="media-library-file" type="file" accept="image/jpeg,video/mp4,video/quicktime" onChange={handleFileChange} className="hidden" />
-
-            {selectedFile && selectedPreviewUrl ? (
-              <div className="overflow-hidden rounded-3xl border border-sky-100 bg-white">
-                {selectedIsVideo ? (
-                  <video src={selectedPreviewUrl} controls className="h-56 w-full bg-slate-950 object-contain" />
-                ) : (
-                  <img src={selectedPreviewUrl} alt="Selected media preview" className="h-56 w-full object-cover" />
-                )}
-                <div className="space-y-3 p-4">
-                  <div className="flex items-start justify-between gap-3">
-                    <div className="min-w-0">
-                      <p className="truncate text-sm font-black text-slate-950">{selectedFile.name}</p>
-                      <p className="mt-1 text-xs font-semibold text-slate-400">
-                        {fileDetails?.width}x{fileDetails?.height} | {formatFileSize(selectedFile.size)}
-                        {selectedIsVideo ? ` | ${formatDuration(fileDetails?.duration)}` : ''}
-                      </p>
-                    </div>
-                    <button type="button" onClick={() => { setSelectedFile(null); setFileDetails(null); setUploadProgress(null); }} className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-red-100 text-red-600 transition hover:bg-red-50">
-                      <X size={16} strokeWidth={2.3} />
-                    </button>
-                  </div>
-                  {selectedIsVideo ? (
-                    <p className="rounded-xl bg-amber-50 px-3 py-2 text-xs font-bold text-amber-700">
-                      Video will be saved without a thumbnail. Use an image from the media library as the thumbnail during launch.
-                    </p>
-                  ) : null}
-                </div>
+      <DashboardPanel
+        title="Saved media"
+        headerAction={
+          <span className="rounded-full bg-sky-50 px-3 py-1 text-xs font-black text-sky-700">
+            {filteredMediaFolders.length} folders | {mediaAssets.length} assets
+          </span>
+        }
+      >
+        <div className="grid min-h-[660px] gap-4 lg:grid-cols-[310px_minmax(0,1fr)]">
+          <aside className="rounded-2xl border border-sky-100 bg-slate-50/80 p-3 shadow-inner shadow-white">
+            <div className="mb-3 flex items-center justify-between gap-3 px-2">
+              <div className="flex items-center gap-2 text-xs font-black uppercase tracking-[0.14em] text-slate-500">
+                <HardDrive size={15} />
+                Folder structure
               </div>
-            ) : null}
+              <span className="rounded-full bg-white px-2.5 py-1 text-[11px] font-black text-sky-700">
+                {filteredMediaFolders.length}
+              </span>
+            </div>
+            <button
+              type="button"
+              onClick={() => setSelectedFolderId(null)}
+              className={`mb-1 flex h-10 w-full items-center gap-2 rounded-xl px-3 text-left text-sm transition ${
+                !selectedFolderId ? 'bg-sky-100 text-sky-800' : 'text-slate-700 hover:bg-white'
+              }`}
+            >
+              <FolderOpen size={18} className="text-sky-600" />
+              <span className="min-w-0 flex-1 truncate font-black">Saved media</span>
+            </button>
+            <div className="max-h-[560px] overflow-y-auto rounded-xl border border-sky-100 bg-white/70 p-1 pr-2">
+              {(foldersByParent.get(ROOT_FOLDER_ID) || []).map((folder) => (
+                <FolderTreeNode
+                  key={folder.id}
+                  folder={folder}
+                  foldersByParent={foldersByParent}
+                  expandedFolderIds={expandedFolderIds}
+                  selectedFolderId={selectedFolderId}
+                  onSelectFolder={selectFolder}
+                  onToggleFolder={toggleFolder}
+                />
+              ))}
+              {!filteredMediaFolders.length && !loading ? (
+                <div className="rounded-xl border border-dashed border-sky-200 bg-sky-50/70 px-3 py-5 text-center">
+                  <FolderPlus size={24} className="mx-auto text-sky-500" />
+                  <p className="mt-2 text-xs font-black text-slate-700">No folders yet</p>
+                  <p className="mt-1 text-xs font-semibold leading-5 text-slate-500">
+                    Create a folder from the right toolbar. Nested folders will appear here like a file tree.
+                  </p>
+                </div>
+              ) : null}
+            </div>
+          </aside>
+
+          <section
+            className={`relative min-w-0 rounded-2xl border border-dashed p-4 transition ${
+              dragActive ? 'border-sky-500 bg-sky-50' : 'border-sky-100 bg-white'
+            }`}
+            onDragOver={handleDragOver}
+            onDragLeave={handleDragLeave}
+            onDrop={handleDrop}
+          >
+            <div className="flex flex-col gap-3 border-b border-sky-100 pb-4 xl:flex-row xl:items-center xl:justify-between">
+              <div className="min-w-0">
+                <div className="flex flex-wrap items-center gap-2 text-sm font-bold text-slate-500">
+                  {breadcrumbs.map((breadcrumb, index) => (
+                    <button
+                      key={breadcrumb.id || ROOT_FOLDER_ID}
+                      type="button"
+                      onClick={() => setSelectedFolderId(breadcrumb.id)}
+                      className={`max-w-44 truncate rounded-lg px-2 py-1 transition ${
+                        index === breadcrumbs.length - 1 ? 'bg-sky-50 text-sky-700' : 'hover:bg-slate-50'
+                      }`}
+                    >
+                      {breadcrumb.name}
+                    </button>
+                  ))}
+                </div>
+                <h3 className="mt-2 truncate text-2xl font-black text-slate-950">
+                  {selectedFolder?.name || 'Saved media'}
+                </h3>
+              </div>
+
+              <div className="flex flex-col gap-2 xl:flex-row xl:items-center">
+                {selectedFolder ? (
+                  <div className="flex h-11 min-w-52 items-center rounded-xl border border-sky-100 bg-sky-50 px-3 text-sm font-black text-sky-700">
+                    Brand: {selectedFolder.brandName || 'Unassigned'}
+                  </div>
+                ) : (
+                  <select
+                    value={folderBrandId}
+                    onChange={(event) => setFolderBrandId(event.target.value)}
+                    disabled={brandsLoading || uploading}
+                    className="h-11 min-w-52 rounded-xl border border-sky-100 bg-white px-3 text-sm font-bold text-slate-700 outline-none transition focus:border-sky-400 focus:ring-4 focus:ring-sky-100 disabled:opacity-60"
+                    title="Brand for the top-level folder"
+                  >
+                    <option value="">Folder brand</option>
+                    {brands.map((brand) => (
+                      <option key={brand.id} value={brand.id}>{brand.name}</option>
+                    ))}
+                  </select>
+                )}
+
+                <div className="flex h-11 overflow-hidden rounded-xl border border-sky-100 bg-white">
+                  <input
+                    value={newFolderName}
+                    onChange={(event) => setNewFolderName(event.target.value)}
+                    onKeyDown={(event) => {
+                      if (event.key === 'Enter') {
+                        createFolder();
+                      }
+                    }}
+                    className="min-w-0 px-3 text-sm font-semibold outline-none"
+                    placeholder="New folder name"
+                  />
+                  <button
+                    type="button"
+                    onClick={createFolder}
+                    disabled={creatingFolder}
+                    className="flex items-center gap-2 border-l border-sky-100 px-3 text-sm font-black text-sky-700 transition hover:bg-sky-50 disabled:opacity-60"
+                  >
+                    {creatingFolder ? <LoaderCircle size={16} className="animate-spin" /> : <FolderPlus size={16} />}
+                    Create
+                  </button>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() => fileInputRef.current?.click()}
+                  disabled={uploading || !selectedFolderId}
+                  className="flex h-11 items-center justify-center gap-2 rounded-xl bg-slate-950 px-4 text-sm font-bold text-white transition hover:bg-slate-800 disabled:opacity-70"
+                  title={selectedFolderId ? 'Upload media to selected folder' : 'Select a brand folder before uploading media'}
+                >
+                  {uploading ? <LoaderCircle size={17} className="animate-spin" /> : <FileUp size={17} />}
+                  Upload media
+                </button>
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  multiple
+                  accept="image/jpeg,video/mp4,video/quicktime"
+                  onChange={handleFileInputChange}
+                  className="hidden"
+                />
+              </div>
+            </div>
 
             {uploadProgress ? (
-              <div className="rounded-2xl border border-amber-100 bg-amber-50 px-4 py-3">
-                <div className="flex items-center justify-between gap-3 text-xs font-black uppercase tracking-[0.14em] text-amber-700">
-                  <span>{uploadProgress.label}</span>
-                  <span>{uploadProgress.percent}%</span>
+              <div className="mt-4 rounded-2xl border border-amber-100 bg-amber-50 px-4 py-3">
+                <div className="flex flex-wrap items-center justify-between gap-3 text-xs font-black uppercase tracking-[0.12em] text-amber-700">
+                  <span className="min-w-0 truncate">{uploadProgress.label}</span>
+                  <span>
+                    {uploadProgress.index}/{uploadProgress.total} | {uploadProgress.percent}%
+                  </span>
                 </div>
                 <div className="mt-2 h-2 overflow-hidden rounded-full bg-white">
                   <div className="h-full rounded-full bg-amber-500 transition-all duration-200" style={{ width: `${uploadProgress.percent}%` }} />
                 </div>
-                <p className="mt-2 text-xs font-semibold text-amber-800">
-                  Large videos need a little time while the browser prepares the file and sends it to the local media library.
-                </p>
               </div>
             ) : null}
 
-            <button
-              type="button"
-              onClick={saveMediaAsset}
-              disabled={saving || processingFile}
-              className="flex h-11 w-full items-center justify-center gap-2 rounded-xl bg-slate-950 px-5 text-sm font-bold text-white transition hover:bg-slate-800 disabled:opacity-70"
-            >
-              {saving ? <LoaderCircle size={17} className="animate-spin" /> : <Plus size={17} />}
-              Save to media library
-            </button>
-          </div>
-        </DashboardPanel>
+            <div className="mt-4">
+              {loading ? (
+                <div className="grid gap-4 sm:grid-cols-2 2xl:grid-cols-4">
+                  {[0, 1, 2, 3].map((item) => (
+                    <div key={item} className="h-48 animate-pulse rounded-2xl bg-sky-50" />
+                  ))}
+                </div>
+              ) : visibleFolders.length || visibleMediaAssets.length ? (
+                <div className="grid gap-4 sm:grid-cols-2 2xl:grid-cols-4">
+                  {visibleFolders.map((folder) => (
+                    <FolderTile
+                      key={folder.id}
+                      folder={folder}
+                      folderCount={(foldersByParent.get(folder.id) || []).length}
+                      mediaCount={getFolderMediaCount(folder.id)}
+                      onOpen={selectFolder}
+                    />
+                  ))}
+                  {visibleMediaAssets.map((mediaAsset) => (
+                    <MediaTile
+                      key={mediaAsset.id}
+                      brands={brands}
+                      brandsLoading={brandsLoading}
+                      mediaAsset={mediaAsset}
+                      onBrandChange={updateMediaBrand}
+                      onDelete={deleteMediaAsset}
+                      updatingBrand={updatingBrandAssetId === mediaAsset.id}
+                    />
+                  ))}
+                </div>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => fileInputRef.current?.click()}
+                  disabled={!selectedFolderId}
+                  className="flex min-h-80 w-full flex-col items-center justify-center rounded-3xl border border-dashed border-sky-200 bg-sky-50/60 px-6 py-10 text-center transition hover:border-sky-400 hover:bg-sky-50 disabled:cursor-not-allowed disabled:opacity-70"
+                >
+                  <UploadCloud size={34} strokeWidth={2.1} className="text-sky-600" />
+                  <p className="mt-3 text-sm font-black text-slate-950">
+                    {selectedFolderId ? 'Drop images or videos into this folder' : 'Create or open a brand folder first'}
+                  </p>
+                  <p className="mt-1 max-w-xl text-xs font-semibold leading-5 text-slate-500">
+                    {selectedFolderId
+                      ? 'Bulk upload JPG/JPEG images or MP4/MOV videos. Media must be at least 600x600px and use a Meta-ready aspect ratio.'
+                      : 'Top-level folders require a brand. Child folders and uploads inherit that brand automatically.'}
+                  </p>
+                </button>
+              )}
+            </div>
 
-        <DashboardPanel
-          title="Saved media"
-          headerAction={<span className="rounded-full bg-sky-50 px-3 py-1 text-xs font-black text-sky-700">{mediaAssets.length} assets</span>}
-        >
-          {loading ? (
-            <div className="grid gap-4 md:grid-cols-2 2xl:grid-cols-3">
-              {[0, 1, 2].map((item) => <div key={item} className="h-80 animate-pulse rounded-3xl bg-sky-50" />)}
-            </div>
-          ) : mediaAssets.length ? (
-            <div className="grid gap-4 md:grid-cols-2 2xl:grid-cols-3">
-              {mediaAssets.map((mediaAsset) => (
-                <MediaCard
-                  key={mediaAsset.id}
-                  brands={brands}
-                  brandsLoading={brandsLoading}
-                  mediaAsset={mediaAsset}
-                  onBrandChange={updateMediaBrand}
-                  onDelete={deleteMediaAsset}
-                  updatingBrand={updatingBrandAssetId === mediaAsset.id}
-                />
-              ))}
-            </div>
-          ) : (
-            <p className="rounded-2xl bg-sky-50 px-4 py-8 text-sm font-semibold text-slate-500">
-              No saved media yet. Add one image or video here, then pick it inside Dynamic Ads Launch.
-            </p>
-          )}
-        </DashboardPanel>
-      </div>
+            {dragActive ? (
+              <div className="pointer-events-none absolute inset-4 flex items-center justify-center rounded-3xl border-2 border-dashed border-sky-500 bg-sky-50/90">
+                <div className="text-center">
+                  <UploadCloud size={38} className="mx-auto text-sky-600" />
+                  <p className="mt-3 text-sm font-black text-sky-800">Drop files into {selectedFolder?.name || 'Saved media'}</p>
+                </div>
+              </div>
+            ) : null}
+          </section>
+        </div>
+      </DashboardPanel>
     </div>
   );
 };

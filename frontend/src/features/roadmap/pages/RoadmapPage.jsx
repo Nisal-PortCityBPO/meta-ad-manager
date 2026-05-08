@@ -31,6 +31,7 @@ const metricToneClasses = {
   emerald: 'bg-emerald-50 text-emerald-700 ring-emerald-100',
   amber: 'bg-amber-50 text-amber-700 ring-amber-100',
   indigo: 'bg-indigo-50 text-indigo-700 ring-indigo-100',
+  red: 'bg-red-50 text-red-700 ring-red-100',
   slate: 'bg-slate-100 text-slate-700 ring-slate-200',
 };
 
@@ -161,6 +162,31 @@ const getStatus = (...values) =>
 
 const normalizeSearch = (value) => String(value || '').toLowerCase().trim();
 
+const isDisapprovedAd = (ad) => {
+  const statuses = [
+    ad?.status,
+    ad?.effectiveStatus,
+    ad?.configuredStatus,
+    ad?.reviewStatus,
+    ad?.adReviewFeedback?.global?.status,
+  ]
+    .filter(Boolean)
+    .map((status) => String(status).toUpperCase());
+
+  return statuses.some((status) => status.includes('DISAPPROVED') || status.includes('REJECTED'));
+};
+
+const getDisapprovedAdCount = (adAccount) =>
+  getCampaigns(adAccount).reduce(
+    (campaignTotal, campaign) =>
+      campaignTotal +
+      getAdSets(campaign).reduce(
+        (adSetTotal, adSet) => adSetTotal + getAds(adSet).filter(isDisapprovedAd).length,
+        0
+      ),
+    0
+  );
+
 const socialAccountMatchesSearch = (account, searchTerm) => {
   if (!searchTerm) {
     return true;
@@ -179,6 +205,25 @@ const socialAccountMatchesSearch = (account, searchTerm) => {
   return searchable.includes(searchTerm);
 };
 
+const brandMatchesSearch = (brand, searchTerm) => {
+  if (!searchTerm) {
+    return true;
+  }
+
+  const searchable = [
+    brand.name,
+    brand.description,
+    ...(Array.isArray(brand.assignedSocialAccounts)
+      ? brand.assignedSocialAccounts.map((account) => account.name)
+      : []),
+  ]
+    .filter(Boolean)
+    .join(' ')
+    .toLowerCase();
+
+  return searchable.includes(searchTerm);
+};
+
 const getBrandsFromResponse = (data) => {
   if (Array.isArray(data)) {
     return data;
@@ -187,13 +232,17 @@ const getBrandsFromResponse = (data) => {
   return Array.isArray(data?.brands) ? data.brands : [];
 };
 
-const MetricBadge = ({ label, value, tone = 'slate' }) => (
+const MetricBadge = ({ label, value, tone = 'slate', fullValue = false }) => (
   <span
-    className={`inline-flex h-9 w-40 max-w-full items-center justify-between gap-2 rounded-full px-3 py-1 text-xs font-black ring-1 ${metricToneClasses[tone]}`}
+    className={[
+      'inline-flex items-center justify-between gap-2 rounded-full px-3 py-1 text-xs font-black ring-1',
+      fullValue ? 'min-h-9 min-w-40 max-w-full sm:max-w-[28rem]' : 'h-9 w-40 max-w-full',
+      metricToneClasses[tone],
+    ].join(' ')}
     title={`${label}: ${value}`}
   >
     <span className="shrink-0 text-[10px] uppercase tracking-[0.12em] opacity-70">{label}</span>
-    <span className="min-w-0 truncate text-sm">{value}</span>
+    <span className={`min-w-0 text-sm ${fullValue ? 'break-words text-right leading-4' : 'truncate'}`}>{value}</span>
   </span>
 );
 
@@ -339,6 +388,7 @@ const RoadmapPage = () => {
   const { fetchTokenType } = useMetaKeySettings();
   const [brands, setBrands] = useState([]);
   const [selectedBrandId, setSelectedBrandId] = useState('');
+  const [brandSearch, setBrandSearch] = useState('');
   const [accountSearch, setAccountSearch] = useState('');
   const [expandedAccountId, setExpandedAccountId] = useState(null);
   const [expandedProfileId, setExpandedProfileId] = useState(null);
@@ -417,6 +467,7 @@ const RoadmapPage = () => {
     socialAccountMatchesSearch(account, normalizeSearch(accountSearch))
   );
   const selectedFetchKeyLabel = getMetaKeyTypeLabel(fetchTokenType);
+  const filteredBrands = brands.filter((brand) => brandMatchesSearch(brand, normalizeSearch(brandSearch)));
 
   const resetExpandedTree = () => {
     setExpandedAccountId(null);
@@ -483,37 +534,51 @@ const RoadmapPage = () => {
       <div className="grid gap-4 xl:grid-cols-[18rem_minmax(0,1fr)]">
         <DashboardPanel title="Brands" className="xl:sticky xl:top-24 xl:max-h-[calc(100vh-7rem)]">
           {brands.length ? (
-            <div className="max-h-[22rem] space-y-2 overflow-y-auto pr-1 xl:max-h-[calc(100vh-13rem)]">
-              {brands.map((brand, index) => {
-                const brandKey = getEntityKey(brand, index, 'brand');
-                const isSelected = brandKey === selectedBrandKey;
-                const accountCount = Array.isArray(brand.assignedSocialAccounts) ? brand.assignedSocialAccounts.length : 0;
+            <div className="space-y-3">
+              <div className="relative">
+                <Search size={16} strokeWidth={2.3} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+                <input
+                  value={brandSearch}
+                  onChange={(event) => setBrandSearch(event.target.value)}
+                  placeholder="Search brands"
+                  className="h-11 w-full rounded-xl border border-sky-100 bg-white pl-10 pr-3 text-sm font-semibold text-slate-700 outline-none transition placeholder:text-slate-400 focus:border-sky-400 focus:ring-4 focus:ring-sky-100"
+                />
+              </div>
+              <div className="max-h-[22rem] space-y-2 overflow-y-auto pr-1 xl:max-h-[calc(100vh-17rem)]">
+                {filteredBrands.map((brand, index) => {
+                  const brandKey = getEntityKey(brand, index, 'brand');
+                  const isSelected = brandKey === selectedBrandKey;
+                  const accountCount = Array.isArray(brand.assignedSocialAccounts) ? brand.assignedSocialAccounts.length : 0;
 
-                return (
-                  <button
-                    key={brandKey}
-                    type="button"
-                    onClick={() => handleSelectBrand(brandKey)}
-                    className={[
-                      'flex w-full items-center gap-3 rounded-2xl border p-3 text-left transition',
-                      isSelected
-                        ? 'border-sky-300 bg-sky-50 shadow-sm shadow-sky-100'
-                        : 'border-sky-100 bg-white hover:bg-sky-50/60',
-                    ].join(' ')}
-                  >
-                    <span
-                      className="h-3 w-3 shrink-0 rounded-full ring-4 ring-white"
-                      style={{ backgroundColor: brand.color || '#38bdf8' }}
-                    />
-                    <span className="min-w-0 flex-1">
-                      <span className="block truncate text-sm font-black text-slate-950">{brand.name}</span>
-                      <span className="mt-1 block text-xs font-semibold text-slate-400">
-                        {accountCount} {accountCount === 1 ? 'social account' : 'social accounts'}
+                  return (
+                    <button
+                      key={brandKey}
+                      type="button"
+                      onClick={() => handleSelectBrand(brandKey)}
+                      className={[
+                        'flex w-full items-center gap-3 rounded-2xl border p-3 text-left transition',
+                        isSelected
+                          ? 'border-sky-300 bg-sky-50 shadow-sm shadow-sky-100'
+                          : 'border-sky-100 bg-white hover:bg-sky-50/60',
+                      ].join(' ')}
+                    >
+                      <span
+                        className="h-3 w-3 shrink-0 rounded-full ring-4 ring-white"
+                        style={{ backgroundColor: brand.color || '#38bdf8' }}
+                      />
+                      <span className="min-w-0 flex-1">
+                        <span className="block truncate text-sm font-black text-slate-950">{brand.name}</span>
+                        <span className="mt-1 block text-xs font-semibold text-slate-400">
+                          {accountCount} {accountCount === 1 ? 'social account' : 'social accounts'}
+                        </span>
                       </span>
-                    </span>
-                  </button>
-                );
-              })}
+                    </button>
+                  );
+                })}
+                {!filteredBrands.length ? (
+                  <EmptyState>No brands match this search.</EmptyState>
+                ) : null}
+              </div>
             </div>
           ) : (
             <EmptyState>{isLoading ? 'Loading brands...' : 'No brands saved yet.'}</EmptyState>
@@ -575,7 +640,7 @@ const RoadmapPage = () => {
                         subtitle="Social account"
                         title={account.name || 'Unnamed social account'}
                       >
-                        <MetricBadge label="Token" value={account.sourceTokenLabel || 'Not set'} tone="indigo" />
+                        <MetricBadge label="Token" value={account.sourceTokenLabel || 'Not set'} tone="indigo" fullValue />
                         <StatusPill status={getStatus(account.connectionStatus, account.status)} />
                         <button
                           type="button"
@@ -626,6 +691,7 @@ const RoadmapPage = () => {
                                           const adAccountKey = getEntityKey(adAccount, adAccountIndex, 'ad-account');
                                           const campaigns = getCampaigns(adAccount);
                                           const isAdAccountOpen = expandedAdAccountId === adAccountKey;
+                                          const disapprovedAdCount = getDisapprovedAdCount(adAccount);
 
                                           return (
                                             <div key={adAccountKey} className="space-y-3">
@@ -639,6 +705,9 @@ const RoadmapPage = () => {
                                                 title={adAccount.name || 'Unnamed ad account'}
                                               >
                                                 <MetricBadge label="Campaigns" value={campaigns.length || Number(adAccount.campaignCount) || 0} tone="emerald" />
+                                                {disapprovedAdCount > 0 ? (
+                                                  <MetricBadge label="Disapproved" value={disapprovedAdCount} tone="red" />
+                                                ) : null}
                                                 <StatusPill status={getStatus(adAccount.connectionStatus, adAccount.status, adAccount.statusLabel)} />
                                                   </TreeRow>
 

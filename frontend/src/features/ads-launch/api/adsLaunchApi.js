@@ -111,11 +111,12 @@ const requestWithUploadProgress = (path, payload, { onUploadProgress } = {}) =>
     xhr.send(isFormData ? payload : JSON.stringify(payload));
   });
 
-const buildMediaUploadFormData = ({ name, brandId, brandName, mediaFile, mediaMetadata }) => {
+const buildMediaUploadFormData = ({ name, brandId, brandName, folderId, mediaFile, mediaMetadata }) => {
   const formData = new FormData();
   formData.append('name', name);
   formData.append('brandId', brandId || '');
   formData.append('brandName', brandName || '');
+  formData.append('folderId', folderId || '');
   formData.append('media', mediaFile, mediaFile.name);
   formData.append('mediaMetadata', JSON.stringify(mediaMetadata || {}));
 
@@ -165,6 +166,12 @@ export const adsLaunchApi = {
     const queryString = query.toString();
     return apiRequest(`/ads-launch/media${queryString ? `?${queryString}` : ''}`);
   },
+  getMediaFolders: () => apiRequest('/ads-launch/media-folders'),
+  createMediaFolder: (payload) =>
+    apiRequest('/ads-launch/media-folders', {
+      method: 'POST',
+      body: payload,
+    }),
   createMediaAsset: (payload) =>
     apiRequest('/ads-launch/media', {
       method: 'POST',

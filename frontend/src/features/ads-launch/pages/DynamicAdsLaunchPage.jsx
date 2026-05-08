@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import toast from 'react-hot-toast';
-import { AlertTriangle, CheckCircle2, ChevronLeft, ChevronRight, Eye, ImageIcon, LoaderCircle, RefreshCw, Rocket, Shuffle, Upload, Video, X } from 'lucide-react';
+import { AlertTriangle, CheckCircle2, ChevronLeft, ChevronRight, Eye, ImageIcon, LoaderCircle, Rocket, Shuffle, Upload, X } from 'lucide-react';
 import DashboardHeader from '../../dashboard/components/DashboardHeader';
 import DashboardPanel from '../../dashboard/components/DashboardPanel';
 import { businessDataApi } from '../../dashboard/api/businessDataApi';
@@ -8,6 +8,7 @@ import { useTokens } from '../../token-management/hooks/useTokens';
 import { usePublishProgress } from '../../notifications/PublishProgressContext';
 import { useMetaKeySettings } from '../../settings/MetaKeySettingsContext';
 import { adsLaunchApi } from '../api/adsLaunchApi';
+import MediaLibraryFolderPicker from '../components/MediaLibraryFolderPicker';
 import { useLaunchTemplates } from '../hooks/useLaunchTemplates';
 import { useTokenMetaAssets } from '../hooks/useTokenMetaAssets';
 
@@ -54,18 +55,6 @@ const getCampaignStatusBadgeClass = (status) =>
   status === 'ACTIVE' ? 'bg-emerald-50 text-emerald-700' : 'bg-amber-50 text-amber-700';
 
 const campaignRequiresPixel = (template) => pixelRequiredObjectives.has(template?.config?.objective);
-
-const formatFileSize = (bytes = 0) => {
-  if (!bytes) {
-    return '0 KB';
-  }
-
-  if (bytes >= 1024 * 1024) {
-    return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
-  }
-
-  return `${Math.max(Math.round(bytes / 1024), 1)} KB`;
-};
 
 const MAX_THUMBNAIL_BYTES = 30 * 1024 * 1024;
 const MIN_THUMBNAIL_DIMENSION = 600;
@@ -192,6 +181,7 @@ const TemplatePreviewModal = ({ template, onClose }) => {
 
 const MediaLibraryPicker = ({
   description = 'Saved videos are stored without thumbnails. Choose a separate image media asset when a video needs a thumbnail.',
+  mediaFolders,
   mode = 'media',
   loading,
   mediaAssets,
@@ -249,117 +239,32 @@ const MediaLibraryPicker = ({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/50 px-4 py-6 backdrop-blur-sm">
-      <div className="max-h-[90vh] w-full max-w-5xl overflow-y-auto rounded-3xl border border-sky-100 bg-white p-5 shadow-2xl shadow-slate-950/20">
-        <div className="flex flex-wrap items-start justify-between gap-4">
-          <div>
-            <p className="text-xs font-black uppercase tracking-[0.18em] text-sky-600">Media library</p>
-            <h3 className="mt-1 text-xl font-black text-slate-950">{mode === 'thumbnail' ? 'Choose video thumbnail' : 'Choose image or video'}</h3>
-            <p className="mt-1 text-sm font-semibold text-slate-500">{description}</p>
-            {mode === 'thumbnail' ? (
-              <p className="mt-2 rounded-xl bg-amber-50 px-3 py-2 text-xs font-bold text-amber-700">
-                Pick an existing image below, or upload a new JPG thumbnail here. The selected video stays saved in the row.
-              </p>
-            ) : null}
-          </div>
-          <div className="flex flex-wrap items-center gap-2">
-            {mode === 'thumbnail' ? (
-              <>
-                <label htmlFor="dynamic-thumbnail-upload" className={`inline-flex h-10 cursor-pointer items-center gap-2 rounded-xl bg-sky-600 px-4 text-sm font-black text-white transition hover:bg-sky-700 ${uploadingThumbnail ? 'pointer-events-none opacity-70' : ''}`}>
-                  {uploadingThumbnail ? <LoaderCircle size={16} className="animate-spin" /> : <Upload size={16} strokeWidth={2.3} />}
-                  {uploadingThumbnail ? `Uploading ${thumbnailUploadProgress || 0}%` : 'Upload JPG'}
-                </label>
-                <input id="dynamic-thumbnail-upload" type="file" accept="image/jpeg" onChange={uploadThumbnail} disabled={uploadingThumbnail} className="hidden" />
-              </>
-            ) : null}
-            <a
-              href="/ads-media-library"
-              target="_blank"
-              rel="noreferrer"
-              className="inline-flex h-10 items-center gap-2 rounded-xl bg-slate-950 px-4 text-sm font-black text-white transition hover:bg-slate-800"
-            >
-              <Upload size={16} strokeWidth={2.3} />
-              Upload media
-            </a>
-            <button type="button" onClick={onRefresh} disabled={loading} className="flex h-10 items-center gap-2 rounded-xl border border-sky-100 bg-white px-4 text-sm font-black text-slate-700 transition hover:bg-sky-50 disabled:opacity-50">
-              <RefreshCw size={16} className={loading ? 'animate-spin' : ''} />
-              Refresh
-            </button>
-            <button type="button" onClick={onClose} className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-sky-100 text-slate-500 transition hover:bg-sky-50">
-              <X size={18} strokeWidth={2.4} />
-            </button>
-          </div>
-        </div>
-
-        {loading ? (
-          <div className="mt-5 grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-            {[0, 1, 2].map((item) => <div key={item} className="h-72 animate-pulse rounded-3xl bg-sky-50" />)}
-          </div>
-        ) : mediaAssets.length ? (
-          <div className="mt-5 grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-            {mediaAssets.map((mediaAsset) => {
-              const isVideo = mediaAsset.mediaType === 'VIDEO';
-              const media = mediaAsset.media || {};
-              const canSelect = mode === 'thumbnail' ? !isVideo : true;
-              const selected = selectedMediaAssetId === mediaAsset.id;
-
-              return (
-                <button
-                  key={mediaAsset.id}
-                  type="button"
-                  onClick={() => {
-                    if (canSelect) {
-                      onSelect(mediaAsset);
-                    }
-                  }}
-                  disabled={!canSelect}
-                  className={`overflow-hidden rounded-3xl border bg-white text-left shadow-sm transition ${
-                    selected
-                      ? 'border-sky-500 ring-4 ring-sky-100'
-                      : 'border-sky-100 hover:border-sky-300 hover:shadow-lg hover:shadow-sky-100'
-                  } ${canSelect ? '' : 'cursor-not-allowed opacity-60'}`}
-                >
-                  <div className="relative bg-slate-950">
-                    {isVideo ? (
-                      <video src={media.url} className="h-44 w-full object-contain" />
-                    ) : (
-                      <img src={media.url} alt={mediaAsset.name} className="h-44 w-full object-cover" />
-                    )}
-                    <span className={`absolute left-3 top-3 inline-flex items-center gap-2 rounded-full px-3 py-1 text-xs font-black ${isVideo ? 'bg-amber-50 text-amber-700' : 'bg-sky-50 text-sky-700'}`}>
-                      {isVideo ? <Video size={14} strokeWidth={2.4} /> : <ImageIcon size={14} strokeWidth={2.4} />}
-                      {isVideo ? 'Video' : 'Image'}
-                    </span>
-                    {selected ? (
-                      <span className="absolute right-3 top-3 rounded-full bg-emerald-50 px-3 py-1 text-xs font-black text-emerald-700">
-                        Selected
-                      </span>
-                    ) : null}
-                  </div>
-                  <div className="p-4">
-                    <p className="truncate text-sm font-black text-slate-950">{mediaAsset.name}</p>
-                    <p className="mt-1 truncate text-xs font-semibold text-slate-400">{media.width}x{media.height} | {formatFileSize(media.size)}</p>
-                    <p className="mt-2 inline-flex rounded-full bg-sky-50 px-3 py-1 text-[11px] font-black uppercase tracking-[0.12em] text-sky-700">
-                      {mediaAsset.brandName || 'Unassigned brand'}
-                    </p>
-                    {isVideo ? (
-                      <p className="mt-2 rounded-xl bg-amber-50 px-3 py-2 text-xs font-bold text-amber-700">
-                        Select an image thumbnail separately
-                      </p>
-                    ) : null}
-                  </div>
-                </button>
-              );
-            })}
-          </div>
-        ) : (
-          <p className="mt-5 rounded-2xl bg-sky-50 px-4 py-8 text-sm font-semibold text-slate-500">
-            {mode === 'thumbnail'
-              ? 'No image assets available for thumbnails. Open Ads Media Library, upload an image, then refresh this picker.'
-              : 'No saved media yet. Open Ads Media Library, upload an image or video, then refresh this picker.'}
-          </p>
-        )}
-      </div>
-    </div>
+    <MediaLibraryFolderPicker
+      description={
+        mode === 'thumbnail'
+          ? `${description} Pick an existing image below, or upload a new JPG thumbnail here.`
+          : description
+      }
+      headerExtra={
+        mode === 'thumbnail' ? (
+          <>
+            <label htmlFor="dynamic-thumbnail-upload" className={`inline-flex h-10 cursor-pointer items-center gap-2 rounded-xl bg-sky-600 px-4 text-sm font-black text-white transition hover:bg-sky-700 ${uploadingThumbnail ? 'pointer-events-none opacity-70' : ''}`}>
+              {uploadingThumbnail ? <LoaderCircle size={16} className="animate-spin" /> : <Upload size={16} strokeWidth={2.3} />}
+              {uploadingThumbnail ? `Uploading ${thumbnailUploadProgress || 0}%` : 'Upload JPG'}
+            </label>
+            <input id="dynamic-thumbnail-upload" type="file" accept="image/jpeg" onChange={uploadThumbnail} disabled={uploadingThumbnail} className="hidden" />
+          </>
+        ) : null
+      }
+      loading={loading}
+      mediaAssets={mediaAssets}
+      mediaFolders={mediaFolders}
+      mode={mode}
+      onClose={onClose}
+      onRefresh={onRefresh}
+      onSelect={onSelect}
+      selectedMediaAssetId={selectedMediaAssetId}
+    />
   );
 };
 
@@ -478,6 +383,7 @@ const DynamicAdsLaunchPage = () => {
   const [pageId, setPageId] = useState('');
   const [assignments, setAssignments] = useState({});
   const [mediaAssets, setMediaAssets] = useState([]);
+  const [mediaFolders, setMediaFolders] = useState([]);
   const [mediaAssetsLoading, setMediaAssetsLoading] = useState(true);
   const [mediaPickerAccountId, setMediaPickerAccountId] = useState('');
   const [thumbnailPickerAccountId, setThumbnailPickerAccountId] = useState('');
@@ -538,8 +444,12 @@ const DynamicAdsLaunchPage = () => {
     [brandId, templates]
   );
   const brandScopedMediaAssets = useMemo(
-    () => mediaAssets.filter((mediaAsset) => !brandId || !mediaAsset.brandId || mediaAsset.brandId === brandId),
+    () => mediaAssets.filter((mediaAsset) => !brandId || mediaAsset.brandId === brandId),
     [brandId, mediaAssets]
+  );
+  const brandScopedMediaFolders = useMemo(
+    () => mediaFolders.filter((mediaFolder) => !brandId || mediaFolder.brandId === brandId),
+    [brandId, mediaFolders]
   );
   const selectedAssignments = useMemo(
     () =>
@@ -651,11 +561,14 @@ const DynamicAdsLaunchPage = () => {
   const loadMediaAssets = async (nextBrandId = brandId) => {
     setMediaAssetsLoading(true);
     try {
-      const data = await adsLaunchApi.getMediaAssets({
-        brandId: nextBrandId,
-        includeUnassigned: Boolean(nextBrandId),
-      });
-      setMediaAssets(data.mediaAssets || []);
+      const [mediaData, folderData] = await Promise.all([
+        adsLaunchApi.getMediaAssets({
+          brandId: nextBrandId,
+        }),
+        adsLaunchApi.getMediaFolders(),
+      ]);
+      setMediaAssets(mediaData.mediaAssets || []);
+      setMediaFolders(folderData.mediaFolders || []);
     } catch (requestError) {
       toast.error(requestError.message);
     } finally {
@@ -1001,6 +914,7 @@ const DynamicAdsLaunchPage = () => {
         <MediaLibraryPicker
           loading={mediaAssetsLoading}
           mediaAssets={brandScopedMediaAssets}
+          mediaFolders={brandScopedMediaFolders}
           onClose={() => setMediaPickerAccountId('')}
           onRefresh={loadMediaAssets}
           onSelect={(mediaAsset) => selectMediaAssetForAccount(mediaPickerAccountId, mediaAsset)}
@@ -1012,6 +926,7 @@ const DynamicAdsLaunchPage = () => {
           description="Choose an image from the library to use as this video ad thumbnail."
           loading={mediaAssetsLoading}
           mediaAssets={brandScopedMediaAssets.filter((mediaAsset) => mediaAsset.mediaType === 'IMAGE')}
+          mediaFolders={brandScopedMediaFolders}
           mode="thumbnail"
           onClose={() => setThumbnailPickerAccountId('')}
           onRefresh={loadMediaAssets}

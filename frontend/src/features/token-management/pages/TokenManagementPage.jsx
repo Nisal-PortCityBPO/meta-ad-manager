@@ -58,6 +58,23 @@ const syncMessage = (summary = {}) =>
   `Fetch done: ${summary.created || 0} new, ${summary.updated || 0} updated, ${summary.skipped || 0} skipped, ${summary.apiCalls || 0} API calls`;
 const metaConnectionSyncToastId = 'meta-connection-profile-sync';
 
+const isTokenFetchableWithType = (token, tokenType) => {
+  if (!token || token.status === 'DEACTIVE') {
+    return false;
+  }
+
+  if (tokenType === META_KEY_TYPES.SYSTEM_USER) {
+    return token.systemUserAccessTokenStatus !== 'DEACTIVE' && Boolean(token.systemUserAccessToken);
+  }
+
+  return token.profileAccessTokenStatus !== 'DEACTIVE' && Boolean(token.profileAccessToken || token.accessToken);
+};
+
+const getTokenApiCallCountForType = (token, tokenType) =>
+  tokenType === META_KEY_TYPES.SYSTEM_USER
+    ? Number(token.systemUserApiCallCount) || 0
+    : Number(token.profileApiCallCount ?? token.apiCallCount) || 0;
+
 const StatusBadge = ({ status }) => (
   <span className={`inline-flex rounded-full px-3 py-1 text-xs font-black ${statusStyles[status] || statusStyles.DEACTIVE}`}>
     {statusLabels[status] || status || 'Deactive'}
@@ -334,6 +351,7 @@ const TokenManagementPage = () => {
   const [modalOpen, setModalOpen] = useState(false);
   const [saving, setSaving] = useState(false);
   const [syncingTokenId, setSyncingTokenId] = useState(null);
+  const [syncingAllTokens, setSyncingAllTokens] = useState(false);
 
   useEffect(() => {
     let isMounted = true;
@@ -506,9 +524,16 @@ const TokenManagementPage = () => {
       return 0;
     }
 
-    return tokenType === META_KEY_TYPES.SYSTEM_USER
-      ? Number(token.systemUserApiCallCount) || 0
-      : Number(token.profileApiCallCount ?? token.apiCallCount) || 0;
+    return getTokenApiCallCountForType(token, tokenType);
+  };
+
+  const getFetchApiCallCountForTokens = async (tokenIds, tokenType = fetchTokenType) => {
+    const tokenIdSet = new Set(tokenIds);
+    const data = await tokensApi.getTokens();
+
+    return data.tokens
+      .filter((token) => tokenIdSet.has(token.id))
+      .reduce((total, token) => total + getTokenApiCallCountForType(token, tokenType), 0);
   };
 
   const runProfileTokenFetch = async (token, { autoStarted = false, tokenType = fetchTokenType } = {}) => {
@@ -576,6 +601,77 @@ const TokenManagementPage = () => {
     void runProfileTokenFetch(token, { tokenType: fetchTokenType });
   };
 
+  const handleFetchAllTokens = async () => {
+    const fetchableTokens = tokens.filter((token) => isTokenFetchableWithType(token, fetchTokenType));
+    const keyLabel = getMetaKeyTypeLabel(fetchTokenType);
+
+    if (!fetchableTokens.length) {
+      toast.error(`No active ${keyLabel} connections are available to fetch.`);
+      return;
+    }
+
+    setSyncingAllTokens(true);
+    let apiCallBaseline = 0;
+    let latestApiCallsSent = 0;
+    let pollIntervalId = null;
+    const tokenIds = fetchableTokens.map((token) => token.id);
+
+    const showLoadingToast = (apiCallsSent) => {
+      toast.loading(`Fetching all Meta connections using ${keyLabel}. Tokens: ${fetchableTokens.length}. API calls sent: ${apiCallsSent}`, {
+        id: metaConnectionSyncToastId,
+        position: 'top-center',
+      });
+    };
+
+    try {
+      showLoadingToast(0);
+      apiCallBaseline = await getFetchApiCallCountForTokens(tokenIds, fetchTokenType);
+
+      pollIntervalId = window.setInterval(async () => {
+        try {
+          const currentApiCalls = await getFetchApiCallCountForTokens(tokenIds, fetchTokenType);
+          latestApiCallsSent = Math.max(currentApiCalls - apiCallBaseline, 0);
+          showLoadingToast(latestApiCallsSent);
+        } catch {
+          // Keep the bulk fetch running even if a progress refresh fails.
+        }
+      }, 1500);
+
+      const data = await tokensApi.syncBusinessProfiles(null, fetchTokenType);
+      const finalApiCallsSent = Number(data.summary?.apiCalls) || latestApiCallsSent;
+      const finalSummary = {
+        ...data.summary,
+        apiCalls: finalApiCallsSent,
+      };
+
+      toast.success(`All Meta connections: ${syncMessage(finalSummary)}`, {
+        id: metaConnectionSyncToastId,
+        position: 'top-center',
+      });
+
+      if (data.summary?.errors?.length) {
+        toast.error(data.summary.errors[0].message);
+      }
+
+      await loadTokens();
+      window.dispatchEvent(new Event('meta-sync-completed'));
+    } catch (requestError) {
+      toast.error(requestError.message, {
+        id: metaConnectionSyncToastId,
+        position: 'top-center',
+      });
+    } finally {
+      if (pollIntervalId) {
+        window.clearInterval(pollIntervalId);
+      }
+
+      setSyncingAllTokens(false);
+    }
+  };
+
+  const selectedFetchKeyLabel = getMetaKeyTypeLabel(fetchTokenType);
+  const fetchableTokenCount = tokens.filter((token) => isTokenFetchableWithType(token, fetchTokenType)).length;
+
   return (
     <div>
       <DashboardHeader
@@ -588,14 +684,30 @@ const TokenManagementPage = () => {
       <DashboardPanel
         title="Saved Meta Connections"
         headerAction={
-          <button
-            type="button"
-            onClick={openCreateModal}
-            className="flex h-11 items-center gap-2 rounded-xl bg-sky-600 px-4 text-sm font-bold text-white transition hover:bg-sky-700"
-          >
-            <Plus size={17} strokeWidth={2.2} />
-            Add token
-          </button>
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              onClick={handleFetchAllTokens}
+              disabled={saving || loading || syncingAllTokens || Boolean(syncingTokenId) || !fetchableTokenCount}
+              className="flex h-11 items-center gap-2 rounded-xl border border-sky-100 bg-white px-4 text-sm font-bold text-sky-700 transition hover:bg-sky-50 disabled:cursor-not-allowed disabled:opacity-60"
+              title={
+                fetchableTokenCount
+                  ? `Fetch all active connections using ${selectedFetchKeyLabel}`
+                  : `No active ${selectedFetchKeyLabel} connections available`
+              }
+            >
+              <DownloadCloud size={17} strokeWidth={2.2} className={syncingAllTokens ? 'animate-pulse' : ''} />
+              {syncingAllTokens ? 'Fetching all' : 'Fetch From All'}
+            </button>
+            <button
+              type="button"
+              onClick={openCreateModal}
+              className="flex h-11 items-center gap-2 rounded-xl bg-sky-600 px-4 text-sm font-bold text-white transition hover:bg-sky-700"
+            >
+              <Plus size={17} strokeWidth={2.2} />
+              Add token
+            </button>
+          </div>
         }
       >
         {loading ? (
@@ -628,11 +740,7 @@ const TokenManagementPage = () => {
                 <tbody className="divide-y divide-sky-50">
                   {tokens.map((token) => {
                       const selectedFetchTokenIsDeactive =
-                        token.status === 'DEACTIVE' ||
-                        (fetchTokenType === META_KEY_TYPES.SYSTEM_USER
-                          ? token.systemUserAccessTokenStatus === 'DEACTIVE'
-                          : token.profileAccessTokenStatus === 'DEACTIVE');
-                      const selectedFetchKeyLabel = getMetaKeyTypeLabel(fetchTokenType);
+                        !isTokenFetchableWithType(token, fetchTokenType);
 
                       return (
                         <tr key={token.id} className="align-top">
@@ -689,7 +797,7 @@ const TokenManagementPage = () => {
                               <button
                                 type="button"
                                 onClick={() => handleFetchToken(token)}
-                                disabled={saving || Boolean(syncingTokenId) || selectedFetchTokenIsDeactive}
+                                disabled={saving || syncingAllTokens || Boolean(syncingTokenId) || selectedFetchTokenIsDeactive}
                                 className="flex h-10 items-center justify-center gap-2 rounded-xl bg-sky-600 px-3 text-sm font-bold text-white transition hover:bg-sky-700 disabled:cursor-not-allowed disabled:opacity-60"
                                 title={selectedFetchTokenIsDeactive ? `${selectedFetchKeyLabel} is deactive` : `Fetch data using ${selectedFetchKeyLabel}`}
                               >
