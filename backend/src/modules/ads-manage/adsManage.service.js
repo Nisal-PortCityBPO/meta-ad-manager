@@ -221,7 +221,20 @@ function mapLaunchForHistory({ launch, media, thumbnail, accountLaunch = null, r
   };
 }
 
-function buildSingleAccountRetryPayload({ launch, account, accountLaunch = null }) {
+function buildResumeState({ account, campaignId = '', adSetId = '', creativeId = '', adId = '' }) {
+  const normalizedCampaignId = normalizeText(campaignId);
+  const resumeState = {
+    adAccountId: account.id,
+    campaignId: normalizedCampaignId && !normalizedCampaignId.startsWith('failed_') ? normalizedCampaignId : '',
+    adSetId: normalizeText(adSetId),
+    creativeId: normalizeText(creativeId),
+    adId: normalizeText(adId),
+  };
+
+  return resumeState.campaignId || resumeState.adSetId || resumeState.creativeId || resumeState.adId ? resumeState : null;
+}
+
+function buildSingleAccountRetryPayload({ launch, account, accountLaunch = null, campaign = null, adSet = null, creative = null, ad = null }) {
   const payload = {
     ...launch,
     media: null,
@@ -251,6 +264,20 @@ function buildSingleAccountRetryPayload({ launch, account, accountLaunch = null 
         pixelName: accountLaunch.pixelName || payload.pixelName || '',
       },
     ];
+  }
+
+  const resumeState = buildResumeState({
+    account,
+    campaignId: campaign?.id,
+    adSetId: adSet?.id,
+    creativeId: creative?.id,
+    adId: ad?.id,
+  });
+
+  if (resumeState) {
+    payload.resumeState = {
+      [account.id]: resumeState,
+    };
   }
 
   return payload;
@@ -485,6 +512,10 @@ async function recordFailedLaunch({ token, launch, account, names = {}, campaign
     launch,
     account,
     accountLaunch,
+    campaign,
+    adSet,
+    creative,
+    ad,
   });
   const now = new Date();
 
@@ -951,9 +982,26 @@ async function retryFailedLaunch({ tokenId, campaignId, actor, req, tokenType = 
     throw new HttpError(400, 'Only failed launch records can be retried');
   }
 
-  const retryPayload = campaign.launch?.retryPayload;
+  const retryPayload = {
+    ...(campaign.launch?.retryPayload || {}),
+  };
   if (!retryPayload || typeof retryPayload !== 'object') {
     throw new HttpError(400, 'This failed launch does not have enough saved data to retry');
+  }
+
+  const resumeState = buildResumeState({
+    account: campaign.adAccount || {},
+    campaignId: campaign.campaignId,
+    adSetId: campaign.adSetId,
+    creativeId: campaign.creativeId,
+    adId: campaign.adId,
+  });
+
+  if (resumeState) {
+    retryPayload.resumeState = {
+      ...(retryPayload.resumeState || {}),
+      [campaign.adAccount?.id || resumeState.adAccountId]: resumeState,
+    };
   }
 
   campaign.actionHistory.push(
@@ -975,9 +1023,18 @@ async function retryFailedLaunch({ tokenId, campaignId, actor, req, tokenType = 
       req,
       tokenType,
     });
+    const retryFailedCount = Number(result?.summary?.failed || result?.failed?.length || 0);
+    const retryPublishedCount = Number(result?.summary?.published || result?.results?.length || 0);
 
-    campaign.status = 'RETRIED';
-    campaign.effectiveStatus = 'RETRIED';
+    if (retryFailedCount > 0 && retryPublishedCount === 0) {
+      throw new HttpError(400, result?.failed?.[0]?.message || result?.message || 'Retry failed');
+    }
+
+    const retryStatus = campaign.campaignId.startsWith('failed_')
+      ? 'RETRIED'
+      : normalizeText(result?.results?.[0]?.status) || normalizeText(campaign.launch?.staticDefaults?.campaignStatus) || 'PAUSED';
+    campaign.status = retryStatus;
+    campaign.effectiveStatus = retryStatus;
     campaign.lastMetaError = '';
     campaign.updatedBy = actor?._id || null;
     campaign.lastActionAt = new Date();

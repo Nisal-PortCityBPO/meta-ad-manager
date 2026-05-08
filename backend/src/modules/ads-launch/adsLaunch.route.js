@@ -98,6 +98,7 @@ router.post('/media/complete', adsLaunchController.completeChunkedMediaAsset);
 router.patch('/media/:id/brand', adsLaunchController.updateMediaAssetBrand);
 router.get('/media/:id/:assetKind', adsLaunchController.getMediaAsset);
 router.delete('/media/:id', adsLaunchController.deleteMediaAsset);
+router.post('/failed-launches/:campaignId/retry', adsLaunchController.retryFailedLaunch);
 router.get('/templates', adsLaunchController.getTemplates);
 router.get('/templates/:id/assets/:assetKind', adsLaunchController.getTemplateAsset);
 router.post('/templates', adsLaunchController.createTemplate);

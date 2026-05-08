@@ -956,7 +956,10 @@ const DynamicAdsLaunchPage = () => {
 
     setPixelPrompt(null);
     setPublishing(true);
-    beginPublish();
+    beginPublish({
+      title: selectedBrand ? `Dynamic Ads Launch: ${selectedBrand.name}` : 'Dynamic Ads Launch publish',
+      source: 'Dynamic Ads Launch',
+    });
 
     try {
       const payload = {

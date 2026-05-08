@@ -402,7 +402,7 @@ const TemplateCard = ({ template, onDelete, onEdit }) => {
       <p className="mt-3 rounded-xl bg-sky-50 px-3 py-2 text-xs font-semibold text-slate-500">
         {isCampaignTemplate
           ? `${template.config?.objective || 'Campaign'} | ${campaignStatus} | Budget ${template.config?.dailyBudget || 'not set'}`
-          : `${template.config?.headline || 'Copy template'} | ${template.config?.callToAction || 'CTA'} | ${template.config?.websiteUrl || 'No URL'}`}
+          : `${template.config?.headline || 'Copy template'} | ${template.config?.callToAction || 'CTA'} | ${template.config?.description || 'No description'}`}
       </p>
     </div>
   );
@@ -1026,6 +1026,7 @@ const AdsTemplateBuilderPage = () => {
               <input value={mediaForm.name} onChange={(event) => updateMediaField('name', event.target.value)} className="h-12 rounded-xl border border-sky-100 px-4 outline-none focus:border-sky-400 focus:ring-4 focus:ring-sky-100" placeholder="Template name" />
               <input value={mediaForm.headline} onChange={(event) => updateMediaField('headline', event.target.value)} className="h-12 rounded-xl border border-sky-100 px-4 outline-none focus:border-sky-400 focus:ring-4 focus:ring-sky-100" placeholder="Headline" />
               <textarea value={mediaForm.primaryText} onChange={(event) => updateMediaField('primaryText', event.target.value)} className="min-h-24 rounded-xl border border-sky-100 px-4 py-3 outline-none focus:border-sky-400 focus:ring-4 focus:ring-sky-100 xl:col-span-2" placeholder="Primary text" />
+              <textarea value={mediaForm.description} onChange={(event) => updateMediaField('description', event.target.value)} className="min-h-20 rounded-xl border border-sky-100 px-4 py-3 outline-none focus:border-sky-400 focus:ring-4 focus:ring-sky-100 xl:col-span-2" placeholder="Description (optional)" />
               <input value={mediaForm.websiteUrl} onChange={(event) => updateMediaField('websiteUrl', event.target.value)} className="h-12 rounded-xl border border-sky-100 px-4 outline-none focus:border-sky-400 focus:ring-4 focus:ring-sky-100" placeholder="Destination URL" />
               <input value={mediaForm.displayUrl} onChange={(event) => updateMediaField('displayUrl', event.target.value)} className="h-12 rounded-xl border border-sky-100 px-4 outline-none focus:border-sky-400 focus:ring-4 focus:ring-sky-100" placeholder="Display URL" />
               <select value={mediaForm.callToAction} onChange={(event) => updateMediaField('callToAction', event.target.value)} className="h-12 rounded-xl border border-sky-100 px-4 outline-none focus:border-sky-400 focus:ring-4 focus:ring-sky-100">

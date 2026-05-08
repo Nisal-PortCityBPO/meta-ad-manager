@@ -21,8 +21,10 @@ import {
   XCircle,
 } from 'lucide-react';
 import { USER_ROLES, useAuth } from '../../features/auth/hooks/useAuth';
+import { adsLaunchApi } from '../../features/ads-launch/api/adsLaunchApi';
 import { MetaSyncProvider } from '../../features/dashboard/context/MetaSyncContext';
 import { PublishProgressProvider, usePublishProgress } from '../../features/notifications/PublishProgressContext';
+import PublishHistoryList from '../../features/notifications/components/PublishHistoryList';
 import PublishProgressPanel, { formatDuration } from '../../features/notifications/components/PublishProgressPanel';
 import {
   getMetaKeyTypeLabel,
@@ -49,12 +51,23 @@ const navItemsConfig = [
 ];
 
 const PublishStatusControl = () => {
-  const { dismissStartPopup, events, isPublishing, latestError, latestResult, progress, showStartPopup } = usePublishProgress();
+  const {
+    currentPublishId,
+    dismissStartPopup,
+    events,
+    isPublishing,
+    latestError,
+    latestResult,
+    progress,
+    publishHistory,
+    showStartPopup,
+  } = usePublishProgress();
   const [panelOpen, setPanelOpen] = useState(false);
   const [previewOpen, setPreviewOpen] = useState(false);
   const controlRef = useRef(null);
   const percent = progress?.progress?.percent || 0;
   const hasPublishState = Boolean(isPublishing || progress || latestResult || latestError);
+  const historyForPanel = publishHistory.filter((item) => !hasPublishState || item.id !== currentPublishId);
   const statusLabel = isPublishing ? 'Publishing ads' : latestError ? 'Publish failed' : latestResult ? 'Publish complete' : 'Publish status';
   const statusMessage = progress?.message || latestResult?.message || latestError || 'No active publish';
   const progressData = progress?.progress || {};
@@ -146,8 +159,21 @@ const PublishStatusControl = () => {
       ) : null}
 
       {hasPublishState && panelOpen ? (
-        <div className="absolute right-0 top-14 z-50 w-[min(92vw,460px)]">
-          <PublishProgressPanel events={events} latestError={latestError} latestResult={latestResult} progress={progress} compact />
+        <div className="absolute right-0 top-14 z-50 max-h-[min(80vh,720px)] w-[min(92vw,520px)] overflow-y-auto rounded-2xl border border-sky-100 bg-white p-3 shadow-xl shadow-sky-200/70">
+          {hasPublishState ? (
+            <PublishProgressPanel events={events} latestError={latestError} latestResult={latestResult} progress={progress} compact />
+          ) : null}
+          {historyForPanel.length || !hasPublishState ? (
+          <div className={hasPublishState ? 'mt-3 border-t border-sky-50 pt-3' : ''}>
+            <div className="mb-3 flex items-center justify-between gap-3 px-1">
+              <p className="text-xs font-black uppercase tracking-[0.18em] text-sky-600">Publish history</p>
+              <span className="rounded-full bg-sky-50 px-3 py-1 text-[11px] font-black text-sky-700">
+                {historyForPanel.length}
+              </span>
+            </div>
+            <PublishHistoryList history={historyForPanel} limit={5} />
+          </div>
+          ) : null}
         </div>
       ) : null}
 
@@ -170,6 +196,91 @@ const PublishStatusControl = () => {
             </div>
           </div>
         </button>
+      ) : null}
+    </div>
+  );
+};
+
+const NotificationsControl = () => {
+  const navigate = useNavigate();
+  const { publishHistory } = usePublishProgress();
+  const { publishTokenType } = useMetaKeySettings();
+  const [open, setOpen] = useState(false);
+  const [retryingRecordId, setRetryingRecordId] = useState('');
+  const controlRef = useRef(null);
+  const failedCount = publishHistory.filter((item) => item.status === 'failed').length;
+
+  useEffect(() => {
+    if (!open) {
+      return undefined;
+    }
+
+    const handlePointerDown = (event) => {
+      if (!controlRef.current?.contains(event.target)) {
+        setOpen(false);
+      }
+    };
+
+    window.addEventListener('pointerdown', handlePointerDown);
+    return () => window.removeEventListener('pointerdown', handlePointerDown);
+  }, [open]);
+
+  const retryFailedAccount = async (failure) => {
+    if (!failure?.campaignId || !failure?.tokenId) {
+      toast.error('Retry data is missing for this failed account');
+      return;
+    }
+
+    setRetryingRecordId(failure.historyRecordId || failure.campaignId);
+    try {
+      const data = await adsLaunchApi.retryFailedLaunch(failure.campaignId, {
+        tokenId: failure.tokenId,
+        tokenType: publishTokenType,
+      });
+      toast.success(data.message || 'Retry completed');
+    } catch (requestError) {
+      toast.error(requestError.message);
+    } finally {
+      setRetryingRecordId('');
+    }
+  };
+
+  return (
+    <div className="relative" ref={controlRef}>
+      <button
+        type="button"
+        onClick={() => setOpen((current) => !current)}
+        className="relative flex h-11 items-center gap-2 rounded-xl border border-sky-100 bg-white px-4 text-sm font-bold text-slate-700 transition hover:bg-sky-50"
+      >
+        <Bell size={17} strokeWidth={2.2} />
+        Notifications
+        {publishHistory.length ? (
+          <span className={`ml-1 rounded-full px-2 py-0.5 text-[10px] font-black ${failedCount ? 'bg-red-50 text-red-600' : 'bg-sky-50 text-sky-700'}`}>
+            {publishHistory.length}
+          </span>
+        ) : null}
+      </button>
+
+      {open ? (
+        <div className="absolute right-0 top-14 z-50 max-h-[min(80vh,720px)] w-[min(92vw,520px)] overflow-y-auto rounded-2xl border border-sky-100 bg-white p-4 shadow-xl shadow-sky-200/70">
+          <div className="mb-3 flex items-center justify-between gap-3">
+            <div>
+              <p className="text-sm font-black text-slate-950">Publish history</p>
+              <p className="mt-1 text-xs font-semibold text-slate-500">Saved live publish processes from this browser.</p>
+            </div>
+            <button
+              type="button"
+              onClick={() => {
+                setOpen(false);
+                navigate('/notifications');
+              }}
+              className="rounded-lg border border-sky-100 bg-white px-3 py-2 text-xs font-black uppercase tracking-[0.14em] text-sky-700 transition hover:bg-sky-50"
+            >
+              Open
+            </button>
+          </div>
+          <PublishHistoryList history={publishHistory} limit={5} onRetryFailed={retryFailedAccount} retryingRecordId={retryingRecordId} />
+        </div>
       ) : null}
     </div>
   );
@@ -323,14 +434,7 @@ const DashboardShell = () => {
             </div>
             <div className="flex items-center gap-2">
               <PublishStatusControl />
-              <button
-                type="button"
-                onClick={() => navigate('/notifications')}
-                className="flex h-11 items-center gap-2 rounded-xl border border-sky-100 bg-white px-4 text-sm font-bold text-slate-700 transition hover:bg-sky-50"
-              >
-                <Bell size={17} strokeWidth={2.2} />
-                Notifications
-              </button>
+              <NotificationsControl />
               <MetaKeySettingsControl />
               <button
                 type="button"

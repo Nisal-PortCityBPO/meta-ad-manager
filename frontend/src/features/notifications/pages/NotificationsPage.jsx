@@ -1,5 +1,10 @@
+import { useState } from 'react';
+import toast from 'react-hot-toast';
 import DashboardHeader from '../../dashboard/components/DashboardHeader';
 import DashboardPanel from '../../dashboard/components/DashboardPanel';
+import { adsLaunchApi } from '../../ads-launch/api/adsLaunchApi';
+import { useMetaKeySettings } from '../../settings/MetaKeySettingsContext';
+import PublishHistoryList from '../components/PublishHistoryList';
 import PublishProgressPanel from '../components/PublishProgressPanel';
 import { usePublishProgress } from '../PublishProgressContext';
 
@@ -19,8 +24,31 @@ const notifications = [
 ];
 
 const NotificationsPage = () => {
-  const { events, latestError, latestResult, progress } = usePublishProgress();
+  const { clearPublishHistory, currentPublishId, events, latestError, latestResult, progress, publishHistory } = usePublishProgress();
+  const { publishTokenType } = useMetaKeySettings();
+  const [retryingRecordId, setRetryingRecordId] = useState('');
   const hasPublishNotice = Boolean(progress || events.length || latestResult || latestError);
+  const savedHistory = publishHistory.filter((item) => !hasPublishNotice || item.id !== currentPublishId);
+
+  const retryFailedAccount = async (failure) => {
+    if (!failure?.campaignId || !failure?.tokenId) {
+      toast.error('Retry data is missing for this failed account');
+      return;
+    }
+
+    setRetryingRecordId(failure.historyRecordId || failure.campaignId);
+    try {
+      const data = await adsLaunchApi.retryFailedLaunch(failure.campaignId, {
+        tokenId: failure.tokenId,
+        tokenType: publishTokenType,
+      });
+      toast.success(data.message || 'Retry completed');
+    } catch (requestError) {
+      toast.error(requestError.message);
+    } finally {
+      setRetryingRecordId('');
+    }
+  };
 
   return (
     <div>
@@ -31,6 +59,29 @@ const NotificationsPage = () => {
           <PublishProgressPanel events={events} latestError={latestError} latestResult={latestResult} progress={progress} />
         </div>
       ) : null}
+
+      <DashboardPanel
+        title="Publish history"
+        className="mb-4"
+        headerAction={
+          publishHistory.length ? (
+            <button
+              type="button"
+              onClick={clearPublishHistory}
+              className="rounded-lg border border-red-100 bg-white px-3 py-2 text-xs font-black uppercase tracking-[0.14em] text-red-600 transition hover:bg-red-50"
+            >
+              Clear
+            </button>
+          ) : null
+        }
+      >
+        <PublishHistoryList
+          history={hasPublishNotice ? savedHistory : publishHistory}
+          limit={12}
+          onRetryFailed={retryFailedAccount}
+          retryingRecordId={retryingRecordId}
+        />
+      </DashboardPanel>
 
       <DashboardPanel>
         <div className="divide-y divide-sky-50">
