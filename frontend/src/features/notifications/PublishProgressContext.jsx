@@ -3,6 +3,7 @@ import { createContext, useContext, useEffect, useMemo, useRef, useState } from 
 const PublishProgressContext = createContext(null);
 const SUCCESS_CLEAR_DELAY_MS = 12000;
 const HISTORY_STORAGE_KEY = 'meta-manager.ads-publish-history.v1';
+const HISTORY_SEEN_STORAGE_KEY = 'meta-manager.ads-publish-history-seen-at.v1';
 const HISTORY_LIMIT = 15;
 const HISTORY_EVENT_LIMIT = 120;
 
@@ -31,6 +32,24 @@ const writeStoredHistory = (history) => {
   }
 };
 
+const readSeenAt = () => {
+  if (typeof window === 'undefined') {
+    return '';
+  }
+
+  return window.localStorage.getItem(HISTORY_SEEN_STORAGE_KEY) || '';
+};
+
+const writeSeenAt = (value) => {
+  if (typeof window === 'undefined') {
+    return;
+  }
+
+  window.localStorage.setItem(HISTORY_SEEN_STORAGE_KEY, value);
+};
+
+const getHistorySortTime = (item = {}) => item.completedAt || item.progress?.timestamp || item.startedAt || '';
+
 const createInitialProgress = () => ({
   type: 'progress',
   status: 'active',
@@ -54,8 +73,10 @@ export const PublishProgressProvider = ({ children }) => {
   const [latestError, setLatestError] = useState('');
   const [showStartPopup, setShowStartPopup] = useState(false);
   const [publishHistory, setPublishHistory] = useState(readStoredHistory);
+  const [publishHistorySeenAt, setPublishHistorySeenAt] = useState(readSeenAt);
   const [currentPublishId, setCurrentPublishId] = useState('');
   const activeSessionRef = useRef(null);
+  const publishHistoryUnreadCount = publishHistory.filter((item) => getHistorySortTime(item) > publishHistorySeenAt).length;
 
   const commitHistoryItem = (item) => {
     setPublishHistory((current) => {
@@ -228,6 +249,23 @@ export const PublishProgressProvider = ({ children }) => {
   const clearPublishHistory = () => {
     writeStoredHistory([]);
     setPublishHistory([]);
+    writeSeenAt(new Date().toISOString());
+    setPublishHistorySeenAt(readSeenAt());
+  };
+
+  const markPublishHistorySeen = () => {
+    const latestTimestamp = publishHistory
+      .map(getHistorySortTime)
+      .filter(Boolean)
+      .sort()
+      .at(-1);
+
+    if (!latestTimestamp || latestTimestamp <= publishHistorySeenAt) {
+      return;
+    }
+
+    writeSeenAt(latestTimestamp);
+    setPublishHistorySeenAt(latestTimestamp);
   };
 
   useEffect(() => {
@@ -252,12 +290,14 @@ export const PublishProgressProvider = ({ children }) => {
       isPublishing,
       latestError,
       latestResult,
+      markPublishHistorySeen,
       progress,
       publishHistory,
+      publishHistoryUnreadCount,
       pushPublishEvent,
       showStartPopup,
     }),
-    [currentPublishId, events, isPublishing, latestError, latestResult, progress, publishHistory, showStartPopup]
+    [currentPublishId, events, isPublishing, latestError, latestResult, progress, publishHistory, publishHistorySeenAt, publishHistoryUnreadCount, showStartPopup]
   );
 
   return <PublishProgressContext.Provider value={value}>{children}</PublishProgressContext.Provider>;

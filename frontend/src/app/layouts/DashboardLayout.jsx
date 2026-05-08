@@ -32,6 +32,7 @@ import {
   MetaKeySettingsProvider,
   useMetaKeySettings,
 } from '../../features/settings/MetaKeySettingsContext';
+import { settingsApi } from '../../features/settings/api/settingsApi';
 import brandLogo from '../../assets/200m-logo.png';
 
 const navItemsConfig = [
@@ -203,7 +204,7 @@ const PublishStatusControl = () => {
 
 const NotificationsControl = () => {
   const navigate = useNavigate();
-  const { publishHistory } = usePublishProgress();
+  const { markPublishHistorySeen, publishHistory, publishHistoryUnreadCount } = usePublishProgress();
   const { publishTokenType } = useMetaKeySettings();
   const [open, setOpen] = useState(false);
   const [retryingRecordId, setRetryingRecordId] = useState('');
@@ -245,18 +246,30 @@ const NotificationsControl = () => {
     }
   };
 
+  const toggleOpen = () => {
+    setOpen((current) => {
+      const nextOpen = !current;
+
+      if (nextOpen) {
+        markPublishHistorySeen();
+      }
+
+      return nextOpen;
+    });
+  };
+
   return (
     <div className="relative" ref={controlRef}>
       <button
         type="button"
-        onClick={() => setOpen((current) => !current)}
+        onClick={toggleOpen}
         className="relative flex h-11 items-center gap-2 rounded-xl border border-sky-100 bg-white px-4 text-sm font-bold text-slate-700 transition hover:bg-sky-50"
       >
         <Bell size={17} strokeWidth={2.2} />
         Notifications
-        {publishHistory.length ? (
+        {publishHistoryUnreadCount ? (
           <span className={`ml-1 rounded-full px-2 py-0.5 text-[10px] font-black ${failedCount ? 'bg-red-50 text-red-600' : 'bg-sky-50 text-sky-700'}`}>
-            {publishHistory.length}
+            {publishHistoryUnreadCount}
           </span>
         ) : null}
       </button>
@@ -265,8 +278,8 @@ const NotificationsControl = () => {
         <div className="absolute right-0 top-14 z-50 max-h-[min(80vh,720px)] w-[min(92vw,520px)] overflow-y-auto rounded-2xl border border-sky-100 bg-white p-4 shadow-xl shadow-sky-200/70">
           <div className="mb-3 flex items-center justify-between gap-3">
             <div>
-              <p className="text-sm font-black text-slate-950">Publish history</p>
-              <p className="mt-1 text-xs font-semibold text-slate-500">Saved live publish processes from this browser.</p>
+              <p className="text-sm font-black text-slate-950">Latest notifications</p>
+              <p className="mt-1 text-xs font-semibold text-slate-500">Newest publish updates from this browser.</p>
             </div>
             <button
               type="button"
@@ -279,7 +292,7 @@ const NotificationsControl = () => {
               Open
             </button>
           </div>
-          <PublishHistoryList history={publishHistory} limit={5} onRetryFailed={retryFailedAccount} retryingRecordId={retryingRecordId} />
+          <PublishHistoryList history={publishHistory} limit={3} onRetryFailed={retryFailedAccount} retryingRecordId={retryingRecordId} />
         </div>
       ) : null}
     </div>
@@ -313,6 +326,16 @@ const KeyTypeToggle = ({ value, onChange }) => (
 const MetaKeySettingsControl = () => {
   const { fetchTokenType, publishTokenType, setFetchTokenType, setPublishTokenType } = useMetaKeySettings();
   const [open, setOpen] = useState(false);
+  const [telegramLoading, setTelegramLoading] = useState(false);
+  const [telegramSaving, setTelegramSaving] = useState(false);
+  const [telegramTesting, setTelegramTesting] = useState(false);
+  const [telegramForm, setTelegramForm] = useState({
+    enabled: false,
+    botToken: '',
+    botTokenMasked: '',
+    botTokenSet: false,
+    chatId: '',
+  });
   const controlRef = useRef(null);
 
   useEffect(() => {
@@ -330,6 +353,87 @@ const MetaKeySettingsControl = () => {
     return () => window.removeEventListener('pointerdown', handlePointerDown);
   }, [open]);
 
+  useEffect(() => {
+    if (!open) {
+      return undefined;
+    }
+
+    let mounted = true;
+    setTelegramLoading(true);
+    settingsApi
+      .getTelegramSettings()
+      .then((data) => {
+        if (!mounted) {
+          return;
+        }
+
+        setTelegramForm({
+          enabled: Boolean(data.telegram?.enabled),
+          botToken: '',
+          botTokenMasked: data.telegram?.botTokenMasked || '',
+          botTokenSet: Boolean(data.telegram?.botTokenSet),
+          chatId: data.telegram?.chatId || '',
+        });
+      })
+      .catch((requestError) => toast.error(requestError.message))
+      .finally(() => {
+        if (mounted) {
+          setTelegramLoading(false);
+        }
+      });
+
+    return () => {
+      mounted = false;
+    };
+  }, [open]);
+
+  const updateTelegramForm = (field, value) => {
+    setTelegramForm((current) => ({
+      ...current,
+      [field]: value,
+    }));
+  };
+
+  const saveTelegramSettings = async () => {
+    setTelegramSaving(true);
+    try {
+      const payload = {
+        enabled: telegramForm.enabled,
+        chatId: telegramForm.chatId,
+      };
+
+      if (telegramForm.botToken.trim()) {
+        payload.botToken = telegramForm.botToken.trim();
+      }
+
+      const data = await settingsApi.updateTelegramSettings(payload);
+      setTelegramForm({
+        enabled: Boolean(data.telegram?.enabled),
+        botToken: '',
+        botTokenMasked: data.telegram?.botTokenMasked || '',
+        botTokenSet: Boolean(data.telegram?.botTokenSet),
+        chatId: data.telegram?.chatId || '',
+      });
+      toast.success(data.message);
+    } catch (requestError) {
+      toast.error(requestError.message);
+    } finally {
+      setTelegramSaving(false);
+    }
+  };
+
+  const testTelegramSettings = async () => {
+    setTelegramTesting(true);
+    try {
+      const data = await settingsApi.testTelegramSettings();
+      toast.success(data.message);
+    } catch (requestError) {
+      toast.error(requestError.message);
+    } finally {
+      setTelegramTesting(false);
+    }
+  };
+
   return (
     <div className="relative" ref={controlRef}>
       <button
@@ -342,8 +446,8 @@ const MetaKeySettingsControl = () => {
       </button>
 
       {open ? (
-        <div className="absolute right-0 top-14 z-50 w-[min(92vw,420px)] rounded-2xl border border-sky-100 bg-white p-4 shadow-xl shadow-sky-200/70">
-          <div className="space-y-3">
+        <div className="absolute right-0 top-14 z-50 max-h-[min(84vh,760px)] w-[min(92vw,520px)] overflow-y-auto rounded-2xl border border-sky-100 bg-white p-4 shadow-xl shadow-sky-200/70">
+          <div className="space-y-4">
             <div className="flex items-center justify-between gap-4">
               <div>
                 <p className="text-sm font-black text-slate-950">Fetch data</p>
@@ -358,6 +462,75 @@ const MetaKeySettingsControl = () => {
                 <p className="mt-1 text-xs font-semibold text-slate-500">{getMetaKeyTypeLabel(publishTokenType)}</p>
               </div>
               <KeyTypeToggle value={publishTokenType} onChange={setPublishTokenType} />
+            </div>
+
+            <div className="border-t border-sky-50 pt-4">
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div>
+                  <p className="text-sm font-black text-slate-950">Telegram publish summary</p>
+                  <p className="mt-1 text-xs font-semibold text-slate-500">
+                    Send a compact summary to Telegram when Meta publish completes.
+                  </p>
+                </div>
+                <label className="inline-flex cursor-pointer items-center gap-2 rounded-full bg-sky-50 px-3 py-2 text-xs font-black text-sky-700">
+                  <input
+                    type="checkbox"
+                    checked={telegramForm.enabled}
+                    onChange={(event) => updateTelegramForm('enabled', event.target.checked)}
+                    className="h-4 w-4 rounded border-sky-200 text-sky-600 focus:ring-sky-500"
+                  />
+                  Enabled
+                </label>
+              </div>
+
+              <div className="mt-3 grid gap-3">
+                <div className="space-y-1.5">
+                  <label htmlFor="telegram-bot-token" className="text-xs font-black uppercase tracking-[0.14em] text-slate-500">
+                    Bot token
+                  </label>
+                  <input
+                    id="telegram-bot-token"
+                    value={telegramForm.botToken}
+                    onChange={(event) => updateTelegramForm('botToken', event.target.value)}
+                    className="h-11 w-full rounded-xl border border-sky-100 px-3 text-sm font-semibold outline-none focus:border-sky-400 focus:ring-4 focus:ring-sky-100"
+                    placeholder={telegramForm.botTokenSet ? `Saved: ${telegramForm.botTokenMasked}` : '123456:ABC...'}
+                    type="password"
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <label htmlFor="telegram-chat-id" className="text-xs font-black uppercase tracking-[0.14em] text-slate-500">
+                    Chat id
+                  </label>
+                  <input
+                    id="telegram-chat-id"
+                    value={telegramForm.chatId}
+                    onChange={(event) => updateTelegramForm('chatId', event.target.value)}
+                    className="h-11 w-full rounded-xl border border-sky-100 px-3 text-sm font-semibold outline-none focus:border-sky-400 focus:ring-4 focus:ring-sky-100"
+                    placeholder="-1001234567890 or @channelusername"
+                  />
+                </div>
+              </div>
+
+              <div className="mt-3 flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  onClick={saveTelegramSettings}
+                  disabled={telegramLoading || telegramSaving}
+                  className="inline-flex h-10 items-center gap-2 rounded-xl bg-slate-950 px-4 text-sm font-bold text-white transition hover:bg-slate-800 disabled:opacity-60"
+                >
+                  {telegramSaving ? <LoaderCircle size={16} className="animate-spin" /> : <Settings2 size={16} />}
+                  Save Telegram
+                </button>
+                <button
+                  type="button"
+                  onClick={testTelegramSettings}
+                  disabled={telegramLoading || telegramTesting || !telegramForm.botTokenSet}
+                  className="inline-flex h-10 items-center gap-2 rounded-xl border border-sky-100 bg-white px-4 text-sm font-bold text-sky-700 transition hover:bg-sky-50 disabled:opacity-60"
+                >
+                  {telegramTesting ? <LoaderCircle size={16} className="animate-spin" /> : <Bell size={16} />}
+                  Test
+                </button>
+              </div>
             </div>
           </div>
         </div>

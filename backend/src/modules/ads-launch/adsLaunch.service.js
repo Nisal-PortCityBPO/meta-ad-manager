@@ -9,6 +9,7 @@ const { LAUNCH_TEMPLATE_TYPES } = require('./adsLaunch.model');
 const AdsLaunchMedia = require('./adsLaunchMedia.model');
 const { ADS_MEDIA_TYPES } = require('./adsLaunchMedia.model');
 const adsManageService = require('../ads-manage/adsManage.service');
+const settingsService = require('../settings/settings.service');
 const tokenService = require('../token-management/token.service');
 
 const META_GRAPH_VERSION = process.env.META_GRAPH_VERSION || 'v24.0';
@@ -3156,7 +3157,7 @@ async function publishLaunch({ payload, actor, req, onProgress = null, tokenType
     req,
   });
 
-  return {
+  const publishResult = {
     message:
       failed.length > 0
         ? `Publish completed with ${results.length} success and ${failed.length} failure`
@@ -3169,6 +3170,13 @@ async function publishLaunch({ payload, actor, req, onProgress = null, tokenType
       failed: failed.length,
     },
   };
+
+  publishResult.telegram = await settingsService.notifyPublishSummary({
+    launch,
+    result: publishResult,
+  });
+
+  return publishResult;
 }
 
 module.exports = {
