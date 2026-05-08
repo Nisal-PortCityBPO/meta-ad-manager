@@ -324,6 +324,9 @@ const AdsLaunchMediaLibraryPicker = ({
                     <p className="mt-1 truncate text-xs font-semibold text-slate-400">
                       {media.width || 0}x{media.height || 0} | {formatFileSize(media.size)}
                     </p>
+                    <p className="mt-2 inline-flex rounded-full bg-sky-50 px-3 py-1 text-[11px] font-black uppercase tracking-[0.12em] text-sky-700">
+                      {mediaAsset.brandName || 'Unassigned brand'}
+                    </p>
                     {isVideo ? (
                       <p className="mt-2 rounded-xl bg-amber-50 px-3 py-2 text-xs font-bold text-amber-700">
                         Choose a separate image thumbnail for publishing
@@ -831,8 +834,13 @@ const AdsLaunchPage = () => {
   }, [adAccounts, form.brandId, form.tokenId, selectedBrandSavedAccountKeys]);
   const hasBrandSavedAdAccounts = selectedBrandSavedAccountKeys.size > 0;
   const launchTemplates = useMemo(
-    () => templates.filter((template) => !template.templateType || template.templateType === 'FULL'),
-    [templates]
+    () =>
+      templates.filter(
+        (template) =>
+          (!template.templateType || template.templateType === 'FULL') &&
+          (!form.brandId || !template.config?.brandId || template.config.brandId === form.brandId)
+      ),
+    [form.brandId, templates]
   );
   const templatePageCount = Math.max(Math.ceil(launchTemplates.length / TEMPLATES_PER_PAGE), 1);
   const safeTemplatePage = Math.min(Math.max(templatePage, 1), templatePageCount);
@@ -883,9 +891,13 @@ const AdsLaunchPage = () => {
   const activeMediaPreviewUrl = activeMediaAsset?.url || '';
   const activeThumbnailPreviewUrl = activeThumbnailAsset?.url || '';
   const isVideoAsset = activeMediaAsset?.type?.startsWith('video/') || false;
+  const brandScopedMediaAssets = useMemo(
+    () => mediaAssets.filter((mediaAsset) => !form.brandId || !mediaAsset.brandId || mediaAsset.brandId === form.brandId),
+    [form.brandId, mediaAssets]
+  );
   const imageMediaAssets = useMemo(
-    () => mediaAssets.filter((mediaAsset) => mediaAsset.mediaType === 'IMAGE'),
-    [mediaAssets]
+    () => brandScopedMediaAssets.filter((mediaAsset) => mediaAsset.mediaType === 'IMAGE'),
+    [brandScopedMediaAssets]
   );
   const currentObjective = normalizeObjective(form.objective);
   const pixelRequired = currentObjective === 'OUTCOME_LEADS' || currentObjective === 'OUTCOME_SALES';
@@ -969,10 +981,13 @@ const AdsLaunchPage = () => {
     };
   }, []);
 
-  const loadMediaAssets = async () => {
+  const loadMediaAssets = async (brandId = form.brandId) => {
     setMediaAssetsLoading(true);
     try {
-      const data = await adsLaunchApi.getMediaAssets();
+      const data = await adsLaunchApi.getMediaAssets({
+        brandId,
+        includeUnassigned: Boolean(brandId),
+      });
       setMediaAssets(data.mediaAssets || []);
     } catch (requestError) {
       toast.error(requestError.message);
@@ -982,8 +997,8 @@ const AdsLaunchPage = () => {
   };
 
   useEffect(() => {
-    loadMediaAssets();
-  }, []);
+    loadMediaAssets(form.brandId);
+  }, [form.brandId]);
 
   useEffect(() => {
     if (brandsLoading || form.brandId || !form.tokenId || !brands.length) {
@@ -1443,6 +1458,8 @@ const AdsLaunchPage = () => {
     const uploadLabel = `Uploading ${isVideoUpload ? `${label} video` : `${label} image`}`;
     const data = await adsLaunchApi.uploadMediaAssetWithProgress({
       name: (templateName || form.launchLabel || mediaFile.name).trim(),
+      brandId: form.brandId,
+      brandName: selectedBrand?.name || '',
       mediaFile,
       mediaMetadata,
     }, {
@@ -1465,6 +1482,8 @@ const AdsLaunchPage = () => {
     const thumbnailMetadata = await readImageMetadata(thumbnailFile);
     const data = await adsLaunchApi.uploadMediaAssetWithProgress({
       name: `${(templateName || form.launchLabel || thumbnailFile.name).trim()} thumbnail`,
+      brandId: form.brandId,
+      brandName: selectedBrand?.name || '',
       mediaFile: thumbnailFile,
       mediaMetadata: thumbnailMetadata,
     }, {
@@ -1898,7 +1917,7 @@ const AdsLaunchPage = () => {
               : 'Choose an image or video from the library. It can publish now and be copied into the saved launch template.'
           }
           loading={mediaAssetsLoading}
-          mediaAssets={mediaLibraryPickerMode === 'thumbnail' ? imageMediaAssets : mediaAssets}
+          mediaAssets={mediaLibraryPickerMode === 'thumbnail' ? imageMediaAssets : brandScopedMediaAssets}
           mode={mediaLibraryPickerMode}
           onClose={() => setMediaLibraryPickerMode('')}
           onRefresh={loadMediaAssets}

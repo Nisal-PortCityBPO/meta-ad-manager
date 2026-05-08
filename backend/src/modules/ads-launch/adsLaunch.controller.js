@@ -25,6 +25,9 @@ const getTemplateAsset = asyncHandler(async (req, res) => {
 const getMediaAssets = asyncHandler(async (req, res) => {
   const mediaAssets = await adsLaunchService.listMediaAssets({
     actor: req.user,
+    brandId: req.query.brandId,
+    search: req.query.search,
+    includeUnassigned: req.query.includeUnassigned === 'true',
   });
 
   res.json({ mediaAssets });
@@ -48,6 +51,8 @@ const createMediaAsset = asyncHandler(async (req, res) => {
 
   const mediaAsset = await adsLaunchService.createMediaAsset({
     name: req.body.name,
+    brandId: req.body.brandId,
+    brandName: req.body.brandName,
     media: req.body.media,
     thumbnail: req.body.thumbnail,
     uploadedMedia,
@@ -79,6 +84,8 @@ const uploadMediaChunk = asyncHandler(async (req, res) => {
 const completeChunkedMediaAsset = asyncHandler(async (req, res) => {
   const mediaAsset = await adsLaunchService.completeChunkedMediaAsset({
     name: req.body.name,
+    brandId: req.body.brandId,
+    brandName: req.body.brandName,
     uploadId: req.body.uploadId,
     mediaOriginalName: req.body.mediaOriginalName,
     mediaMimeType: req.body.mediaMimeType,

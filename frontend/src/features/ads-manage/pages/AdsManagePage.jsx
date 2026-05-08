@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useState } from 'react';
 import toast from 'react-hot-toast';
-import { Check, Copy, Database, Eye, LoaderCircle, PauseCircle, PlayCircle, RefreshCw, Search, Trash2, X } from 'lucide-react';
+import { Check, Copy, Database, Eye, LoaderCircle, PauseCircle, PlayCircle, RefreshCw, RotateCcw, Search, Trash2, X } from 'lucide-react';
 import DashboardHeader from '../../dashboard/components/DashboardHeader';
 import DashboardPanel from '../../dashboard/components/DashboardPanel';
+import { useMetaKeySettings } from '../../settings/MetaKeySettingsContext';
 import { useTokens } from '../../token-management/hooks/useTokens';
 import { adsManageApi } from '../api/adsManageApi';
 
@@ -10,6 +11,8 @@ const statusOptions = [
   { value: '', label: 'All saved states' },
   { value: 'ACTIVE', label: 'Active' },
   { value: 'PAUSED', label: 'Paused' },
+  { value: 'FAILED', label: 'Failed launch' },
+  { value: 'RETRIED', label: 'Retried' },
   { value: 'DELETED', label: 'Deleted' },
 ];
 
@@ -80,8 +83,12 @@ const getStatusTone = (status) => {
     return 'bg-amber-50 text-amber-700';
   }
 
-  if (status === 'DELETED' || status === 'WITH_ISSUES' || status === 'DISAPPROVED') {
+  if (status === 'FAILED' || status === 'DELETED' || status === 'WITH_ISSUES' || status === 'DISAPPROVED') {
     return 'bg-red-50 text-red-700';
+  }
+
+  if (status === 'RETRIED') {
+    return 'bg-sky-50 text-sky-700';
   }
 
   return 'bg-slate-100 text-slate-600';
@@ -120,6 +127,7 @@ const TableActionButton = ({ children, className = '', disabled = false, title, 
 
 const AdsManagePage = () => {
   const { error: tokensError, loading: tokensLoading, tokens } = useTokens();
+  const { publishTokenType } = useMetaKeySettings();
 
   const [tokenId, setTokenId] = useState('');
   const [selectedAccountIds, setSelectedAccountIds] = useState([]);
@@ -159,6 +167,8 @@ const AdsManagePage = () => {
         campaign.creativeId,
         campaign.adId,
         campaign.launch?.websiteUrl,
+        campaign.lastMetaError,
+        ...(campaign.actionHistory || []).map((item) => item.message),
       ]
         .filter(Boolean)
         .some((value) => String(value).toLowerCase().includes(query))
@@ -167,6 +177,7 @@ const AdsManagePage = () => {
 
   const activeCount = campaigns.filter((campaign) => campaign.status === 'ACTIVE').length;
   const pausedCount = campaigns.filter((campaign) => campaign.status === 'PAUSED').length;
+  const failedCount = campaigns.filter((campaign) => campaign.status === 'FAILED').length;
   const deletedCount = campaigns.filter((campaign) => campaign.status === 'DELETED').length;
 
   const loadCampaigns = async ({
@@ -272,6 +283,39 @@ const AdsManagePage = () => {
         )
       );
       toast.success(data.message);
+    } catch (requestError) {
+      toast.error(requestError.message);
+    } finally {
+      setActionCampaignId('');
+    }
+  };
+
+  const syncCampaignDetails = async (campaign) => {
+    setActionCampaignId(campaign.id);
+
+    try {
+      const data = await adsManageApi.syncCampaignDetails(campaign.id, {
+        tokenId: campaign.tokenId || tokenId,
+      });
+      setCampaigns((current) => current.map((item) => (item.id === campaign.id ? { ...item, ...(data.campaign || {}) } : item)));
+      toast.success(data.message);
+    } catch (requestError) {
+      toast.error(requestError.message);
+    } finally {
+      setActionCampaignId('');
+    }
+  };
+
+  const retryFailedLaunch = async (campaign) => {
+    setActionCampaignId(campaign.id);
+
+    try {
+      const data = await adsManageApi.retryFailedLaunch(campaign.id, {
+        tokenId: campaign.tokenId || tokenId,
+        tokenType: publishTokenType,
+      });
+      toast.success(data.message);
+      await loadCampaigns();
     } catch (requestError) {
       toast.error(requestError.message);
     } finally {
@@ -479,10 +523,11 @@ const AdsManagePage = () => {
         </div>
       </DashboardPanel>
 
-      <div className="mt-4 grid gap-4 md:grid-cols-2 2xl:grid-cols-4">
+      <div className="mt-4 grid gap-4 md:grid-cols-2 2xl:grid-cols-5">
         <MetricCard label="Saved Campaigns" value={campaigns.length} detail={`${filteredCampaigns.length} visible`} />
         <MetricCard label="Active" value={activeCount} detail="Local history status" />
         <MetricCard label="Paused" value={pausedCount} detail="Can be activated from here" />
+        <MetricCard label="Failed" value={failedCount} detail="Can retry from history" />
         <MetricCard label="Deleted" value={deletedCount} detail="Saved for audit/history" />
       </div>
 
@@ -504,7 +549,7 @@ const AdsManagePage = () => {
         <div className="mb-4 flex items-start gap-3 rounded-2xl bg-sky-50/70 px-4 py-3 text-sky-800">
           <Database size={18} strokeWidth={2.2} className="mt-0.5 shrink-0" />
           <p className="text-sm font-semibold">
-            This list is loaded from MongoDB launch history. No Meta campaign-list or insights calls are made on this page.
+            This list is loaded from MongoDB launch history. Meta is only called when you pause, delete, duplicate, retry, or fetch one campaign.
           </p>
         </div>
 
@@ -533,6 +578,10 @@ const AdsManagePage = () => {
                 <tbody className="divide-y divide-sky-50">
                   {filteredCampaigns.map((campaign) => {
                     const isDeleted = campaign.status === 'DELETED';
+                    const isFailed = campaign.status === 'FAILED';
+                    const isRetried = campaign.status === 'RETRIED';
+                    const hasLocalFailedId = String(campaign.id || '').startsWith('failed_');
+                    const canFetchMeta = !hasLocalFailedId && !isRetried;
                     const nextStatus = campaign.status === 'ACTIVE' ? 'PAUSED' : 'ACTIVE';
                     const updating = actionCampaignId === campaign.id;
                     const expanded = expandedCampaignId === campaign.id;
@@ -604,7 +653,7 @@ const AdsManagePage = () => {
                               </TableActionButton>
                               <TableActionButton
                                 onClick={() => updateCampaignStatus(campaign, nextStatus)}
-                                disabled={updating || isDeleted}
+                                disabled={updating || isDeleted || isFailed || isRetried}
                                 className={
                                   nextStatus === 'PAUSED'
                                     ? 'border-amber-100 bg-amber-50 text-amber-700 hover:bg-amber-100'
@@ -621,8 +670,24 @@ const AdsManagePage = () => {
                                 )}
                               </TableActionButton>
                               <TableActionButton
+                                onClick={() => syncCampaignDetails(campaign)}
+                                disabled={updating || !canFetchMeta}
+                                className="border-sky-100 bg-white text-sky-700 hover:bg-sky-50"
+                                title="Fetch latest status from Meta"
+                              >
+                                {updating ? <LoaderCircle size={16} strokeWidth={2.2} className="animate-spin" /> : <RefreshCw size={16} strokeWidth={2.2} />}
+                              </TableActionButton>
+                              <TableActionButton
+                                onClick={() => retryFailedLaunch(campaign)}
+                                disabled={updating || !isFailed || !campaign.launch?.retryPayload}
+                                className="border-emerald-100 bg-emerald-50 text-emerald-700 hover:bg-emerald-100"
+                                title="Retry failed launch"
+                              >
+                                {updating ? <LoaderCircle size={16} strokeWidth={2.2} className="animate-spin" /> : <RotateCcw size={16} strokeWidth={2.2} />}
+                              </TableActionButton>
+                              <TableActionButton
                                 onClick={() => openDuplicateDialog(campaign)}
-                                disabled={updating || isDeleted}
+                                disabled={updating || isDeleted || isFailed || isRetried}
                                 className="border-sky-100 bg-white text-slate-700 hover:bg-sky-50"
                                 title="Duplicate campaign"
                               >
@@ -630,7 +695,7 @@ const AdsManagePage = () => {
                               </TableActionButton>
                               <TableActionButton
                                 onClick={() => deleteCampaign(campaign)}
-                                disabled={updating || isDeleted}
+                                disabled={updating || isDeleted || hasLocalFailedId || isRetried}
                                 className="border-red-100 bg-white text-red-600 hover:bg-red-50"
                                 title="Delete campaign"
                               >
@@ -665,6 +730,19 @@ const AdsManagePage = () => {
                                 <p className="mt-3 rounded-xl bg-red-50 px-3 py-3 text-sm font-semibold text-red-700">
                                   Last Meta action error: {campaign.lastMetaError}
                                 </p>
+                              ) : null}
+                              {campaign.actionHistory?.length ? (
+                                <div className="mt-3 rounded-xl bg-white px-3 py-3">
+                                  <p className="text-xs font-bold uppercase tracking-[0.16em] text-slate-500">Latest logs</p>
+                                  <div className="mt-2 space-y-2">
+                                    {campaign.actionHistory.slice().reverse().map((item) => (
+                                      <div key={`${item.action}-${item.at}-${item.message}`} className="flex flex-col gap-1 rounded-lg bg-slate-50 px-3 py-2 sm:flex-row sm:items-center sm:justify-between">
+                                        <p className="text-xs font-black text-slate-700">{item.action} {item.status ? `| ${item.status}` : ''}</p>
+                                        <p className="text-xs font-semibold text-slate-500">{item.message || formatDateTime(item.at)}</p>
+                                      </div>
+                                    ))}
+                                  </div>
+                                </div>
                               ) : null}
                             </td>
                           </tr>

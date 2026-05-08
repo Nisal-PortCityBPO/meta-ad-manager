@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import toast from 'react-hot-toast';
 import { ImageIcon, LoaderCircle, Plus, RefreshCw, Trash2, Upload, Video, X } from 'lucide-react';
+import { businessDataApi } from '../../dashboard/api/businessDataApi';
 import DashboardHeader from '../../dashboard/components/DashboardHeader';
 import DashboardPanel from '../../dashboard/components/DashboardPanel';
 import { adsLaunchApi } from '../api/adsLaunchApi';
@@ -139,6 +140,7 @@ const readVideoMetadata = (file) =>
 const MediaCard = ({ mediaAsset, onDelete }) => {
   const isVideo = mediaAsset.mediaType === 'VIDEO';
   const media = mediaAsset.media || {};
+  const brandLabel = mediaAsset.brandName || 'Unassigned brand';
 
   return (
     <div className="overflow-hidden rounded-3xl border border-sky-100 bg-white shadow-sm shadow-sky-100/70">
@@ -158,6 +160,9 @@ const MediaCard = ({ mediaAsset, onDelete }) => {
           <div className="min-w-0">
             <p className="truncate text-sm font-black text-slate-950">{mediaAsset.name}</p>
             <p className="mt-1 truncate text-xs font-semibold text-slate-400">{media.name}</p>
+            <p className="mt-2 inline-flex rounded-full bg-sky-50 px-3 py-1 text-[11px] font-black uppercase tracking-[0.12em] text-sky-700">
+              {brandLabel}
+            </p>
           </div>
           <button
             type="button"
@@ -195,15 +200,21 @@ const MediaCard = ({ mediaAsset, onDelete }) => {
 const AdsMediaLibraryPage = () => {
   const [mediaAssets, setMediaAssets] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [brands, setBrands] = useState([]);
+  const [brandsLoading, setBrandsLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [processingFile, setProcessingFile] = useState(false);
   const [name, setName] = useState('');
+  const [uploadBrandId, setUploadBrandId] = useState('');
+  const [filterBrandId, setFilterBrandId] = useState('');
+  const [searchTerm, setSearchTerm] = useState('');
   const [selectedFile, setSelectedFile] = useState(null);
   const [selectedPreviewUrl, setSelectedPreviewUrl] = useState('');
   const [fileDetails, setFileDetails] = useState(null);
   const [uploadProgress, setUploadProgress] = useState(null);
 
   const selectedIsVideo = selectedFile ? getSupportedMimeType(selectedFile).startsWith('video/') : false;
+  const selectedUploadBrand = brands.find((brand) => brand.id === uploadBrandId) || null;
   const validationError = useMemo(
     () => (selectedFile && fileDetails ? getValidationError({ file: selectedFile, ...fileDetails }) : ''),
     [fileDetails, selectedFile]
@@ -212,7 +223,10 @@ const AdsMediaLibraryPage = () => {
   const loadMediaAssets = async () => {
     setLoading(true);
     try {
-      const data = await adsLaunchApi.getMediaAssets();
+      const data = await adsLaunchApi.getMediaAssets({
+        brandId: filterBrandId,
+        search: searchTerm,
+      });
       setMediaAssets(data.mediaAssets || []);
     } catch (requestError) {
       toast.error(requestError.message);
@@ -223,6 +237,38 @@ const AdsMediaLibraryPage = () => {
 
   useEffect(() => {
     loadMediaAssets();
+  }, [filterBrandId]);
+
+  useEffect(() => {
+    let mounted = true;
+
+    businessDataApi
+      .getBrands()
+      .then((data) => {
+        if (!mounted) {
+          return;
+        }
+
+        const nextBrands = data.brands || [];
+        setBrands(nextBrands);
+
+        if (!uploadBrandId && filterBrandId) {
+          setUploadBrandId(filterBrandId);
+        } else if (!uploadBrandId && nextBrands.length === 1) {
+          setUploadBrandId(nextBrands[0].id);
+          setFilterBrandId(nextBrands[0].id);
+        }
+      })
+      .catch((requestError) => toast.error(requestError.message))
+      .finally(() => {
+        if (mounted) {
+          setBrandsLoading(false);
+        }
+      });
+
+    return () => {
+      mounted = false;
+    };
   }, []);
 
   useEffect(() => {
@@ -287,6 +333,8 @@ const AdsMediaLibraryPage = () => {
 
     return adsLaunchApi.uploadMediaAssetWithProgress({
       name: name.trim(),
+      brandId: uploadBrandId,
+      brandName: selectedUploadBrand?.name || '',
       mediaFile: selectedFile,
       mediaMetadata: {
         width: fileDetails.width,
@@ -306,6 +354,11 @@ const AdsMediaLibraryPage = () => {
   const saveMediaAsset = async () => {
     if (!name.trim()) {
       toast.error('Give this media a library name');
+      return;
+    }
+
+    if (!uploadBrandId) {
+      toast.error('Select the ads brand for this media');
       return;
     }
 
@@ -337,6 +390,11 @@ const AdsMediaLibraryPage = () => {
     }
   };
 
+  const submitSearch = (event) => {
+    event.preventDefault();
+    loadMediaAssets();
+  };
+
   const deleteMediaAsset = async (mediaAsset) => {
     if (!window.confirm(`Delete media "${mediaAsset.name}"?`)) {
       return;
@@ -364,9 +422,71 @@ const AdsMediaLibraryPage = () => {
         }
       />
 
+      <DashboardPanel title="Library filters" className="mb-4">
+        <form onSubmit={submitSearch} className="grid gap-3 lg:grid-cols-[minmax(220px,0.8fr)_minmax(280px,1fr)_auto] lg:items-end">
+          <div className="space-y-2">
+            <label htmlFor="media-filter-brand" className="text-sm font-semibold text-slate-700">Brand category</label>
+            <select
+              id="media-filter-brand"
+              value={filterBrandId}
+              onChange={(event) => {
+                const nextBrandId = event.target.value;
+                setFilterBrandId(nextBrandId);
+                if (nextBrandId && !uploadBrandId) {
+                  setUploadBrandId(nextBrandId);
+                }
+              }}
+              disabled={brandsLoading}
+              className="h-12 w-full rounded-xl border border-sky-100 bg-white px-4 outline-none transition focus:border-sky-400 focus:ring-4 focus:ring-sky-100"
+            >
+              <option value="">All brands</option>
+              {brands.map((brand) => (
+                <option key={brand.id} value={brand.id}>{brand.name}</option>
+              ))}
+            </select>
+          </div>
+
+          <div className="space-y-2">
+            <label htmlFor="media-search" className="text-sm font-semibold text-slate-700">Search media</label>
+            <input
+              id="media-search"
+              value={searchTerm}
+              onChange={(event) => setSearchTerm(event.target.value)}
+              className="h-12 w-full rounded-xl border border-sky-100 bg-white px-4 outline-none transition focus:border-sky-400 focus:ring-4 focus:ring-sky-100"
+              placeholder="Search name, file, or brand"
+            />
+          </div>
+
+          <button
+            type="submit"
+            disabled={loading}
+            className="flex h-12 items-center justify-center gap-2 rounded-xl bg-sky-600 px-5 text-sm font-black text-white transition hover:bg-sky-700 disabled:opacity-60"
+          >
+            {loading ? <LoaderCircle size={17} className="animate-spin" /> : <RefreshCw size={17} />}
+            Apply
+          </button>
+        </form>
+      </DashboardPanel>
+
       <div className="grid gap-4 xl:grid-cols-[420px_minmax(0,1fr)]">
         <DashboardPanel title="Add media">
           <div className="space-y-4">
+            <div className="space-y-2">
+              <label htmlFor="media-upload-brand" className="text-sm font-semibold text-slate-700">Ads brand</label>
+              <select
+                id="media-upload-brand"
+                value={uploadBrandId}
+                onChange={(event) => setUploadBrandId(event.target.value)}
+                disabled={brandsLoading}
+                className="h-12 w-full rounded-xl border border-sky-100 bg-white px-4 outline-none transition focus:border-sky-400 focus:ring-4 focus:ring-sky-100"
+              >
+                <option value="">Select brand for this media</option>
+                {brands.map((brand) => (
+                  <option key={brand.id} value={brand.id}>{brand.name}</option>
+                ))}
+              </select>
+            </div>
+
             <div className="space-y-2">
               <label htmlFor="media-library-name" className="text-sm font-semibold text-slate-700">Library name</label>
               <input

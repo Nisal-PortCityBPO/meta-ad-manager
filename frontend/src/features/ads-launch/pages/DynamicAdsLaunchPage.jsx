@@ -239,6 +239,9 @@ const MediaLibraryPicker = ({
                   <div className="p-4">
                     <p className="truncate text-sm font-black text-slate-950">{mediaAsset.name}</p>
                     <p className="mt-1 truncate text-xs font-semibold text-slate-400">{media.width}x{media.height} | {formatFileSize(media.size)}</p>
+                    <p className="mt-2 inline-flex rounded-full bg-sky-50 px-3 py-1 text-[11px] font-black uppercase tracking-[0.12em] text-sky-700">
+                      {mediaAsset.brandName || 'Unassigned brand'}
+                    </p>
                     {isVideo ? (
                       <p className="mt-2 rounded-xl bg-amber-50 px-3 py-2 text-xs font-bold text-amber-700">
                         Select an image thumbnail separately
@@ -422,12 +425,22 @@ const DynamicAdsLaunchPage = () => {
     return adAccounts.filter((account) => getAdAccountKeys(account).some((key) => savedBrandAccountKeys.has(key)));
   }, [adAccounts, brandId, savedBrandAccountKeys, tokenId]);
   const campaignTemplates = useMemo(
-    () => templates.filter((template) => template.templateType === 'CAMPAIGN' && (!template.config?.objective || template.config.objective === TRAFFIC_OBJECTIVE)),
-    [templates]
+    () =>
+      templates.filter(
+        (template) =>
+          template.templateType === 'CAMPAIGN' &&
+          (!template.config?.objective || template.config.objective === TRAFFIC_OBJECTIVE) &&
+          (!brandId || !template.config?.brandId || template.config.brandId === brandId)
+      ),
+    [brandId, templates]
   );
   const mediaTemplates = useMemo(
-    () => templates.filter((template) => template.templateType === 'MEDIA'),
-    [templates]
+    () => templates.filter((template) => template.templateType === 'MEDIA' && (!brandId || !template.config?.brandId || template.config.brandId === brandId)),
+    [brandId, templates]
+  );
+  const brandScopedMediaAssets = useMemo(
+    () => mediaAssets.filter((mediaAsset) => !brandId || !mediaAsset.brandId || mediaAsset.brandId === brandId),
+    [brandId, mediaAssets]
   );
   const selectedAssignments = useMemo(
     () =>
@@ -440,25 +453,25 @@ const DynamicAdsLaunchPage = () => {
           assignment.campaignTemplateId &&
           assignment.mediaTemplateId &&
           assignment.mediaAssetId &&
-          mediaAssets.some((mediaAsset) => {
+          brandScopedMediaAssets.some((mediaAsset) => {
             if (mediaAsset.id !== assignment.mediaAssetId) {
               return false;
             }
 
-            return mediaAsset.mediaType !== 'VIDEO' || mediaAssets.some((asset) => asset.id === assignment.thumbnailAssetId && asset.mediaType === 'IMAGE');
+            return mediaAsset.mediaType !== 'VIDEO' || brandScopedMediaAssets.some((asset) => asset.id === assignment.thumbnailAssetId && asset.mediaType === 'IMAGE');
           })
         ),
-    [assignments, mediaAssets, scopedAdAccounts]
+    [assignments, brandScopedMediaAssets, scopedAdAccounts]
   );
 
   const getAssignmentCampaignTemplate = (assignment) =>
     campaignTemplates.find((template) => template.id === assignment.campaignTemplateId);
 
   const getAssignmentMediaAsset = (assignment) =>
-    mediaAssets.find((mediaAsset) => mediaAsset.id === assignment.mediaAssetId);
+    brandScopedMediaAssets.find((mediaAsset) => mediaAsset.id === assignment.mediaAssetId);
 
   const getAssignmentThumbnailAsset = (assignment) =>
-    mediaAssets.find((mediaAsset) => mediaAsset.id === assignment.thumbnailAssetId && mediaAsset.mediaType === 'IMAGE');
+    brandScopedMediaAssets.find((mediaAsset) => mediaAsset.id === assignment.thumbnailAssetId && mediaAsset.mediaType === 'IMAGE');
 
   const getAssignmentPageId = (assignment) => {
     const campaignTemplate = getAssignmentCampaignTemplate(assignment);
@@ -536,10 +549,13 @@ const DynamicAdsLaunchPage = () => {
     };
   }, []);
 
-  const loadMediaAssets = async () => {
+  const loadMediaAssets = async (nextBrandId = brandId) => {
     setMediaAssetsLoading(true);
     try {
-      const data = await adsLaunchApi.getMediaAssets();
+      const data = await adsLaunchApi.getMediaAssets({
+        brandId: nextBrandId,
+        includeUnassigned: Boolean(nextBrandId),
+      });
       setMediaAssets(data.mediaAssets || []);
     } catch (requestError) {
       toast.error(requestError.message);
@@ -549,8 +565,8 @@ const DynamicAdsLaunchPage = () => {
   };
 
   useEffect(() => {
-    loadMediaAssets();
-  }, []);
+    loadMediaAssets(brandId);
+  }, [brandId]);
 
   const updateAssignmentScrollState = () => {
     const scrollElement = assignmentScrollRef.current;
@@ -631,7 +647,7 @@ const DynamicAdsLaunchPage = () => {
   useEffect(() => {
     const timeoutId = window.setTimeout(updateAssignmentScrollState, 0);
     return () => window.clearTimeout(timeoutId);
-  }, [assignments, campaignTemplates.length, mediaAssets.length, mediaTemplates.length, scopedAdAccounts.length]);
+  }, [assignments, brandScopedMediaAssets.length, campaignTemplates.length, mediaTemplates.length, scopedAdAccounts.length]);
 
   useEffect(() => stopAssignmentAutoScroll, []);
 
@@ -670,7 +686,7 @@ const DynamicAdsLaunchPage = () => {
 
       if (mediaAsset.mediaType !== 'VIDEO') {
         nextAssignment.thumbnailAssetId = '';
-      } else if (!mediaAssets.some((asset) => asset.id === previousAssignment.thumbnailAssetId && asset.mediaType === 'IMAGE')) {
+      } else if (!brandScopedMediaAssets.some((asset) => asset.id === previousAssignment.thumbnailAssetId && asset.mediaType === 'IMAGE')) {
         nextAssignment.thumbnailAssetId = '';
       }
 
@@ -707,8 +723,8 @@ const DynamicAdsLaunchPage = () => {
     const firstAssignment = selectedAssignments[0];
     const firstCampaignTemplate = campaignTemplates.find((template) => template.id === firstAssignment.campaignTemplateId);
     const firstMediaTemplate = mediaTemplates.find((template) => template.id === firstAssignment.mediaTemplateId);
-    const firstMediaAsset = mediaAssets.find((mediaAsset) => mediaAsset.id === firstAssignment.mediaAssetId);
-    const firstThumbnailAsset = mediaAssets.find((mediaAsset) => mediaAsset.id === firstAssignment.thumbnailAssetId);
+    const firstMediaAsset = brandScopedMediaAssets.find((mediaAsset) => mediaAsset.id === firstAssignment.mediaAssetId);
+    const firstThumbnailAsset = brandScopedMediaAssets.find((mediaAsset) => mediaAsset.id === firstAssignment.thumbnailAssetId);
     const campaignConfig = firstCampaignTemplate?.config || {};
     const mediaConfig = firstMediaTemplate?.config || {};
     const countries = sanitizeCountries(campaignConfig);
@@ -791,10 +807,10 @@ const DynamicAdsLaunchPage = () => {
 
     const missingAssignments = scopedAdAccounts.filter((account) => {
       const assignment = assignments[account.id];
-      const selectedMediaAsset = mediaAssets.find((mediaAsset) => mediaAsset.id === assignment?.mediaAssetId);
+      const selectedMediaAsset = brandScopedMediaAssets.find((mediaAsset) => mediaAsset.id === assignment?.mediaAssetId);
       const hasMediaAsset = Boolean(selectedMediaAsset);
       const needsThumbnail = selectedMediaAsset?.mediaType === 'VIDEO';
-      const hasThumbnailAsset = mediaAssets.some((mediaAsset) => mediaAsset.id === assignment?.thumbnailAssetId && mediaAsset.mediaType === 'IMAGE');
+      const hasThumbnailAsset = brandScopedMediaAssets.some((mediaAsset) => mediaAsset.id === assignment?.thumbnailAssetId && mediaAsset.mediaType === 'IMAGE');
       return assignment?.campaignTemplateId || assignment?.mediaTemplateId || assignment?.mediaAssetId
         ? !assignment.campaignTemplateId || !assignment.mediaTemplateId || !assignment.mediaAssetId || !hasMediaAsset || (needsThumbnail && !hasThumbnailAsset)
         : false;
@@ -872,7 +888,7 @@ const DynamicAdsLaunchPage = () => {
       {mediaPickerAccountId ? (
         <MediaLibraryPicker
           loading={mediaAssetsLoading}
-          mediaAssets={mediaAssets}
+          mediaAssets={brandScopedMediaAssets}
           onClose={() => setMediaPickerAccountId('')}
           onRefresh={loadMediaAssets}
           onSelect={(mediaAsset) => selectMediaAssetForAccount(mediaPickerAccountId, mediaAsset)}
@@ -883,7 +899,7 @@ const DynamicAdsLaunchPage = () => {
         <MediaLibraryPicker
           description="Choose an image from the library to use as this video ad thumbnail."
           loading={mediaAssetsLoading}
-          mediaAssets={mediaAssets.filter((mediaAsset) => mediaAsset.mediaType === 'IMAGE')}
+          mediaAssets={brandScopedMediaAssets.filter((mediaAsset) => mediaAsset.mediaType === 'IMAGE')}
           mode="thumbnail"
           onClose={() => setThumbnailPickerAccountId('')}
           onRefresh={loadMediaAssets}
