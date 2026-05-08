@@ -45,15 +45,23 @@ const countryOptions = [
 const TEMPLATES_PER_PAGE = 2;
 
 const TRAFFIC_OBJECTIVE = 'OUTCOME_TRAFFIC';
+const LEADS_OBJECTIVE = 'OUTCOME_LEADS';
+const SALES_OBJECTIVE = 'OUTCOME_SALES';
+const supportedObjectiveValues = new Set([TRAFFIC_OBJECTIVE, LEADS_OBJECTIVE, SALES_OBJECTIVE]);
 
 const objectiveOptions = [
   { value: TRAFFIC_OBJECTIVE, label: 'Traffic' },
   { value: 'OUTCOME_ENGAGEMENT', label: 'Engagement' },
-  { value: 'OUTCOME_LEADS', label: 'Leads' },
-  { value: 'OUTCOME_SALES', label: 'Sales' },
+  { value: LEADS_OBJECTIVE, label: 'Leads' },
+  { value: SALES_OBJECTIVE, label: 'Sales' },
 ];
 
-const normalizeObjective = () => TRAFFIC_OBJECTIVE;
+const defaultWebsiteEventByObjective = {
+  [LEADS_OBJECTIVE]: 'LEAD',
+  [SALES_OBJECTIVE]: 'PURCHASE',
+};
+
+const normalizeObjective = (objective) => (supportedObjectiveValues.has(objective) ? objective : TRAFFIC_OBJECTIVE);
 
 const websiteEventOptions = [
   { value: 'LEAD', label: 'Lead' },
@@ -114,7 +122,6 @@ const urlParameterPresets = [
 const staticDefaultOptions = {
   buyingType: [
     { value: 'AUCTION', label: 'Auction' },
-    { value: 'RESERVED', label: 'Reserved' },
   ],
   campaignStatus: [
     { value: 'PAUSED', label: 'Paused on create' },
@@ -128,7 +135,6 @@ const staticDefaultOptions = {
   ],
   placements: [
     { value: 'ADVANTAGE_PLUS', label: 'Advantage+ placements' },
-    { value: 'MANUAL', label: 'Manual placements' },
   ],
   budgetLevel: [
     { value: 'AD_SET', label: 'Ad set budget' },
@@ -149,7 +155,6 @@ const staticDefaultOptions = {
   ],
   bidStrategy: [
     { value: 'LOWEST_COST_WITHOUT_CAP', label: 'Lowest cost' },
-    { value: 'COST_CAP', label: 'Cost cap' },
   ],
 };
 
@@ -576,6 +581,40 @@ const getLaunchValidationError = (form) => {
   return '';
 };
 
+const getScheduleValidationError = (form) => {
+  if ((form.scheduleStart && !form.scheduleEnd) || (!form.scheduleStart && form.scheduleEnd)) {
+    return 'Schedule start and schedule end must both be set, or both left empty';
+  }
+
+  if (form.scheduleStart) {
+    const scheduleStart = new Date(form.scheduleStart);
+    const minimumStart = new Date(Date.now() + SCHEDULE_MIN_LEAD_MINUTES * 60 * 1000);
+
+    if (Number.isNaN(scheduleStart.getTime())) {
+      return 'Schedule start must be a valid date and time';
+    }
+
+    if (scheduleStart < minimumStart) {
+      return `Schedule start must be at least ${SCHEDULE_MIN_LEAD_MINUTES} minutes in the future`;
+    }
+  }
+
+  if (form.scheduleEnd) {
+    const scheduleStart = new Date(form.scheduleStart);
+    const scheduleEnd = new Date(form.scheduleEnd);
+
+    if (Number.isNaN(scheduleEnd.getTime())) {
+      return 'Schedule end must be a valid date and time';
+    }
+
+    if (scheduleEnd <= scheduleStart) {
+      return 'Schedule end must be after schedule start';
+    }
+  }
+
+  return '';
+};
+
 const getLaunchMissingFields = ({ activeMediaAsset, activeThumbnailAsset, form, isVideoAsset, loadingAssets, loadingPixels, pixelRequired }) => {
   const missing = [];
 
@@ -901,6 +940,7 @@ const AdsLaunchPage = () => {
   );
   const currentObjective = normalizeObjective(form.objective);
   const pixelRequired = currentObjective === 'OUTCOME_LEADS' || currentObjective === 'OUTCOME_SALES';
+  const scheduleValidationError = getScheduleValidationError(form);
   const canGenerate = Boolean(
     form.brandId &&
       form.tokenId &&
@@ -913,7 +953,8 @@ const AdsLaunchPage = () => {
       (!pixelRequired || form.pixelId) &&
       form.headline.trim() &&
       form.primaryText.trim() &&
-      form.websiteUrl.trim()
+      form.websiteUrl.trim() &&
+      !scheduleValidationError
   );
   const canPublish = Boolean(canGenerate && activeMediaAsset && (!isVideoAsset || activeThumbnailAsset));
   const publishBusy = publishing || publishInProgress;
@@ -1164,15 +1205,17 @@ const AdsLaunchPage = () => {
   };
 
   const handleObjectiveChange = (objective) => {
-    if (objective !== TRAFFIC_OBJECTIVE) {
-      toast.error('Only Traffic objective is enabled for now');
+    if (!supportedObjectiveValues.has(objective)) {
+      toast.error('Engagement is not enabled in this launcher yet');
+      return;
     }
 
     setForm((current) => {
       return {
         ...current,
-        objective: TRAFFIC_OBJECTIVE,
-        websiteEvent: '',
+        objective,
+        websiteEvent: defaultWebsiteEventByObjective[objective] || '',
+        pixelId: defaultWebsiteEventByObjective[objective] ? current.pixelId : '',
       };
     });
   };
@@ -1777,7 +1820,7 @@ const AdsLaunchPage = () => {
       country: countries[0] || '',
       countries,
       objective,
-      websiteEvent: '',
+      websiteEvent: config.websiteEvent || defaultWebsiteEventByObjective[objective] || '',
       scheduleStart: toDateTimeLocalInputValue(config.scheduleStart),
       scheduleEnd: toDateTimeLocalInputValue(config.scheduleEnd),
       selectedAdAccountIds,
@@ -2075,12 +2118,12 @@ const AdsLaunchPage = () => {
                   className="h-12 w-full rounded-xl border border-sky-100 bg-white px-4 outline-none transition focus:border-sky-400 focus:ring-4 focus:ring-sky-100"
                 >
                   {objectiveOptions.map((objective) => (
-                    <option key={objective.value} value={objective.value} disabled={objective.value !== TRAFFIC_OBJECTIVE}>
-                      {objective.value === TRAFFIC_OBJECTIVE ? objective.label : `${objective.label} (disabled)`}
+                    <option key={objective.value} value={objective.value} disabled={!supportedObjectiveValues.has(objective.value)}>
+                      {supportedObjectiveValues.has(objective.value) ? objective.label : `${objective.label} (disabled)`}
                     </option>
                   ))}
                 </select>
-                <p className="text-xs font-semibold text-slate-400">Only Traffic is enabled in the frontend for now.</p>
+                <p className="text-xs font-semibold text-slate-400">Traffic can publish without a pixel. Leads and Sales require a shared pixel and website event.</p>
               </div>
 
               <div className="space-y-2">
@@ -2226,7 +2269,7 @@ const AdsLaunchPage = () => {
                   helper={
                     pixelRequired
                       ? 'Shared pixels are required for leads and sales. Only common pixels across the selected accounts are shown.'
-                      : 'Shared pixels are optional for traffic and engagement. A shared pixel can be kept in the template, but publish does not depend on it for those objectives.'
+                      : 'Shared pixels are optional for traffic. A shared pixel can be kept in the template, but publish does not depend on it.'
                   }
                 >
                   <select
@@ -2257,7 +2300,7 @@ const AdsLaunchPage = () => {
                   helper={
                     pixelRequired
                       ? 'Used with the selected pixel as the Meta conversion event for optimization.'
-                      : 'Only used for Leads and Sales objectives. Traffic and Engagement ignore this field.'
+                      : 'Only used for Leads and Sales objectives. Traffic ignores this field.'
                   }
                 >
                   <select
@@ -2477,6 +2520,15 @@ const AdsLaunchPage = () => {
                 </div>
               </div>
             </div>
+            {scheduleValidationError ? (
+              <p className="rounded-xl bg-red-50 px-4 py-3 text-sm font-semibold text-red-700">
+                {scheduleValidationError}
+              </p>
+            ) : form.scheduleStart && form.scheduleEnd ? (
+              <p className="rounded-xl bg-emerald-50 px-4 py-3 text-sm font-semibold text-emerald-700">
+                Schedule looks valid. Meta will receive the selected local time with your timezone offset.
+              </p>
+            ) : null}
 
             <div className="grid gap-4 xl:grid-cols-2">
               <div className="space-y-2">

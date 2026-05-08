@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import toast from 'react-hot-toast';
-import { LoaderCircle, Pencil, Plus, Save, Settings2, Trash2, X } from 'lucide-react';
+import { ChevronLeft, ChevronRight, LoaderCircle, Pencil, Plus, Save, Settings2, Trash2, X } from 'lucide-react';
 import { businessDataApi } from '../../dashboard/api/businessDataApi';
 import DashboardHeader from '../../dashboard/components/DashboardHeader';
 import DashboardPanel from '../../dashboard/components/DashboardPanel';
@@ -24,10 +24,16 @@ const campaignDefaults = {
   scheduleEnd: '',
   staticDefaults: {
     campaignStatus: 'PAUSED',
+    buyingType: 'AUCTION',
+    specialAdCategories: 'NONE',
+    placements: 'ADVANTAGE_PLUS',
     budgetLevel: 'AD_SET',
     dynamicCreative: 'ON',
     audienceAgeMin: '21',
     audienceAgeMax: '65',
+    genderTargeting: 'ALL',
+    billingEvent: 'IMPRESSIONS',
+    bidStrategy: 'LOWEST_COST_WITHOUT_CAP',
   },
 };
 
@@ -70,13 +76,61 @@ const mediaDefaults = {
 };
 
 const TRAFFIC_OBJECTIVE = 'OUTCOME_TRAFFIC';
+const LEADS_OBJECTIVE = 'OUTCOME_LEADS';
+const SALES_OBJECTIVE = 'OUTCOME_SALES';
+const supportedObjectiveValues = new Set([TRAFFIC_OBJECTIVE, LEADS_OBJECTIVE, SALES_OBJECTIVE]);
+const defaultWebsiteEventByObjective = {
+  [LEADS_OBJECTIVE]: 'LEAD',
+  [SALES_OBJECTIVE]: 'PURCHASE',
+};
+const TEMPLATES_PER_PAGE = 2;
+const SCHEDULE_MIN_LEAD_MINUTES = 5;
 
 const objectiveOptions = [
   { value: TRAFFIC_OBJECTIVE, label: 'Traffic' },
   { value: 'OUTCOME_ENGAGEMENT', label: 'Engagement' },
-  { value: 'OUTCOME_LEADS', label: 'Leads' },
-  { value: 'OUTCOME_SALES', label: 'Sales' },
+  { value: LEADS_OBJECTIVE, label: 'Leads' },
+  { value: SALES_OBJECTIVE, label: 'Sales' },
 ];
+
+const staticDefaultOptions = {
+  buyingType: [
+    { value: 'AUCTION', label: 'Auction' },
+  ],
+  campaignStatus: [
+    { value: 'PAUSED', label: 'Paused on create' },
+    { value: 'ACTIVE', label: 'Active on create' },
+  ],
+  specialAdCategories: [
+    { value: 'NONE', label: 'None' },
+    { value: 'HOUSING', label: 'Housing' },
+    { value: 'EMPLOYMENT', label: 'Employment' },
+    { value: 'CREDIT', label: 'Credit' },
+  ],
+  placements: [
+    { value: 'ADVANTAGE_PLUS', label: 'Advantage+ placements' },
+  ],
+  budgetLevel: [
+    { value: 'AD_SET', label: 'Ad set budget' },
+    { value: 'CAMPAIGN', label: 'Campaign budget' },
+  ],
+  dynamicCreative: [
+    { value: 'ON', label: 'On' },
+    { value: 'OFF', label: 'Off' },
+  ],
+  genderTargeting: [
+    { value: 'ALL', label: 'All genders' },
+    { value: 'MALE', label: 'Male' },
+    { value: 'FEMALE', label: 'Female' },
+  ],
+  billingEvent: [
+    { value: 'IMPRESSIONS', label: 'Impressions' },
+    { value: 'LINK_CLICKS', label: 'Link clicks' },
+  ],
+  bidStrategy: [
+    { value: 'LOWEST_COST_WITHOUT_CAP', label: 'Lowest cost' },
+  ],
+};
 
 const urlParameterMacroOptions = [
   { value: '{{site_source_name}}', label: 'Source platform' },
@@ -212,6 +266,41 @@ const normalizeTemplateCountries = (config = {}) => {
 };
 
 const normalizeCampaignStatus = (value) => (String(value || '').trim().toUpperCase() === 'ACTIVE' ? 'ACTIVE' : 'PAUSED');
+const normalizeObjective = (objective) => (supportedObjectiveValues.has(objective) ? objective : TRAFFIC_OBJECTIVE);
+
+const getScheduleValidationError = ({ scheduleStart, scheduleEnd }) => {
+  if ((scheduleStart && !scheduleEnd) || (!scheduleStart && scheduleEnd)) {
+    return 'Schedule start and schedule end must both be set, or both left empty';
+  }
+
+  if (scheduleStart) {
+    const start = new Date(scheduleStart);
+    const minimumStart = new Date(Date.now() + SCHEDULE_MIN_LEAD_MINUTES * 60 * 1000);
+
+    if (Number.isNaN(start.getTime())) {
+      return 'Schedule start must be a valid date and time';
+    }
+
+    if (start < minimumStart) {
+      return `Schedule start must be at least ${SCHEDULE_MIN_LEAD_MINUTES} minutes in the future`;
+    }
+  }
+
+  if (scheduleEnd) {
+    const start = new Date(scheduleStart);
+    const end = new Date(scheduleEnd);
+
+    if (Number.isNaN(end.getTime())) {
+      return 'Schedule end must be a valid date and time';
+    }
+
+    if (end <= start) {
+      return 'Schedule end must be after schedule start';
+    }
+  }
+
+  return '';
+};
 
 const hasExplicitTimezone = (value) => /(Z|[+-]\d{2}:?\d{2})$/i.test(String(value || '').trim());
 
@@ -219,6 +308,8 @@ const getLocalDateTimeInputValue = (date) => {
   const localDate = new Date(date.getTime() - date.getTimezoneOffset() * 60000);
   return localDate.toISOString().slice(0, 16);
 };
+
+const getMinimumScheduleStartValue = () => getLocalDateTimeInputValue(new Date(Date.now() + SCHEDULE_MIN_LEAD_MINUTES * 60 * 1000));
 
 const getLocalTimezoneOffsetSuffix = (date = new Date()) => {
   const offsetMinutes = -date.getTimezoneOffset();
@@ -317,6 +408,29 @@ const TemplateCard = ({ template, onDelete, onEdit }) => {
   );
 };
 
+const TemplatePager = ({ page, pageCount, onPrevious, onNext }) => (
+  <div className="flex items-center gap-1">
+    <button
+      type="button"
+      onClick={onPrevious}
+      disabled={page <= 1}
+      className="flex h-8 w-8 items-center justify-center rounded-lg border border-sky-100 bg-white text-sky-700 transition hover:bg-sky-50 disabled:cursor-not-allowed disabled:text-slate-300"
+      aria-label="Previous templates"
+    >
+      <ChevronLeft size={16} strokeWidth={2.4} />
+    </button>
+    <button
+      type="button"
+      onClick={onNext}
+      disabled={page >= pageCount}
+      className="flex h-8 w-8 items-center justify-center rounded-lg border border-sky-100 bg-white text-sky-700 transition hover:bg-sky-50 disabled:cursor-not-allowed disabled:text-slate-300"
+      aria-label="Next templates"
+    >
+      <ChevronRight size={16} strokeWidth={2.4} />
+    </button>
+  </div>
+);
+
 const AdsTemplateBuilderPage = () => {
   const { error, loadTemplates, loading, templates } = useLaunchTemplates();
   const [campaignForm, setCampaignForm] = useState(createCampaignDefaults);
@@ -328,6 +442,8 @@ const AdsTemplateBuilderPage = () => {
   const [brands, setBrands] = useState([]);
   const [brandsLoading, setBrandsLoading] = useState(true);
   const [templateBrandFilter, setTemplateBrandFilter] = useState('');
+  const [campaignTemplatePage, setCampaignTemplatePage] = useState(1);
+  const [mediaTemplatePage, setMediaTemplatePage] = useState(1);
 
   const campaignTemplateBrand = brands.find((brand) => brand.id === campaignForm.brandId) || null;
   const mediaTemplateBrand = brands.find((brand) => brand.id === mediaForm.brandId) || null;
@@ -339,6 +455,18 @@ const AdsTemplateBuilderPage = () => {
     () => templates.filter((template) => template.templateType === TEMPLATE_TYPES.MEDIA && (!templateBrandFilter || template.config?.brandId === templateBrandFilter)),
     [templateBrandFilter, templates]
   );
+  const campaignTemplatePageCount = Math.max(Math.ceil(campaignTemplates.length / TEMPLATES_PER_PAGE), 1);
+  const mediaTemplatePageCount = Math.max(Math.ceil(mediaTemplates.length / TEMPLATES_PER_PAGE), 1);
+  const safeCampaignTemplatePage = Math.min(campaignTemplatePage, campaignTemplatePageCount);
+  const safeMediaTemplatePage = Math.min(mediaTemplatePage, mediaTemplatePageCount);
+  const visibleCampaignTemplates = campaignTemplates.slice(
+    (safeCampaignTemplatePage - 1) * TEMPLATES_PER_PAGE,
+    safeCampaignTemplatePage * TEMPLATES_PER_PAGE
+  );
+  const visibleMediaTemplates = mediaTemplates.slice(
+    (safeMediaTemplatePage - 1) * TEMPLATES_PER_PAGE,
+    safeMediaTemplatePage * TEMPLATES_PER_PAGE
+  );
   const selectedCampaignCountries = useMemo(() => campaignForm.countries || ['ID'], [campaignForm.countries]);
   const availableCampaignCountries = useMemo(
     () => countryOptions.filter((country) => !selectedCampaignCountries.includes(country.value)),
@@ -346,6 +474,8 @@ const AdsTemplateBuilderPage = () => {
   );
   const mediaUrlParameterEntries = useMemo(() => parseUrlParameterEntries(mediaForm.urlParameters), [mediaForm.urlParameters]);
   const campaignPixelRequired = campaignForm.objective === 'OUTCOME_LEADS' || campaignForm.objective === 'OUTCOME_SALES';
+  const campaignScheduleValidationError = getScheduleValidationError(campaignForm);
+  const minimumScheduleStartValue = getMinimumScheduleStartValue();
   const mediaEditMode = Boolean(editingMediaTemplateId);
   const campaignEditMode = Boolean(editingCampaignTemplateId);
 
@@ -371,6 +501,11 @@ const AdsTemplateBuilderPage = () => {
     };
   }, []);
 
+  useEffect(() => {
+    setCampaignTemplatePage(1);
+    setMediaTemplatePage(1);
+  }, [templateBrandFilter, campaignTemplates.length, mediaTemplates.length]);
+
   const updateCampaignField = (field, value) => {
     setCampaignForm((current) => ({
       ...current,
@@ -379,15 +514,16 @@ const AdsTemplateBuilderPage = () => {
   };
 
   const handleCampaignObjectiveChange = (objective) => {
-    if (objective !== TRAFFIC_OBJECTIVE) {
-      toast.error('Only Traffic objective is enabled for now');
+    if (!supportedObjectiveValues.has(objective)) {
+      toast.error('Engagement is not enabled in this launcher yet');
+      return;
     }
 
     setCampaignForm((current) => {
       return {
         ...current,
-        objective: TRAFFIC_OBJECTIVE,
-        websiteEvent: '',
+        objective,
+        websiteEvent: defaultWebsiteEventByObjective[objective] || '',
       };
     });
   };
@@ -497,8 +633,8 @@ const AdsTemplateBuilderPage = () => {
       brandId: config.brandId || '',
       launchLabel: config.launchLabel || '',
       countries,
-      objective: TRAFFIC_OBJECTIVE,
-      websiteEvent: '',
+      objective: normalizeObjective(config.objective),
+      websiteEvent: config.websiteEvent || defaultWebsiteEventByObjective[normalizeObjective(config.objective)] || '',
       dailyBudget: config.dailyBudget || '15',
       scheduleStart: toDateTimeLocalInputValue(config.scheduleStart),
       scheduleEnd: toDateTimeLocalInputValue(config.scheduleEnd),
@@ -542,6 +678,16 @@ const AdsTemplateBuilderPage = () => {
       return;
     }
 
+    if (campaignScheduleValidationError) {
+      toast.error(campaignScheduleValidationError);
+      return;
+    }
+
+    if (campaignPixelRequired && !campaignForm.websiteEvent) {
+      toast.error('Select the website event for this Lead or Sales campaign template');
+      return;
+    }
+
     setSavingType(TEMPLATE_TYPES.CAMPAIGN);
     try {
       const countries = (campaignForm.countries || [])
@@ -555,7 +701,7 @@ const AdsTemplateBuilderPage = () => {
           launchLabel: campaignForm.launchLabel.trim(),
           country: countries[0] || 'ID',
           countries: countries.length ? countries : ['ID'],
-          objective: TRAFFIC_OBJECTIVE,
+          objective: normalizeObjective(campaignForm.objective),
           websiteEvent: campaignPixelRequired ? campaignForm.websiteEvent : '',
           dailyBudget: campaignForm.dailyBudget,
           scheduleStart: toSchedulePayloadValue(campaignForm.scheduleStart),
@@ -751,12 +897,12 @@ const AdsTemplateBuilderPage = () => {
                 <FieldLabel htmlFor="campaign-objective">Objective</FieldLabel>
                 <select id="campaign-objective" value={campaignForm.objective} onChange={(event) => handleCampaignObjectiveChange(event.target.value)} className="h-12 w-full rounded-xl border border-sky-100 px-4 outline-none focus:border-sky-400 focus:ring-4 focus:ring-sky-100">
                   {objectiveOptions.map((option) => (
-                    <option key={option.value} value={option.value} disabled={option.value !== TRAFFIC_OBJECTIVE}>
-                      {option.value === TRAFFIC_OBJECTIVE ? option.label : `${option.label} (disabled)`}
+                    <option key={option.value} value={option.value} disabled={!supportedObjectiveValues.has(option.value)}>
+                      {supportedObjectiveValues.has(option.value) ? option.label : `${option.label} (disabled)`}
                     </option>
                   ))}
                 </select>
-                <p className="text-xs font-semibold text-slate-400">Only Traffic is enabled in the frontend for now.</p>
+                <p className="text-xs font-semibold text-slate-400">Leads and Sales require a pixel in Dynamic Ads Launch before publish.</p>
               </div>
               <div className="space-y-2">
                 <FieldLabel htmlFor="campaign-website-event">Website event</FieldLabel>
@@ -772,6 +918,12 @@ const AdsTemplateBuilderPage = () => {
                 <input id="campaign-budget" type="number" min="1" value={campaignForm.dailyBudget} onChange={(event) => updateCampaignField('dailyBudget', event.target.value)} className="h-12 w-full rounded-xl border border-sky-100 px-4 outline-none focus:border-sky-400 focus:ring-4 focus:ring-sky-100" />
               </div>
               <div className="space-y-2">
+                <FieldLabel htmlFor="campaign-buying-type">Buying type</FieldLabel>
+                <select id="campaign-buying-type" value={campaignForm.staticDefaults.buyingType} onChange={(event) => updateCampaignDefault('buyingType', event.target.value)} className="h-12 w-full rounded-xl border border-sky-100 px-4 outline-none focus:border-sky-400 focus:ring-4 focus:ring-sky-100">
+                  {staticDefaultOptions.buyingType.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+                </select>
+              </div>
+              <div className="space-y-2">
                 <FieldLabel htmlFor="campaign-status">Publish status</FieldLabel>
                 <select id="campaign-status" value={campaignForm.staticDefaults.campaignStatus} onChange={(event) => updateCampaignDefault('campaignStatus', event.target.value)} className="h-12 w-full rounded-xl border border-sky-100 px-4 outline-none focus:border-sky-400 focus:ring-4 focus:ring-sky-100">
                   {campaignStatusOptions.map((option) => (
@@ -781,17 +933,27 @@ const AdsTemplateBuilderPage = () => {
                 <p className="text-xs font-semibold text-slate-400">Active can deliver inside the schedule window. Paused stays stopped until you manually activate it.</p>
               </div>
               <div className="space-y-2">
+                <FieldLabel htmlFor="campaign-special-category">Special ad categories</FieldLabel>
+                <select id="campaign-special-category" value={campaignForm.staticDefaults.specialAdCategories} onChange={(event) => updateCampaignDefault('specialAdCategories', event.target.value)} className="h-12 w-full rounded-xl border border-sky-100 px-4 outline-none focus:border-sky-400 focus:ring-4 focus:ring-sky-100">
+                  {staticDefaultOptions.specialAdCategories.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+                </select>
+              </div>
+              <div className="space-y-2">
+                <FieldLabel htmlFor="campaign-placements">Placements</FieldLabel>
+                <select id="campaign-placements" value={campaignForm.staticDefaults.placements} onChange={(event) => updateCampaignDefault('placements', event.target.value)} className="h-12 w-full rounded-xl border border-sky-100 px-4 outline-none focus:border-sky-400 focus:ring-4 focus:ring-sky-100">
+                  {staticDefaultOptions.placements.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+                </select>
+              </div>
+              <div className="space-y-2">
                 <FieldLabel htmlFor="campaign-budget-level">Budget level</FieldLabel>
                 <select id="campaign-budget-level" value={campaignForm.staticDefaults.budgetLevel} onChange={(event) => updateCampaignDefault('budgetLevel', event.target.value)} className="h-12 w-full rounded-xl border border-sky-100 px-4 outline-none focus:border-sky-400 focus:ring-4 focus:ring-sky-100">
-                  <option value="AD_SET">Ad set budget</option>
-                  <option value="CAMPAIGN">Campaign budget</option>
+                  {staticDefaultOptions.budgetLevel.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
                 </select>
               </div>
               <div className="space-y-2">
                 <FieldLabel htmlFor="campaign-dynamic">Dynamic creative</FieldLabel>
                 <select id="campaign-dynamic" value={campaignForm.staticDefaults.dynamicCreative} onChange={(event) => updateCampaignDefault('dynamicCreative', event.target.value)} className="h-12 w-full rounded-xl border border-sky-100 px-4 outline-none focus:border-sky-400 focus:ring-4 focus:ring-sky-100">
-                  <option value="ON">On</option>
-                  <option value="OFF">Off</option>
+                  {staticDefaultOptions.dynamicCreative.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
                 </select>
               </div>
               <div className="space-y-2">
@@ -803,14 +965,41 @@ const AdsTemplateBuilderPage = () => {
                 <input id="campaign-age-max" type="number" min="13" value={campaignForm.staticDefaults.audienceAgeMax} onChange={(event) => updateCampaignDefault('audienceAgeMax', event.target.value)} className="h-12 w-full rounded-xl border border-sky-100 px-4 outline-none focus:border-sky-400 focus:ring-4 focus:ring-sky-100" />
               </div>
               <div className="space-y-2">
+                <FieldLabel htmlFor="campaign-gender">Gender targeting</FieldLabel>
+                <select id="campaign-gender" value={campaignForm.staticDefaults.genderTargeting} onChange={(event) => updateCampaignDefault('genderTargeting', event.target.value)} className="h-12 w-full rounded-xl border border-sky-100 px-4 outline-none focus:border-sky-400 focus:ring-4 focus:ring-sky-100">
+                  {staticDefaultOptions.genderTargeting.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+                </select>
+              </div>
+              <div className="space-y-2">
+                <FieldLabel htmlFor="campaign-billing-event">Billing event</FieldLabel>
+                <select id="campaign-billing-event" value={campaignForm.staticDefaults.billingEvent} onChange={(event) => updateCampaignDefault('billingEvent', event.target.value)} className="h-12 w-full rounded-xl border border-sky-100 px-4 outline-none focus:border-sky-400 focus:ring-4 focus:ring-sky-100">
+                  {staticDefaultOptions.billingEvent.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+                </select>
+              </div>
+              <div className="space-y-2">
+                <FieldLabel htmlFor="campaign-bid-strategy">Bid strategy</FieldLabel>
+                <select id="campaign-bid-strategy" value={campaignForm.staticDefaults.bidStrategy} onChange={(event) => updateCampaignDefault('bidStrategy', event.target.value)} className="h-12 w-full rounded-xl border border-sky-100 px-4 outline-none focus:border-sky-400 focus:ring-4 focus:ring-sky-100">
+                  {staticDefaultOptions.bidStrategy.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+                </select>
+              </div>
+              <div className="space-y-2">
                 <FieldLabel htmlFor="campaign-schedule-start">Schedule start</FieldLabel>
-                <input id="campaign-schedule-start" type="datetime-local" value={campaignForm.scheduleStart} onChange={(event) => updateCampaignField('scheduleStart', event.target.value)} className="h-12 w-full rounded-xl border border-sky-100 px-4 outline-none focus:border-sky-400 focus:ring-4 focus:ring-sky-100" />
+                <input id="campaign-schedule-start" type="datetime-local" value={campaignForm.scheduleStart} min={minimumScheduleStartValue} onChange={(event) => updateCampaignField('scheduleStart', event.target.value)} className="h-12 w-full rounded-xl border border-sky-100 px-4 outline-none focus:border-sky-400 focus:ring-4 focus:ring-sky-100" />
               </div>
               <div className="space-y-2">
                 <FieldLabel htmlFor="campaign-schedule-end">Schedule end</FieldLabel>
-                <input id="campaign-schedule-end" type="datetime-local" value={campaignForm.scheduleEnd} onChange={(event) => updateCampaignField('scheduleEnd', event.target.value)} className="h-12 w-full rounded-xl border border-sky-100 px-4 outline-none focus:border-sky-400 focus:ring-4 focus:ring-sky-100" />
+                <input id="campaign-schedule-end" type="datetime-local" value={campaignForm.scheduleEnd} min={campaignForm.scheduleStart || minimumScheduleStartValue} onChange={(event) => updateCampaignField('scheduleEnd', event.target.value)} className="h-12 w-full rounded-xl border border-sky-100 px-4 outline-none focus:border-sky-400 focus:ring-4 focus:ring-sky-100" />
               </div>
             </div>
+            {campaignScheduleValidationError ? (
+              <p className="mt-4 rounded-xl bg-red-50 px-4 py-3 text-sm font-semibold text-red-700">
+                {campaignScheduleValidationError}
+              </p>
+            ) : campaignForm.scheduleStart && campaignForm.scheduleEnd ? (
+              <p className="mt-4 rounded-xl bg-emerald-50 px-4 py-3 text-sm font-semibold text-emerald-700">
+                Schedule looks valid. It will be saved with the local timezone offset for Meta.
+              </p>
+            ) : null}
             <button type="button" onClick={saveCampaignTemplate} disabled={Boolean(savingType)} className="mt-5 flex h-11 items-center gap-2 rounded-xl bg-sky-600 px-5 text-sm font-bold text-white transition hover:bg-sky-700 disabled:opacity-70">
               {savingType === TEMPLATE_TYPES.CAMPAIGN ? <LoaderCircle size={17} className="animate-spin" /> : <Settings2 size={17} />}
               {campaignEditMode ? 'Update campaign template' : 'Save campaign template'}
@@ -920,14 +1109,42 @@ const AdsTemplateBuilderPage = () => {
         </div>
 
         <div className="space-y-4">
-          <DashboardPanel title="Campaign templates">
+          <DashboardPanel
+            title="Campaign templates"
+            headerAction={
+              <TemplatePager
+                page={safeCampaignTemplatePage}
+                pageCount={campaignTemplatePageCount}
+                onPrevious={() => setCampaignTemplatePage((page) => Math.max(page - 1, 1))}
+                onNext={() => setCampaignTemplatePage((page) => Math.min(page + 1, campaignTemplatePageCount))}
+              />
+            }
+          >
             {loading ? <div className="h-32 animate-pulse rounded-xl bg-sky-50" /> : campaignTemplates.length ? (
-              <div className="space-y-3">{campaignTemplates.map((template) => <TemplateCard key={template.id} template={template} onEdit={editCampaignTemplate} onDelete={deleteTemplate} />)}</div>
+              <div className="space-y-3">
+                {visibleCampaignTemplates.map((template) => (
+                  <TemplateCard key={template.id} template={template} onEdit={editCampaignTemplate} onDelete={deleteTemplate} />
+                ))}
+              </div>
             ) : <p className="rounded-xl bg-sky-50 px-4 py-5 text-sm font-semibold text-slate-500">No campaign templates yet.</p>}
           </DashboardPanel>
-          <DashboardPanel title="Media templates">
+          <DashboardPanel
+            title="Media templates"
+            headerAction={
+              <TemplatePager
+                page={safeMediaTemplatePage}
+                pageCount={mediaTemplatePageCount}
+                onPrevious={() => setMediaTemplatePage((page) => Math.max(page - 1, 1))}
+                onNext={() => setMediaTemplatePage((page) => Math.min(page + 1, mediaTemplatePageCount))}
+              />
+            }
+          >
             {loading ? <div className="h-32 animate-pulse rounded-xl bg-sky-50" /> : mediaTemplates.length ? (
-              <div className="space-y-3">{mediaTemplates.map((template) => <TemplateCard key={template.id} template={template} onEdit={editMediaTemplate} onDelete={deleteTemplate} />)}</div>
+              <div className="space-y-3">
+                {visibleMediaTemplates.map((template) => (
+                  <TemplateCard key={template.id} template={template} onEdit={editMediaTemplate} onDelete={deleteTemplate} />
+                ))}
+              </div>
             ) : <p className="rounded-xl bg-sky-50 px-4 py-5 text-sm font-semibold text-slate-500">No media templates yet.</p>}
           </DashboardPanel>
           <div className="rounded-2xl border border-amber-100 bg-amber-50 px-4 py-4 text-sm font-semibold text-amber-800">

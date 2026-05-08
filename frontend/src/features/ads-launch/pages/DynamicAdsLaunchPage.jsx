@@ -31,6 +31,7 @@ const defaultWebsiteEventByObjective = {
 };
 
 const TRAFFIC_OBJECTIVE = 'OUTCOME_TRAFFIC';
+const enabledCampaignObjectives = new Set([TRAFFIC_OBJECTIVE, 'OUTCOME_LEADS', 'OUTCOME_SALES']);
 const pixelRequiredObjectives = new Set(['OUTCOME_LEADS', 'OUTCOME_SALES']);
 
 const FieldLabel = ({ htmlFor, children }) => (
@@ -527,7 +528,7 @@ const DynamicAdsLaunchPage = () => {
       templates.filter(
         (template) =>
           template.templateType === 'CAMPAIGN' &&
-          (!template.config?.objective || template.config.objective === TRAFFIC_OBJECTIVE) &&
+          (!template.config?.objective || enabledCampaignObjectives.has(template.config.objective)) &&
           (!brandId || !template.config?.brandId || template.config.brandId === brandId)
       ),
     [brandId, templates]
