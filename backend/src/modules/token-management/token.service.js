@@ -601,6 +601,8 @@ async function getActiveTokenWithSecret(tokenId, tokenType = TOKEN_USAGE_TYPES.P
     id: token._id.toString(),
     label: token.label,
     adsPowerProfile: token.adsPowerProfile || '',
+    brandId: token.brand?.toString?.() || null,
+    agencyId: token.agency?.toString?.() || null,
     accessToken: decryptSecret(encryptedSecret),
     tokenType: usageType,
   };

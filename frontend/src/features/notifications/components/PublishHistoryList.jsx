@@ -1,4 +1,4 @@
-import { CheckCircle2, ChevronDown, LoaderCircle, RotateCcw, XCircle } from 'lucide-react';
+import { CheckCircle2, ChevronDown, Clock3, LoaderCircle, RotateCcw, XCircle } from 'lucide-react';
 import PublishProgressPanel from './PublishProgressPanel';
 
 const formatHistoryTime = (value) => {
@@ -26,6 +26,10 @@ const getHistoryIcon = (status) => {
     return XCircle;
   }
 
+  if (status === 'queued') {
+    return Clock3;
+  }
+
   return LoaderCircle;
 };
 
@@ -36,6 +40,10 @@ const getHistoryTone = (status) => {
 
   if (status === 'failed') {
     return 'bg-red-50 text-red-700';
+  }
+
+  if (status === 'queued') {
+    return 'bg-amber-50 text-amber-700';
   }
 
   return 'bg-sky-50 text-sky-700';
@@ -126,6 +134,16 @@ const PublishHistoryList = ({ history = [], limit = 8, onRetryFailed = null, ret
                                 {failure.resumeFromStep ? (
                                   <span className="rounded-full bg-amber-50 px-2.5 py-1 text-amber-700">
                                     Continue from {failure.resumeFromStep}
+                                  </span>
+                                ) : null}
+                                {failure.queued ? (
+                                  <span className="rounded-full bg-amber-50 px-2.5 py-1 text-amber-700">
+                                    Queue {failure.queueStatus || 'pending'}
+                                  </span>
+                                ) : null}
+                                {failure.nextAttemptAt ? (
+                                  <span className="rounded-full bg-slate-50 px-2.5 py-1 text-slate-600">
+                                    Next {formatHistoryTime(failure.nextAttemptAt)}
                                   </span>
                                 ) : null}
                                 {failure.partialMeta?.campaignId ? (

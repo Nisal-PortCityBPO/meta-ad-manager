@@ -145,10 +145,17 @@ export const PublishProgressProvider = ({ children }) => {
 
   const completePublish = (result) => {
     const failedCount = Number(result?.summary?.failed || result?.failed?.length || 0);
+    const queuedCount = Number(result?.summary?.queued || result?.failed?.filter?.((item) => item.queued).length || 0);
+    const hardFailedCount = Math.max(failedCount - queuedCount, 0);
     const completedAt = new Date().toISOString();
-    const status = failedCount > 0 ? 'failed' : 'completed';
+    const status = hardFailedCount > 0 ? 'failed' : queuedCount > 0 ? 'queued' : 'completed';
     const message = result.message;
-    const errorMessage = failedCount > 0 ? `${failedCount} ad account${failedCount === 1 ? '' : 's'} failed during publish` : '';
+    const errorMessage =
+      hardFailedCount > 0
+        ? `${hardFailedCount} ad account${hardFailedCount === 1 ? '' : 's'} failed during publish`
+        : queuedCount > 0
+          ? `${queuedCount} ad account${queuedCount === 1 ? '' : 's'} queued for automatic retry`
+          : '';
 
     setLatestResult(result);
     setLatestError(errorMessage);

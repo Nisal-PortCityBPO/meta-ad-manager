@@ -1,12 +1,42 @@
 const HttpError = require('../../app/utils/httpError');
 const { waitForMetaApiPacing } = require('../../app/utils/metaApiPacing');
 const { writeActivityLog } = require('../activity-logs/activityLog.service');
+const settingsService = require('../settings/settings.service');
 const tokenService = require('../token-management/token.service');
+const { User, USER_ROLES } = require('../users/user.model');
 const ManagedCampaign = require('./adsManage.model');
 
 const META_GRAPH_VERSION = process.env.META_GRAPH_VERSION || 'v24.0';
 const GRAPH_API_BASE = `https://graph.facebook.com/${META_GRAPH_VERSION}`;
 const ALLOWED_STATUS_UPDATES = new Set(['ACTIVE', 'PAUSED']);
+const PUBLISH_QUEUE_STATUSES = Object.freeze({
+  NONE: 'NONE',
+  PENDING: 'PENDING',
+  RUNNING: 'RUNNING',
+  BLOCKED: 'BLOCKED',
+  COMPLETED: 'COMPLETED',
+  FAILED: 'FAILED',
+  CANCELLED: 'CANCELLED',
+});
+const ACTIVE_PUBLISH_QUEUE_STATUSES = [
+  PUBLISH_QUEUE_STATUSES.PENDING,
+  PUBLISH_QUEUE_STATUSES.RUNNING,
+  PUBLISH_QUEUE_STATUSES.BLOCKED,
+  PUBLISH_QUEUE_STATUSES.FAILED,
+];
+const RETRYABLE_PUBLISH_QUEUE_STATUSES = [
+  PUBLISH_QUEUE_STATUSES.PENDING,
+  PUBLISH_QUEUE_STATUSES.BLOCKED,
+];
+const DEFAULT_QUEUE_RETRY_DELAY_MS = 5 * 60 * 1000;
+const MAX_QUEUE_RETRY_DELAY_MS = 60 * 60 * 1000;
+const META_ACCESS_COLLECTION_LIMIT = 500;
+
+let publishQueueTimer = null;
+let publishQueueTimerDueAt = null;
+let publishQueueRunning = false;
+let publishQueueLastRunAt = null;
+let publishQueueLastResult = null;
 
 const ZERO_DECIMAL_CURRENCIES = new Set([
   'BIF',
@@ -42,6 +72,118 @@ function dedupeStrings(values) {
         : []
     )
   );
+}
+
+function normalizeMetaNodeId(value, prefix = '') {
+  const normalizedValue = normalizeText(value);
+
+  if (!normalizedValue) {
+    return '';
+  }
+
+  if (!prefix || normalizedValue.startsWith(`${prefix}_`)) {
+    return normalizedValue;
+  }
+
+  return `${prefix}_${normalizedValue.replace(new RegExp(`^${prefix}_`), '')}`;
+}
+
+function metaIdsMatch(left, right) {
+  const normalizedLeft = normalizeText(left);
+  const normalizedRight = normalizeText(right);
+
+  if (!normalizedLeft || !normalizedRight) {
+    return false;
+  }
+
+  return normalizedLeft === normalizedRight || normalizedLeft.replace(/^act_/, '') === normalizedRight.replace(/^act_/, '');
+}
+
+function isSuperAdmin(actor) {
+  return actor?.role === USER_ROLES.SUPER_ADMIN;
+}
+
+function campaignAccessFilter(actor) {
+  if (!actor || isSuperAdmin(actor)) {
+    return {};
+  }
+
+  return {
+    createdBy: actor._id || actor.id || null,
+  };
+}
+
+function normalizeQueueStatus(status) {
+  const normalizedStatus = normalizeText(status).toUpperCase();
+  return Object.values(PUBLISH_QUEUE_STATUSES).includes(normalizedStatus)
+    ? normalizedStatus
+    : PUBLISH_QUEUE_STATUSES.NONE;
+}
+
+function isActiveQueueStatus(status) {
+  return ACTIVE_PUBLISH_QUEUE_STATUSES.includes(normalizeQueueStatus(status));
+}
+
+function getQueueRetryDelayMs({ retryAfterSeconds = null, attemptCount = 0 } = {}) {
+  const retryAfterMs = Number(retryAfterSeconds) * 1000;
+
+  if (Number.isFinite(retryAfterMs) && retryAfterMs > 0) {
+    return Math.min(Math.round(retryAfterMs), MAX_QUEUE_RETRY_DELAY_MS);
+  }
+
+  const backoffMultiplier = 2 ** Math.min(Number(attemptCount) || 0, 4);
+  return Math.min(DEFAULT_QUEUE_RETRY_DELAY_MS * backoffMultiplier, MAX_QUEUE_RETRY_DELAY_MS);
+}
+
+function normalizeQueueRecord(campaign) {
+  const record = campaign.toSafeObject ? campaign.toSafeObject() : campaign;
+  const queue = record.publishQueue || {};
+
+  return {
+    campaignId: record.campaignId,
+    recordId: record.recordId,
+    name: record.name,
+    tokenId: record.tokenId,
+    tokenLabel: record.tokenLabel,
+    adAccount: record.adAccount,
+    status: record.status,
+    lastMetaError: record.lastMetaError,
+    publishQueue: {
+      status: queue.status || PUBLISH_QUEUE_STATUSES.NONE,
+      reason: queue.reason || '',
+      tokenType: queue.tokenType || '',
+      source: queue.source || '',
+      queuedAt: queue.queuedAt || null,
+      nextAttemptAt: queue.nextAttemptAt || null,
+      runningStartedAt: queue.runningStartedAt || null,
+      completedAt: queue.completedAt || null,
+      clearedAt: queue.clearedAt || null,
+      attemptCount: queue.attemptCount || 0,
+      lastAttemptAt: queue.lastAttemptAt || null,
+      lastError: queue.lastError || '',
+    },
+  };
+}
+
+function getQueueState({ queue = [] } = {}) {
+  const counts = queue.reduce(
+    (summary, item) => {
+      const status = normalizeQueueStatus(item.publishQueue?.status);
+      summary.total += 1;
+      summary[status.toLowerCase()] = (summary[status.toLowerCase()] || 0) + 1;
+      return summary;
+    },
+    {
+      total: 0,
+    }
+  );
+
+  return {
+    running: publishQueueRunning,
+    lastRunAt: publishQueueLastRunAt,
+    lastResult: publishQueueLastResult,
+    counts,
+  };
 }
 
 function buildGraphUrl(path, params = {}) {
@@ -127,7 +269,14 @@ async function postToMeta({ token, path, params = {} }) {
   const payload = await response.json().catch(() => ({}));
 
   if (!response.ok || payload.error) {
-    throw new HttpError(400, buildMetaErrorMessage(path, payload));
+    await tokenService.markTokenBlockedFromMetaError({
+      tokenId: token.id,
+      payload,
+      tokenType: token.tokenType,
+    });
+    throw new HttpError(400, buildMetaErrorMessage(path, payload), {
+      metaError: payload?.error || null,
+    });
   }
 
   return payload;
@@ -146,10 +295,53 @@ async function getFromMeta({ token, path, params = {} }) {
   const payload = await response.json().catch(() => ({}));
 
   if (!response.ok || payload.error) {
-    throw new HttpError(400, buildMetaErrorMessage(path, payload));
+    await tokenService.markTokenBlockedFromMetaError({
+      tokenId: token.id,
+      payload,
+      tokenType: token.tokenType,
+    });
+    throw new HttpError(400, buildMetaErrorMessage(path, payload), {
+      metaError: payload?.error || null,
+    });
   }
 
   return payload;
+}
+
+async function getMetaCollection({ token, path, fields }) {
+  const items = [];
+  let nextUrl = buildGraphUrl(path, {
+    access_token: token.accessToken,
+    fields,
+    limit: META_ACCESS_COLLECTION_LIMIT,
+  }).toString();
+
+  while (nextUrl) {
+    await waitForMetaApiPacing();
+
+    const response = await fetch(nextUrl);
+    await recordApiCall(token);
+    const payload = await response.json().catch(() => ({}));
+
+    if (!response.ok || payload.error) {
+      await tokenService.markTokenBlockedFromMetaError({
+        tokenId: token.id,
+        payload,
+        tokenType: token.tokenType,
+      });
+      throw new HttpError(400, buildMetaErrorMessage(path, payload), {
+        metaError: payload?.error || null,
+      });
+    }
+
+    if (Array.isArray(payload.data)) {
+      items.push(...payload.data);
+    }
+
+    nextUrl = payload.paging?.next || '';
+  }
+
+  return items;
 }
 
 function getBudgetMultiplier(currency) {
@@ -219,6 +411,197 @@ function mapLaunchForHistory({ launch, media, thumbnail, accountLaunch = null, r
     staticDefaults: launch.staticDefaults || {},
     retryPayload,
   };
+}
+
+function getRetryAccessRequirements(campaign) {
+  const retryPayload = campaign.launch?.retryPayload || {};
+  const accountLaunch = Array.isArray(retryPayload.accountLaunches) ? retryPayload.accountLaunches[0] || {} : {};
+  const adAccountId =
+    normalizeText(retryPayload.selectedAdAccountIds?.[0]) ||
+    normalizeText(retryPayload.selectedAdAccounts?.[0]?.id) ||
+    normalizeText(campaign.adAccount?.id);
+  const pageId =
+    normalizeText(accountLaunch.pageId) ||
+    normalizeText(retryPayload.pageId) ||
+    normalizeText(campaign.launch?.page?.id);
+  const pixelId =
+    normalizeText(accountLaunch.pixelId) ||
+    normalizeText(retryPayload.pixelId) ||
+    normalizeText(campaign.launch?.pixel?.id);
+
+  return {
+    adAccountId: normalizeMetaNodeId(adAccountId, 'act'),
+    pageId,
+    pixelId,
+    brandId: normalizeText(retryPayload.brandId) || normalizeText(campaign.launch?.brandId),
+  };
+}
+
+function assertRetryTokenBrand({ token, campaign, selected }) {
+  const requiredBrandId = getRetryAccessRequirements(campaign).brandId;
+
+  if (!requiredBrandId) {
+    return;
+  }
+
+  if (requiredBrandId !== token.brandId) {
+    throw new HttpError(
+      400,
+      selected
+        ? 'Selected retry token is not assigned to the same brand as this failed launch'
+        : 'Replacement token is not assigned to the same brand as this failed launch'
+    );
+  }
+}
+
+async function assertRetryTokenMetaAccess({ token, campaign, selected = false }) {
+  assertRetryTokenBrand({ token, campaign, selected });
+
+  const requirements = getRetryAccessRequirements(campaign);
+  const tokenLabel = token.label || 'Selected token';
+
+  if (!requirements.adAccountId) {
+    throw new HttpError(400, 'Cannot continue this failed launch because its ad account was not saved');
+  }
+
+  const adAccounts = await getMetaCollection({
+    token,
+    path: 'me/adaccounts',
+    fields: 'id,account_id,name,currency',
+  });
+  const adAccount = adAccounts.find(
+    (account) => metaIdsMatch(account.id, requirements.adAccountId) || metaIdsMatch(account.account_id, requirements.adAccountId)
+  );
+
+  if (!adAccount) {
+    throw new HttpError(400, `${tokenLabel} does not have access to ad account ${requirements.adAccountId}`);
+  }
+
+  if (requirements.pageId) {
+    const pages = await getMetaCollection({
+      token,
+      path: 'me/accounts',
+      fields: 'id,name',
+    });
+    const page = pages.find((item) => metaIdsMatch(item.id, requirements.pageId));
+
+    if (!page) {
+      throw new HttpError(400, `${tokenLabel} does not have access to Facebook page ${requirements.pageId}`);
+    }
+  }
+
+  if (requirements.pixelId) {
+    const pixels = await getMetaCollection({
+      token,
+      path: `${requirements.adAccountId}/adspixels`,
+      fields: 'id,name',
+    });
+    const pixel = pixels.find((item) => metaIdsMatch(item.id, requirements.pixelId));
+
+    if (!pixel) {
+      throw new HttpError(400, `${tokenLabel} does not have access to pixel ${requirements.pixelId}`);
+    }
+  }
+
+  return {
+    adAccount,
+    requirements,
+  };
+}
+
+async function findAccessibleReplacementToken({ campaign, tokenType, actor, excludeTokenIds = [] }) {
+  const requirements = getRetryAccessRequirements(campaign);
+  const excluded = new Set(excludeTokenIds.map((item) => normalizeText(item)).filter(Boolean));
+  const candidates = await tokenService.listActiveTokensWithSecrets({
+    tokenType,
+  });
+
+  for (const candidate of candidates) {
+    if (excluded.has(candidate.id)) {
+      continue;
+    }
+
+    if (requirements.brandId && candidate.brandId !== requirements.brandId) {
+      continue;
+    }
+
+    try {
+      await assertRetryTokenMetaAccess({
+        token: candidate,
+        campaign,
+      });
+
+      return candidate;
+    } catch (error) {
+      await writeActivityLog({
+        user: actor,
+        action: 'ADS_PUBLISH_QUEUE_REPLACEMENT_TOKEN_SKIPPED',
+        entity: 'ManagedCampaign',
+        entityId: campaign._id?.toString?.(),
+        metadata: {
+          campaignId: campaign.campaignId,
+          tokenId: candidate.id,
+          reason: error.message,
+        },
+      });
+    }
+  }
+
+  return null;
+}
+
+async function resolveRetryTokenForCampaign({ campaign, tokenType, retryTokenId = '', actor = null }) {
+  const selectedRetryTokenId = normalizeText(retryTokenId);
+  const originalTokenId = campaign.tokenId;
+
+  if (selectedRetryTokenId) {
+    const selectedToken = await tokenService.getActiveTokenWithSecret(selectedRetryTokenId, tokenType);
+    await assertRetryTokenMetaAccess({
+      token: selectedToken,
+      campaign,
+      selected: true,
+    });
+
+    return {
+      token: selectedToken,
+      switched: selectedToken.id !== originalTokenId,
+      selected: true,
+    };
+  }
+
+  try {
+    const originalToken = await tokenService.getActiveTokenWithSecret(originalTokenId, tokenType);
+    await assertRetryTokenMetaAccess({
+      token: originalToken,
+      campaign,
+    });
+
+    return {
+      token: originalToken,
+      switched: false,
+      selected: false,
+    };
+  } catch (originalError) {
+    const replacementToken = await findAccessibleReplacementToken({
+      campaign,
+      tokenType,
+      actor,
+      excludeTokenIds: [originalTokenId],
+    });
+
+    if (!replacementToken) {
+      throw new HttpError(
+        400,
+        `${originalError.message}. No other assigned active token could access this unfinished launch. Choose a replacement token that has access to the ad account, page, and pixel.`
+      );
+    }
+
+    return {
+      token: replacementToken,
+      switched: true,
+      selected: false,
+    };
+  }
 }
 
 function buildResumeState({ account, campaignId = '', adSetId = '', creativeId = '', adId = '' }) {
@@ -291,6 +674,132 @@ function pushAction({ action, status = '', message = '', actor = null }) {
     actor: actor?._id || actor?.id || null,
     at: new Date(),
   };
+}
+
+async function resolveCampaignActor(campaign, fallbackActor = null) {
+  const actorId = campaign?.createdBy || campaign?.updatedBy || fallbackActor?._id || fallbackActor?.id;
+
+  if (!actorId) {
+    return fallbackActor;
+  }
+
+  const user = await User.findById(actorId).select('name email role status').lean();
+  return user || fallbackActor || { _id: actorId };
+}
+
+async function markQueueRunning({ campaign, actor, source = 'manual' }) {
+  const now = new Date();
+  const nextAttemptCount = Number(campaign.publishQueue?.attemptCount || 0) + 1;
+
+  campaign.publishQueue = {
+    ...(campaign.publishQueue?.toObject?.() || campaign.publishQueue || {}),
+    status: PUBLISH_QUEUE_STATUSES.RUNNING,
+    source,
+    runningStartedAt: now,
+    lastAttemptAt: now,
+    attemptCount: nextAttemptCount,
+    lastError: '',
+  };
+  campaign.lastActionAt = now;
+  campaign.actionHistory.push(
+    pushAction({
+      action: 'PUBLISH_QUEUE_RUNNING',
+      status: PUBLISH_QUEUE_STATUSES.RUNNING,
+      message: `Queued publish retry started by ${source}`,
+      actor,
+    })
+  );
+  await campaign.save();
+}
+
+async function markQueueCompleted({ campaign, actor, message = 'Queued publish retry completed' }) {
+  const now = new Date();
+
+  campaign.publishQueue = {
+    ...(campaign.publishQueue?.toObject?.() || campaign.publishQueue || {}),
+    status: PUBLISH_QUEUE_STATUSES.COMPLETED,
+    runningStartedAt: null,
+    nextAttemptAt: null,
+    completedAt: now,
+    lastError: '',
+  };
+  campaign.lastActionAt = now;
+  campaign.actionHistory.push(
+    pushAction({
+      action: 'PUBLISH_QUEUE_COMPLETED',
+      status: PUBLISH_QUEUE_STATUSES.COMPLETED,
+      message,
+      actor,
+    })
+  );
+  await campaign.save();
+}
+
+async function markQueueBlocked({ campaign, error, actor, tokenType = '', notify = true }) {
+  const now = new Date();
+  const delayMs = getQueueRetryDelayMs({
+    retryAfterSeconds: error.retryAfterSeconds,
+    attemptCount: campaign.publishQueue?.attemptCount,
+  });
+  const nextAttemptAt = new Date(now.getTime() + delayMs);
+
+  campaign.publishQueue = {
+    ...(campaign.publishQueue?.toObject?.() || campaign.publishQueue || {}),
+    status: PUBLISH_QUEUE_STATUSES.BLOCKED,
+    reason: error.message || campaign.publishQueue?.reason || 'Meta API is temporarily blocked',
+    tokenType: normalizeText(tokenType) || campaign.publishQueue?.tokenType || '',
+    source: 'meta-block',
+    queuedAt: campaign.publishQueue?.queuedAt || now,
+    nextAttemptAt,
+    runningStartedAt: null,
+    completedAt: null,
+    clearedAt: null,
+    lastError: error.message || 'Meta API is temporarily blocked',
+    queuedBy: campaign.publishQueue?.queuedBy || actor?._id || actor?.id || null,
+  };
+  campaign.lastMetaError = error.message || campaign.lastMetaError;
+  campaign.lastActionAt = now;
+  campaign.actionHistory.push(
+    pushAction({
+      action: 'PUBLISH_QUEUE_BLOCKED',
+      status: PUBLISH_QUEUE_STATUSES.BLOCKED,
+      message: `Retry paused until ${nextAttemptAt.toISOString()}`,
+      actor,
+    })
+  );
+  await campaign.save();
+  schedulePublishQueueRun(delayMs);
+
+  if (notify) {
+    await settingsService.notifyPublishQueueStatus({
+      status: 'blocked',
+      message: `Meta/API block detected. Queue will retry after ${nextAttemptAt.toLocaleString()}.`,
+      records: [campaign.toSafeObject()],
+    });
+  }
+}
+
+async function markQueueFailed({ campaign, error, actor }) {
+  const now = new Date();
+
+  campaign.publishQueue = {
+    ...(campaign.publishQueue?.toObject?.() || campaign.publishQueue || {}),
+    status: PUBLISH_QUEUE_STATUSES.FAILED,
+    runningStartedAt: null,
+    nextAttemptAt: null,
+    lastError: error.message || 'Queued retry failed',
+  };
+  campaign.lastMetaError = error.message || campaign.lastMetaError;
+  campaign.lastActionAt = now;
+  campaign.actionHistory.push(
+    pushAction({
+      action: 'PUBLISH_QUEUE_FAILED',
+      status: PUBLISH_QUEUE_STATUSES.FAILED,
+      message: error.message || 'Queued retry failed',
+      actor,
+    })
+  );
+  await campaign.save();
 }
 
 function buildCampaignQuery({ tokenId, adAccountIds = [], status }) {
@@ -505,7 +1014,23 @@ async function recordPublishedCampaign({ token, launch, account, names, campaign
   return history.toSafeObject();
 }
 
-async function recordFailedLaunch({ token, launch, account, names = {}, campaign = null, adSet = null, creative = null, ad = null, media = null, thumbnail = null, accountLaunch = null, error, actor, req }) {
+async function recordFailedLaunch({
+  token,
+  launch,
+  account,
+  names = {},
+  campaign = null,
+  adSet = null,
+  creative = null,
+  ad = null,
+  media = null,
+  thumbnail = null,
+  accountLaunch = null,
+  error,
+  queue = null,
+  actor,
+  req,
+}) {
   const campaignId = normalizeText(campaign?.id) || `failed_${token.id}_${account.id}_${Date.now()}`;
   const failedName = names.campaignName || launch.launchLabel || `Failed launch | ${account.name || account.id}`;
   const retryPayload = buildSingleAccountRetryPayload({
@@ -518,6 +1043,32 @@ async function recordFailedLaunch({ token, launch, account, names = {}, campaign
     ad,
   });
   const now = new Date();
+  const existingFailure = await ManagedCampaign.findOne({ campaignId }).select('publishQueue').lean();
+  const existingQueue = existingFailure?.publishQueue || {};
+  const queueDelayMs = queue
+    ? getQueueRetryDelayMs({
+        retryAfterSeconds: queue.retryAfterSeconds,
+        attemptCount: existingQueue.attemptCount,
+      })
+    : 0;
+  const nextAttemptAt = queue ? new Date(now.getTime() + queueDelayMs) : null;
+  const queueUpdate = queue
+    ? {
+        status: PUBLISH_QUEUE_STATUSES.PENDING,
+        reason: normalizeText(queue.reason) || error?.message || 'Meta API is temporarily blocked',
+        tokenType: normalizeText(queue.tokenType) || token.tokenType || '',
+        source: 'meta-block',
+        queuedAt: existingQueue.queuedAt || now,
+        nextAttemptAt,
+        runningStartedAt: null,
+        completedAt: null,
+        clearedAt: null,
+        attemptCount: Number(existingQueue.attemptCount || 0),
+        lastAttemptAt: existingQueue.lastAttemptAt || null,
+        lastError: error?.message || 'Meta API is temporarily blocked',
+        queuedBy: actor?._id || actor?.id || existingQueue.queuedBy || null,
+      }
+    : null;
 
   const history = await ManagedCampaign.findOneAndUpdate(
     {
@@ -562,6 +1113,7 @@ async function recordFailedLaunch({ token, launch, account, names = {}, campaign
         deletedAt: null,
         lastActionAt: now,
         lastMetaError: error?.message || 'Publish failed',
+        ...(queueUpdate ? { publishQueue: queueUpdate } : {}),
         createdBy: actor?._id || null,
         updatedBy: actor?._id || null,
       },
@@ -595,6 +1147,17 @@ async function recordFailedLaunch({ token, launch, account, names = {}, campaign
     },
     req,
   });
+
+  if (queueUpdate) {
+    schedulePublishQueueRun(queueDelayMs);
+    if (queue.notify !== false) {
+      await settingsService.notifyPublishQueueStatus({
+        status: 'queued',
+        message: `Meta/API block saved this failed publish for automatic retry after ${nextAttemptAt.toLocaleString()}.`,
+        records: [history.toSafeObject()],
+      });
+    }
+  }
 
   return history.toSafeObject();
 }
@@ -975,11 +1538,15 @@ async function syncCampaignDetails({ tokenId, campaignId, actor, req }) {
   }
 }
 
-async function retryFailedLaunch({ tokenId, campaignId, actor, req, tokenType = null }) {
+async function retryFailedLaunch({ tokenId, campaignId, actor, req, tokenType = null, retryTokenId = '', fromQueue = false }) {
   const campaign = await getCampaignForAction({ tokenId, campaignId });
 
   if (campaign.status !== 'FAILED') {
     throw new HttpError(400, 'Only failed launch records can be retried');
+  }
+
+  if (!fromQueue && normalizeQueueStatus(campaign.publishQueue?.status) === PUBLISH_QUEUE_STATUSES.RUNNING) {
+    throw new HttpError(409, 'This failed launch is already running from the publish queue');
   }
 
   const retryPayload = {
@@ -988,6 +1555,14 @@ async function retryFailedLaunch({ tokenId, campaignId, actor, req, tokenType = 
   if (!retryPayload || typeof retryPayload !== 'object') {
     throw new HttpError(400, 'This failed launch does not have enough saved data to retry');
   }
+
+  const retryToken = await resolveRetryTokenForCampaign({
+    campaign,
+    tokenType,
+    retryTokenId,
+    actor,
+  });
+  retryPayload.tokenId = retryToken.token.id;
 
   const resumeState = buildResumeState({
     account: campaign.adAccount || {},
@@ -1008,26 +1583,57 @@ async function retryFailedLaunch({ tokenId, campaignId, actor, req, tokenType = 
     pushAction({
       action: 'RETRY_REQUESTED',
       status: 'FAILED',
-      message: 'Retry requested from Ads Manage',
+      message: retryToken.switched
+        ? `Retry requested using replacement token ${retryToken.token.label || retryToken.token.id}`
+        : 'Retry requested from Ads Manage',
       actor,
     })
   );
   campaign.lastActionAt = new Date();
+  if (retryToken.switched) {
+    campaign.publishQueue = {
+      ...(campaign.publishQueue?.toObject?.() || campaign.publishQueue || {}),
+      tokenType: retryToken.token.tokenType || campaign.publishQueue?.tokenType || '',
+      lastError: '',
+    };
+    campaign.actionHistory.push(
+      pushAction({
+        action: retryToken.selected ? 'RETRY_TOKEN_SELECTED' : 'RETRY_TOKEN_AUTO_SELECTED',
+        status: campaign.publishQueue?.status || 'FAILED',
+        message: `Replacement token ${retryToken.token.label || retryToken.token.id} passed access check`,
+        actor,
+      })
+    );
+  }
+  if (!fromQueue && isActiveQueueStatus(campaign.publishQueue?.status)) {
+    await markQueueRunning({
+      campaign,
+      actor,
+      source: 'manual-retry',
+    });
+  }
   await campaign.save();
 
   try {
     const adsLaunchService = require('../ads-launch/adsLaunch.service');
     const result = await adsLaunchService.publishLaunch({
-      payload: retryPayload,
+      payload: {
+        ...retryPayload,
+        queueRetry: fromQueue,
+      },
       actor,
       req,
-      tokenType,
+      tokenType: retryToken.token.tokenType || tokenType,
     });
     const retryFailedCount = Number(result?.summary?.failed || result?.failed?.length || 0);
     const retryPublishedCount = Number(result?.summary?.published || result?.results?.length || 0);
 
     if (retryFailedCount > 0 && retryPublishedCount === 0) {
-      throw new HttpError(400, result?.failed?.[0]?.message || result?.message || 'Retry failed');
+      const failure = result?.failed?.[0] || {};
+      throw new HttpError(400, failure.message || result?.message || 'Retry failed', {
+        publishQueueable: Boolean(failure.queued),
+        retryAfterSeconds: failure.retryAfterSeconds || null,
+      });
     }
 
     const retryStatus = campaign.campaignId.startsWith('failed_')
@@ -1046,6 +1652,16 @@ async function retryFailedLaunch({ tokenId, campaignId, actor, req, tokenType = 
         actor,
       })
     );
+    if (!fromQueue && isActiveQueueStatus(campaign.publishQueue?.status)) {
+      campaign.publishQueue = {
+        ...(campaign.publishQueue?.toObject?.() || campaign.publishQueue || {}),
+        status: PUBLISH_QUEUE_STATUSES.COMPLETED,
+        runningStartedAt: null,
+        nextAttemptAt: null,
+        completedAt: new Date(),
+        lastError: '',
+      };
+    }
     await campaign.save();
 
     await writeActivityLog({
@@ -1066,6 +1682,22 @@ async function retryFailedLaunch({ tokenId, campaignId, actor, req, tokenType = 
       result,
     };
   } catch (error) {
+    if (!fromQueue && isActiveQueueStatus(campaign.publishQueue?.status)) {
+      if (error.publishQueueable) {
+        await markQueueBlocked({
+          campaign,
+          error,
+          actor,
+          tokenType: retryToken.token.tokenType || tokenType,
+        });
+      } else {
+        await markQueueFailed({
+          campaign,
+          error,
+          actor,
+        });
+      }
+    }
     await rememberMetaActionFailure({
       campaign,
       action: 'RETRY_FAILED',
@@ -1076,13 +1708,312 @@ async function retryFailedLaunch({ tokenId, campaignId, actor, req, tokenType = 
   }
 }
 
+async function getPublishQueue({ actor = null } = {}) {
+  const queue = await ManagedCampaign.find({
+    ...campaignAccessFilter(actor),
+    'publishQueue.status': {
+      $in: ACTIVE_PUBLISH_QUEUE_STATUSES,
+    },
+  }).sort({
+    'publishQueue.nextAttemptAt': 1,
+    updatedAt: -1,
+  });
+  const normalizedQueue = queue.map(normalizeQueueRecord);
+
+  return {
+    queue: normalizedQueue,
+    state: getQueueState({ queue: normalizedQueue }),
+  };
+}
+
+function schedulePublishQueueRun(delayMs = 0) {
+  const safeDelayMs = Math.max(Number(delayMs) || 0, 0);
+  const dueAt = Date.now() + safeDelayMs;
+
+  if (publishQueueTimer && publishQueueTimerDueAt && publishQueueTimerDueAt <= dueAt) {
+    return;
+  }
+
+  if (publishQueueTimer) {
+    clearTimeout(publishQueueTimer);
+  }
+
+  publishQueueTimerDueAt = dueAt;
+  publishQueueTimer = setTimeout(() => {
+    publishQueueTimer = null;
+    publishQueueTimerDueAt = null;
+    runPublishQueue({ source: 'auto' }).catch((error) => {
+      publishQueueLastResult = {
+        message: error.message || 'Publish queue failed to start',
+        status: 'failed',
+        completedAt: new Date(),
+      };
+    });
+  }, safeDelayMs);
+}
+
+async function scheduleNextQueuedRun() {
+  if (publishQueueRunning) {
+    return;
+  }
+
+  const nextQueued = await ManagedCampaign.findOne({
+    'publishQueue.status': {
+      $in: RETRYABLE_PUBLISH_QUEUE_STATUSES,
+    },
+    'publishQueue.nextAttemptAt': {
+      $ne: null,
+    },
+  })
+    .sort({ 'publishQueue.nextAttemptAt': 1 })
+    .select('publishQueue')
+    .lean();
+
+  if (!nextQueued?.publishQueue?.nextAttemptAt) {
+    return;
+  }
+
+  schedulePublishQueueRun(Math.max(new Date(nextQueued.publishQueue.nextAttemptAt).getTime() - Date.now(), 0));
+}
+
+async function runPublishQueue({ actor = null, req = null, tokenType = null, retryTokenId = '', force = false, source = 'manual' } = {}) {
+  if (publishQueueRunning) {
+    const currentQueue = await getPublishQueue({ actor });
+    return {
+      message: 'Publish queue is already running',
+      processed: [],
+      state: currentQueue.state,
+      queue: currentQueue.queue,
+    };
+  }
+
+  publishQueueRunning = true;
+  publishQueueLastRunAt = new Date();
+  const now = new Date();
+  const dueFilter = force
+    ? {}
+    : {
+        $or: [
+          { 'publishQueue.nextAttemptAt': null },
+          { 'publishQueue.nextAttemptAt': { $lte: now } },
+        ],
+      };
+  const queueStatuses = force
+    ? [...RETRYABLE_PUBLISH_QUEUE_STATUSES, PUBLISH_QUEUE_STATUSES.FAILED]
+    : RETRYABLE_PUBLISH_QUEUE_STATUSES;
+  const processed = [];
+
+  try {
+    const campaigns = await ManagedCampaign.find({
+      ...campaignAccessFilter(actor),
+      ...dueFilter,
+      status: 'FAILED',
+      'publishQueue.status': {
+        $in: queueStatuses,
+      },
+    }).sort({
+      'publishQueue.nextAttemptAt': 1,
+      updatedAt: -1,
+    });
+
+    for (const campaign of campaigns) {
+      const queueActor = await resolveCampaignActor(campaign, actor);
+
+      try {
+        await markQueueRunning({
+          campaign,
+          actor: queueActor,
+          source,
+        });
+
+        const result = await retryFailedLaunch({
+          tokenId: campaign.tokenId,
+          campaignId: campaign.campaignId,
+          actor: queueActor,
+          req,
+          tokenType: campaign.publishQueue?.tokenType || tokenType,
+          retryTokenId,
+          fromQueue: true,
+        });
+        const resumeNotices = Array.isArray(result?.result?.results)
+          ? result.result.results.flatMap((item) => (Array.isArray(item.resumeNotices) ? item.resumeNotices : []))
+          : [];
+
+        await markQueueCompleted({
+          campaign,
+          actor: queueActor,
+          message: resumeNotices[0] || result.message || 'Queued publish retry completed',
+        });
+
+        processed.push({
+          campaignId: campaign.campaignId,
+          adAccount: campaign.adAccount,
+          status: PUBLISH_QUEUE_STATUSES.COMPLETED,
+          message: result.message || 'Queued publish retry completed',
+          resumeNotices,
+        });
+      } catch (error) {
+        if (error.publishQueueable) {
+          await markQueueBlocked({
+            campaign,
+            error,
+            actor: queueActor,
+            tokenType: campaign.publishQueue?.tokenType || tokenType,
+            notify: false,
+          });
+          processed.push({
+            campaignId: campaign.campaignId,
+            adAccount: campaign.adAccount,
+            status: PUBLISH_QUEUE_STATUSES.BLOCKED,
+            message: error.message,
+            nextAttemptAt: campaign.publishQueue?.nextAttemptAt || null,
+          });
+        } else {
+          await markQueueFailed({
+            campaign,
+            error,
+            actor: queueActor,
+          });
+          processed.push({
+            campaignId: campaign.campaignId,
+            adAccount: campaign.adAccount,
+            status: PUBLISH_QUEUE_STATUSES.FAILED,
+            message: error.message,
+          });
+        }
+      }
+    }
+
+    const currentQueue = await getPublishQueue({ actor });
+    currentQueue.state.running = false;
+    const completed = processed.filter((item) => item.status === PUBLISH_QUEUE_STATUSES.COMPLETED).length;
+    const blocked = processed.filter((item) => item.status === PUBLISH_QUEUE_STATUSES.BLOCKED).length;
+    const failed = processed.filter((item) => item.status === PUBLISH_QUEUE_STATUSES.FAILED).length;
+
+    publishQueueLastResult = {
+      message: processed.length
+        ? `Queue processed ${processed.length} item${processed.length === 1 ? '' : 's'}`
+        : 'No queued publish items were ready',
+      completed,
+      blocked,
+      failed,
+      processed: processed.length,
+      completedAt: new Date(),
+    };
+
+    if (processed.length) {
+      await settingsService.notifyPublishQueueStatus({
+        status: 'processed',
+        message: `Completed: ${completed}, blocked: ${blocked}, failed: ${failed}`,
+        records: currentQueue.queue,
+      });
+    }
+
+    await writeActivityLog({
+      user: actor,
+      action: 'ADS_PUBLISH_QUEUE_RUN',
+      entity: 'ManagedCampaign',
+      metadata: {
+        processed: processed.length,
+        completed,
+        blocked,
+        failed,
+        source,
+      },
+      req,
+    });
+
+    return {
+      message: publishQueueLastResult.message,
+      processed,
+      state: currentQueue.state,
+      queue: currentQueue.queue,
+    };
+  } finally {
+    publishQueueRunning = false;
+    await scheduleNextQueuedRun();
+  }
+}
+
+async function clearPublishQueue({ actor, req }) {
+  const accessFilter = campaignAccessFilter(actor);
+  const runningCount = await ManagedCampaign.countDocuments({
+    ...accessFilter,
+    'publishQueue.status': PUBLISH_QUEUE_STATUSES.RUNNING,
+  });
+
+  if (publishQueueRunning || runningCount) {
+    throw new HttpError(409, 'Publish queue is currently running. Please wait for it to finish before clearing.');
+  }
+
+  const query = {
+    ...accessFilter,
+    'publishQueue.status': {
+      $in: ACTIVE_PUBLISH_QUEUE_STATUSES,
+    },
+  };
+  const now = new Date();
+  const result = await ManagedCampaign.updateMany(query, {
+    $set: {
+      'publishQueue.status': PUBLISH_QUEUE_STATUSES.CANCELLED,
+      'publishQueue.runningStartedAt': null,
+      'publishQueue.nextAttemptAt': null,
+      'publishQueue.clearedAt': now,
+      'publishQueue.lastError': 'Queue cleared by user',
+      lastActionAt: now,
+      updatedBy: actor?._id || null,
+    },
+    $push: {
+      actionHistory: pushAction({
+        action: 'PUBLISH_QUEUE_CLEARED',
+        status: PUBLISH_QUEUE_STATUSES.CANCELLED,
+        message: 'Publish queue cleared by user',
+        actor,
+      }),
+    },
+  });
+
+  if (publishQueueTimer) {
+    clearTimeout(publishQueueTimer);
+    publishQueueTimer = null;
+    publishQueueTimerDueAt = null;
+  }
+
+  await settingsService.notifyPublishQueueStatus({
+    status: 'cleared',
+    message: `${result.modifiedCount || 0} queued publish item${result.modifiedCount === 1 ? '' : 's'} cleared.`,
+  });
+
+  await writeActivityLog({
+    user: actor,
+    action: 'ADS_PUBLISH_QUEUE_CLEARED',
+    entity: 'ManagedCampaign',
+    metadata: {
+      cleared: result.modifiedCount || 0,
+    },
+    req,
+  });
+
+  const currentQueue = await getPublishQueue({ actor });
+  return {
+    message: `${result.modifiedCount || 0} queued publish item${result.modifiedCount === 1 ? '' : 's'} cleared`,
+    cleared: result.modifiedCount || 0,
+    state: currentQueue.state,
+    queue: currentQueue.queue,
+  };
+}
+
 module.exports = {
+  clearPublishQueue,
   deleteCampaign,
   duplicateCampaign,
+  getPublishQueue,
   listCampaigns,
   recordFailedLaunch,
   recordPublishedCampaign,
   retryFailedLaunch,
+  runPublishQueue,
+  schedulePublishQueueRun,
   syncCampaignDetails,
   updateCampaignStatus,
 };

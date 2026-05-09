@@ -64,6 +64,7 @@ const retryFailedLaunch = asyncHandler(async (req, res) => {
     tokenId: req.body.tokenId,
     campaignId: req.params.campaignId,
     tokenType: req.body.tokenType,
+    retryTokenId: req.body.retryTokenId,
     actor: req.user,
     req,
   });
