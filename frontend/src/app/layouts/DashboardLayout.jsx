@@ -21,10 +21,8 @@ import {
   XCircle,
 } from 'lucide-react';
 import { USER_ROLES, useAuth } from '../../features/auth/hooks/useAuth';
-import { adsLaunchApi } from '../../features/ads-launch/api/adsLaunchApi';
 import { MetaSyncProvider } from '../../features/dashboard/context/MetaSyncContext';
 import { PublishProgressProvider, usePublishProgress } from '../../features/notifications/PublishProgressContext';
-import PublishHistoryList from '../../features/notifications/components/PublishHistoryList';
 import PublishProgressPanel, { formatDuration } from '../../features/notifications/components/PublishProgressPanel';
 import {
   getMetaKeyTypeLabel,
@@ -72,7 +70,6 @@ const PublishStatusControl = () => {
   const controlRef = useRef(null);
   const percent = progress?.progress?.percent || 0;
   const hasPublishState = Boolean(isPublishing || progress || latestResult || latestError);
-  const historyForPanel = publishHistory.filter((item) => !hasPublishState || item.id !== currentPublishId);
   const currentPublishItem = publishHistory.find((item) => item.id === currentPublishId) || null;
   const statusLabel = isPublishing ? 'Publishing ads' : latestError ? 'Publish failed' : latestResult ? 'Publish complete' : 'Publish status';
   const statusMessage = progress?.message || latestResult?.message || latestError || 'No active publish';
@@ -199,22 +196,6 @@ const PublishStatusControl = () => {
               compact
             />
           ) : null}
-          {historyForPanel.length || !hasPublishState ? (
-          <div className={hasPublishState ? 'mt-3 border-t border-sky-50 pt-3' : ''}>
-            <div className="mb-3 flex items-center justify-between gap-3 px-1">
-              <p className="text-xs font-black uppercase tracking-[0.18em] text-sky-600">Publish history</p>
-              <span className="rounded-full bg-sky-50 px-3 py-1 text-[11px] font-black text-sky-700">
-                {historyForPanel.length}
-              </span>
-            </div>
-            <PublishHistoryList
-              history={historyForPanel}
-              limit={5}
-              onResumePublish={resumePublish}
-              resumingSessionId={resumeBusy ? currentPublishId : ''}
-            />
-          </div>
-          ) : null}
         </div>
       ) : null}
 
@@ -244,10 +225,8 @@ const PublishStatusControl = () => {
 
 const NotificationsControl = () => {
   const navigate = useNavigate();
-  const { markPublishHistorySeen, publishHistory, publishHistoryUnreadCount, resumeBusy, resumePausedPublish } = usePublishProgress();
-  const { publishTokenType } = useMetaKeySettings();
+  const { markPublishHistorySeen, publishHistory, publishHistoryUnreadCount } = usePublishProgress();
   const [open, setOpen] = useState(false);
-  const [retryingRecordId, setRetryingRecordId] = useState('');
   const controlRef = useRef(null);
   const failedCount = publishHistory.filter((item) => item.status === 'failed').length;
 
@@ -265,35 +244,6 @@ const NotificationsControl = () => {
     window.addEventListener('pointerdown', handlePointerDown);
     return () => window.removeEventListener('pointerdown', handlePointerDown);
   }, [open]);
-
-  const retryFailedAccount = async (failure) => {
-    if (!failure?.campaignId || !failure?.tokenId) {
-      toast.error('Retry data is missing for this failed account');
-      return;
-    }
-
-    setRetryingRecordId(failure.historyRecordId || failure.campaignId);
-    try {
-      const data = await adsLaunchApi.retryFailedLaunch(failure.campaignId, {
-        tokenId: failure.tokenId,
-        tokenType: publishTokenType,
-      });
-      toast.success(data.message || 'Retry completed');
-    } catch (requestError) {
-      toast.error(requestError.message);
-    } finally {
-      setRetryingRecordId('');
-    }
-  };
-
-  const resumePublish = async (sessionId) => {
-    try {
-      const data = await resumePausedPublish(sessionId);
-      toast.success(data.message || 'Publish is continuing');
-    } catch (requestError) {
-      toast.error(requestError.message);
-    }
-  };
 
   const toggleOpen = () => {
     setOpen((current) => {
@@ -328,7 +278,7 @@ const NotificationsControl = () => {
           <div className="mb-3 flex items-center justify-between gap-3">
             <div>
               <p className="text-sm font-black text-slate-950">Latest notifications</p>
-              <p className="mt-1 text-xs font-semibold text-slate-500">Newest publish updates from this browser.</p>
+              <p className="mt-1 text-xs font-semibold text-slate-500">Open the Notifications page for publish history and retry actions.</p>
             </div>
             <button
               type="button"
@@ -341,14 +291,16 @@ const NotificationsControl = () => {
               Open
             </button>
           </div>
-          <PublishHistoryList
-            history={publishHistory}
-            limit={3}
-            onResumePublish={resumePublish}
-            onRetryFailed={retryFailedAccount}
-            resumingSessionId={resumeBusy ? publishHistory.find((item) => item.status === 'active')?.id || '' : ''}
-            retryingRecordId={retryingRecordId}
-          />
+          <div className="rounded-2xl bg-sky-50 px-4 py-4">
+            <p className="text-sm font-bold text-slate-700">
+              {publishHistoryUnreadCount
+                ? `${publishHistoryUnreadCount} publish update${publishHistoryUnreadCount === 1 ? '' : 's'} waiting.`
+                : 'No new publish updates.'}
+            </p>
+            <p className="mt-1 text-xs font-semibold leading-5 text-slate-500">
+              History stays on the full Notifications page to keep this popup light.
+            </p>
+          </div>
         </div>
       ) : null}
     </div>

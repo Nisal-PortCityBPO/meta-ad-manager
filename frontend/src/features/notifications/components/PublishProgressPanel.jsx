@@ -54,6 +54,11 @@ const getStatusIcon = (status) => {
   return LoaderCircle;
 };
 
+const getEventTime = (event) => {
+  const timestamp = new Date(event?.timestamp || 0).getTime();
+  return Number.isNaN(timestamp) ? 0 : timestamp;
+};
+
 const PublishProgressPanel = ({
   canPause = false,
   canResume = false,
@@ -74,9 +79,14 @@ const PublishProgressPanel = ({
   const progressData = progress?.progress || {};
   const percent = progressData.percent || 0;
   const StatusIcon = getStatusIcon(progress?.status);
-  const showPause = Boolean(onPause && canPause && progress?.status === 'active');
+  const accountIndex = Number(progress?.accountIndex || 0);
+  const totalAccounts = Number(progress?.totalAccounts || 0);
+  const remainingAfterCurrentAccount = totalAccounts ? totalAccounts - Math.max(accountIndex || 1, 1) : 1;
+  const hasPauseTarget = remainingAfterCurrentAccount > 0;
+  const showPause = Boolean(onPause && canPause && hasPauseTarget && progress?.status === 'active');
   const showResume = Boolean(onResume && canResume && progress?.status === 'paused');
-  const visibleEvents = [...events].reverse();
+  const visibleEvents = [...events].sort((first, second) => getEventTime(second) - getEventTime(first));
+  const pauseRequestedEvent = visibleEvents.find((event) => event.status === 'pausing' || event.step === 'pause-requested');
   const latestErrorTone =
     progress?.status === 'queued'
       ? 'border-amber-100 bg-amber-50 text-amber-700'
@@ -161,6 +171,12 @@ const PublishProgressPanel = ({
 
       {latestError ? (
         <div className={`mt-4 rounded-xl border px-3 py-3 text-sm font-semibold ${latestErrorTone}`}>{latestError}</div>
+      ) : null}
+
+      {pauseRequestedEvent ? (
+        <div className="mt-4 rounded-xl border border-orange-100 bg-orange-50 px-3 py-3 text-sm font-semibold text-orange-800">
+          <p className="font-black">Pause requested</p>
+        </div>
       ) : null}
 
       {resumeNotices.length ? (
