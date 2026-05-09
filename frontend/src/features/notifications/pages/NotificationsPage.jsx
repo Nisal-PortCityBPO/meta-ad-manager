@@ -33,8 +33,12 @@ const NotificationsPage = () => {
     latestError,
     latestResult,
     markPublishHistorySeen,
+    pauseBusy,
     progress,
     publishHistory,
+    requestPausePublish,
+    resumeBusy,
+    resumePausedPublish,
   } = usePublishProgress();
   const { publishTokenType } = useMetaKeySettings();
   const [retryingRecordId, setRetryingRecordId] = useState('');
@@ -46,6 +50,7 @@ const NotificationsPage = () => {
   const [queueClearing, setQueueClearing] = useState(false);
   const [historyPage, setHistoryPage] = useState(1);
   const hasPublishNotice = Boolean(progress || events.length || latestResult || latestError);
+  const currentPublishItem = publishHistory.find((item) => item.id === currentPublishId) || null;
   const savedHistory = publishHistory.filter((item) => !hasPublishNotice || item.id !== currentPublishId);
   const historyPageSize = 5;
   const historyPageCount = Math.max(Math.ceil(savedHistory.length / historyPageSize), 1);
@@ -189,13 +194,42 @@ const NotificationsPage = () => {
     }
   };
 
+  const pauseLivePublish = async () => {
+    try {
+      const data = await requestPausePublish();
+      toast.success(data.message || 'Pause requested');
+    } catch (requestError) {
+      toast.error(requestError.message);
+    }
+  };
+
+  const resumePublish = async (sessionId = currentPublishId) => {
+    try {
+      const data = await resumePausedPublish(sessionId);
+      toast.success(data.message || 'Publish is continuing');
+    } catch (requestError) {
+      toast.error(requestError.message);
+    }
+  };
+
   return (
     <div>
       <DashboardHeader title="Notifications" description="Account updates and dashboard messages." />
 
       {hasPublishNotice ? (
         <div className="mb-4">
-          <PublishProgressPanel events={events} latestError={latestError} latestResult={latestResult} progress={progress} />
+          <PublishProgressPanel
+            canPause={Boolean(currentPublishItem?.canPause)}
+            canResume={Boolean(currentPublishItem?.canResume)}
+            events={events}
+            latestError={latestError}
+            latestResult={latestResult}
+            onPause={pauseLivePublish}
+            onResume={() => resumePublish(currentPublishId)}
+            pauseBusy={pauseBusy}
+            progress={progress}
+            resumeBusy={resumeBusy}
+          />
         </div>
       ) : null}
 
@@ -345,7 +379,9 @@ const NotificationsPage = () => {
         <PublishHistoryList
           history={visibleHistory}
           limit={historyPageSize}
+          onResumePublish={resumePublish}
           onRetryFailed={retryFailedAccount}
+          resumingSessionId={resumeBusy ? currentPublishId : ''}
           retryingRecordId={retryingRecordId}
         />
       </DashboardPanel>

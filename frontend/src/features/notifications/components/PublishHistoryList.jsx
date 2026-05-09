@@ -1,4 +1,4 @@
-import { CheckCircle2, ChevronDown, Clock3, LoaderCircle, RotateCcw, XCircle } from 'lucide-react';
+import { CheckCircle2, ChevronDown, Clock3, LoaderCircle, PauseCircle, Play, RotateCcw, XCircle } from 'lucide-react';
 import PublishProgressPanel from './PublishProgressPanel';
 
 const formatHistoryTime = (value) => {
@@ -30,6 +30,10 @@ const getHistoryIcon = (status) => {
     return Clock3;
   }
 
+  if (status === 'paused' || status === 'pausing') {
+    return PauseCircle;
+  }
+
   return LoaderCircle;
 };
 
@@ -46,10 +50,21 @@ const getHistoryTone = (status) => {
     return 'bg-amber-50 text-amber-700';
   }
 
+  if (status === 'paused' || status === 'pausing') {
+    return 'bg-orange-50 text-orange-700';
+  }
+
   return 'bg-sky-50 text-sky-700';
 };
 
-const PublishHistoryList = ({ history = [], limit = 8, onRetryFailed = null, retryingRecordId = '' }) => {
+const PublishHistoryList = ({
+  history = [],
+  limit = 8,
+  onResumePublish = null,
+  onRetryFailed = null,
+  resumingSessionId = '',
+  retryingRecordId = '',
+}) => {
   const visibleHistory = history.slice(0, limit);
 
   if (!visibleHistory.length) {
@@ -68,6 +83,8 @@ const PublishHistoryList = ({ history = [], limit = 8, onRetryFailed = null, ret
         const percent = progressData.percent || 0;
         const failedAccounts = Array.isArray(item.latestResult?.failed) ? item.latestResult.failed : [];
         const retryableAccounts = failedAccounts.filter((failure) => failure.canRetry && failure.campaignId && failure.tokenId);
+        const canResumePaused = Boolean(onResumePublish && item.status === 'paused' && item.canResume);
+        const resuming = resumingSessionId === item.id;
 
         return (
           <details key={item.id} className="group overflow-hidden rounded-2xl border border-sky-100 bg-white shadow-sm shadow-sky-100/60">
@@ -84,6 +101,21 @@ const PublishHistoryList = ({ history = [], limit = 8, onRetryFailed = null, ret
                 </div>
               </div>
               <div className="flex shrink-0 items-center gap-3">
+                {canResumePaused ? (
+                  <button
+                    type="button"
+                    onClick={(event) => {
+                      event.preventDefault();
+                      event.stopPropagation();
+                      onResumePublish(item.id);
+                    }}
+                    disabled={resuming}
+                    className="inline-flex h-9 items-center gap-2 rounded-lg bg-sky-600 px-3 text-xs font-black uppercase tracking-[0.12em] text-white transition hover:bg-sky-700 disabled:opacity-60"
+                  >
+                    {resuming ? <LoaderCircle size={14} className="animate-spin" /> : <Play size={14} />}
+                    Continue
+                  </button>
+                ) : null}
                 <span className="hidden rounded-full bg-sky-50 px-3 py-1 text-[11px] font-black text-sky-700 sm:inline-flex">
                   {percent}%
                 </span>
@@ -179,6 +211,27 @@ const PublishHistoryList = ({ history = [], limit = 8, onRetryFailed = null, ret
                         </div>
                       );
                     })}
+                  </div>
+                </div>
+              ) : null}
+              {canResumePaused ? (
+                <div className="mb-3 rounded-2xl border border-orange-100 bg-orange-50 p-3">
+                  <div className="flex flex-wrap items-center justify-between gap-3">
+                    <div>
+                      <p className="text-xs font-black uppercase tracking-[0.16em] text-orange-700">Paused safely</p>
+                      <p className="mt-1 text-xs font-semibold text-orange-700">
+                        {item.resumeCount || 0} ad account{item.resumeCount === 1 ? '' : 's'} left. Continue will restart from the next unfinished account.
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => onResumePublish(item.id)}
+                      disabled={resuming}
+                      className="inline-flex h-9 items-center gap-2 rounded-lg bg-sky-600 px-3 text-xs font-black uppercase tracking-[0.12em] text-white transition hover:bg-sky-700 disabled:opacity-60"
+                    >
+                      {resuming ? <LoaderCircle size={14} className="animate-spin" /> : <Play size={14} />}
+                      Continue publish
+                    </button>
                   </div>
                 </div>
               ) : null}

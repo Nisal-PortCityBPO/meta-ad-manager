@@ -7,6 +7,8 @@ const { writeActivityLog } = require('../activity-logs/activityLog.service');
 const { USER_ROLES } = require('../users/user.model');
 const LaunchTemplate = require('./adsLaunch.model');
 const { LAUNCH_TEMPLATE_TYPES } = require('./adsLaunch.model');
+const AdsLaunchPublishSession = require('./adsLaunchPublishSession.model');
+const { PUBLISH_SESSION_STATUSES } = require('./adsLaunchPublishSession.model');
 const AdsLaunchMedia = require('./adsLaunchMedia.model');
 const { ADS_MEDIA_TYPES } = require('./adsLaunchMedia.model');
 const AdsLaunchMediaFolder = require('./adsLaunchMediaFolder.model');
@@ -36,6 +38,7 @@ const META_QUEUEABLE_ERROR_CODES = new Set([4, 17, 32, 368, 613, 80004]);
 const META_QUEUEABLE_HTTP_STATUSES = new Set([429, 500, 502, 503, 504]);
 const DEFAULT_QUEUE_RETRY_AFTER_SECONDS = 300;
 const MAX_QUEUE_RETRY_AFTER_SECONDS = 3600;
+const PUBLISH_SESSION_EVENT_LIMIT = 120;
 
 const SUPPORTED_WEBSITE_EVENTS = new Set([
   'LEAD',
@@ -120,8 +123,15 @@ const DEFAULT_STATIC_DEFAULTS = Object.freeze({
   genderTargeting: 'ALL',
   billingEvent: 'IMPRESSIONS',
   bidStrategy: 'LOWEST_COST_WITHOUT_CAP',
+  bidAmount: '',
 });
 const SPECIAL_AD_CATEGORY_NONE = 'NONE';
+const SUPPORTED_BID_STRATEGIES = new Set([
+  'LOWEST_COST_WITHOUT_CAP',
+  'LOWEST_COST_WITH_BID_CAP',
+  'COST_CAP',
+]);
+const BID_AMOUNT_STRATEGIES = new Set(['LOWEST_COST_WITH_BID_CAP', 'COST_CAP']);
 
 function isSuperAdmin(user) {
   return user?.role === USER_ROLES.SUPER_ADMIN;
@@ -311,6 +321,7 @@ function sanitizeTemplateConfig(input = {}) {
       genderTargeting: normalizeText(staticDefaults.genderTargeting) || DEFAULT_STATIC_DEFAULTS.genderTargeting,
       billingEvent: normalizeText(staticDefaults.billingEvent) || DEFAULT_STATIC_DEFAULTS.billingEvent,
       bidStrategy: normalizeText(staticDefaults.bidStrategy) || DEFAULT_STATIC_DEFAULTS.bidStrategy,
+      bidAmount: normalizeText(staticDefaults.bidAmount),
     },
   };
 }
@@ -534,11 +545,15 @@ function resolveBillingEvent({ objective, billingEvent }) {
 function resolveBidStrategy(value) {
   const bidStrategy = normalizeText(value) || DEFAULT_STATIC_DEFAULTS.bidStrategy;
 
-  if (bidStrategy === 'COST_CAP') {
-    throw new HttpError(400, 'Cost cap is not supported by this launcher because no bid amount is configured');
+  if (!SUPPORTED_BID_STRATEGIES.has(bidStrategy)) {
+    throw new HttpError(400, 'Bid strategy is not supported by this launcher');
   }
 
-  return DEFAULT_STATIC_DEFAULTS.bidStrategy;
+  return bidStrategy;
+}
+
+function bidStrategyRequiresAmount(value) {
+  return BID_AMOUNT_STRATEGIES.has(resolveBidStrategy(value));
 }
 
 function validateAssetMimeType({ mimeType, label, allowedPrefixes }) {
@@ -1212,6 +1227,305 @@ function templateAccessFilter(actor) {
 
 function mediaLibraryAccessFilter(actor) {
   return isSuperAdmin(actor) ? {} : { createdBy: actor._id };
+}
+
+function publishSessionAccessFilter(actor) {
+  return isSuperAdmin(actor) ? {} : { createdBy: actor._id };
+}
+
+function createPublishSessionId() {
+  return `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
+
+function normalizePublishSessionId(sessionId) {
+  return normalizeText(sessionId).slice(0, 120);
+}
+
+function getPublishTitleFromPayload(payload = {}) {
+  const launchLabel = normalizeText(payload.launchLabel);
+  return launchLabel ? `Ads Launch: ${launchLabel}` : 'Ads publish';
+}
+
+function buildRemainingPublishPayload({ payload, remainingAdAccountIds = [] }) {
+  const remainingSet = new Set(remainingAdAccountIds);
+
+  return {
+    ...payload,
+    selectedAdAccountIds: remainingAdAccountIds,
+    selectedAdAccounts: (payload.selectedAdAccounts || []).filter((account) => remainingSet.has(account.id)),
+    accountLaunches: (payload.accountLaunches || []).filter((accountLaunch) => remainingSet.has(accountLaunch.adAccountId)),
+    resumeState: Object.fromEntries(
+      Object.entries(payload.resumeState || {}).filter(([adAccountId]) => remainingSet.has(adAccountId))
+    ),
+  };
+}
+
+async function getPublishSessionDocForActor(sessionId, actor) {
+  const normalizedSessionId = normalizePublishSessionId(sessionId);
+
+  if (!normalizedSessionId) {
+    throw new HttpError(400, 'Publish session id is required');
+  }
+
+  const session = await AdsLaunchPublishSession.findOne({
+    sessionId: normalizedSessionId,
+    ...publishSessionAccessFilter(actor),
+  });
+
+  if (!session) {
+    throw new HttpError(404, 'Publish session not found');
+  }
+
+  return session;
+}
+
+async function startPublishSession({ sessionId = '', title = '', source = '', payload, actor }) {
+  const normalizedSessionId = normalizePublishSessionId(sessionId) || createPublishSessionId();
+  const session = await AdsLaunchPublishSession.findOneAndUpdate(
+    {
+      sessionId: normalizedSessionId,
+      ...publishSessionAccessFilter(actor),
+    },
+    {
+      $set: {
+        title: normalizeText(title) || getPublishTitleFromPayload(payload),
+        source: normalizeText(source) || 'Meta publish',
+        status: PUBLISH_SESSION_STATUSES.ACTIVE,
+        payload,
+        resumePayload: null,
+        latestResult: null,
+        latestError: '',
+        pauseRequested: false,
+        pauseRequestedAt: null,
+        pausedAt: null,
+        completedAt: null,
+        updatedBy: actor?._id || null,
+      },
+      $setOnInsert: {
+        sessionId: normalizedSessionId,
+        createdBy: actor?._id || null,
+        events: [],
+      },
+    },
+    {
+      new: true,
+      setDefaultsOnInsert: true,
+      upsert: true,
+    }
+  );
+
+  return session.toSafeObject();
+}
+
+async function appendPublishSessionEvent({ sessionId, event }) {
+  const normalizedSessionId = normalizePublishSessionId(sessionId);
+
+  if (!normalizedSessionId) {
+    return;
+  }
+
+  const nextEvent = {
+    sessionId: normalizedSessionId,
+    timestamp: new Date().toISOString(),
+    ...event,
+  };
+
+  await AdsLaunchPublishSession.updateOne(
+    { sessionId: normalizedSessionId },
+    {
+      $set: {
+        progress: nextEvent,
+      },
+      $push: {
+        events: {
+          $each: [nextEvent],
+          $slice: -PUBLISH_SESSION_EVENT_LIMIT,
+        },
+      },
+    }
+  );
+}
+
+async function markPublishSessionFinished({ sessionId, status, result = null, error = '', resumePayload = null }) {
+  const normalizedSessionId = normalizePublishSessionId(sessionId);
+
+  if (!normalizedSessionId) {
+    return;
+  }
+
+  const now = new Date();
+  const progress = {
+    type: 'progress',
+    status: status === PUBLISH_SESSION_STATUSES.PAUSED ? 'paused' : status.toLowerCase(),
+    step: status === PUBLISH_SESSION_STATUSES.PAUSED ? 'paused' : 'complete',
+    timestamp: now.toISOString(),
+    message:
+      status === PUBLISH_SESSION_STATUSES.PAUSED
+        ? `Publish paused. ${resumePayload?.selectedAdAccountIds?.length || 0} ad account${resumePayload?.selectedAdAccountIds?.length === 1 ? '' : 's'} left to continue.`
+        : result?.message || error || 'Publish finished',
+    progress: result?.progress || {
+      completed: result?.summary?.published || 0,
+      total: result?.summary?.requested || 0,
+      percent: status === PUBLISH_SESSION_STATUSES.PAUSED ? undefined : 100,
+      etaSeconds: status === PUBLISH_SESSION_STATUSES.PAUSED ? null : 0,
+    },
+  };
+
+  await AdsLaunchPublishSession.updateOne(
+    { sessionId: normalizedSessionId },
+    {
+      $set: {
+        status,
+        resumePayload,
+        latestResult: result,
+        latestError: error,
+        progress,
+        pauseRequested: false,
+        pauseRequestedAt: null,
+        pausedAt: status === PUBLISH_SESSION_STATUSES.PAUSED ? now : null,
+        completedAt: now,
+      },
+      $push: {
+        events: {
+          $each: [progress],
+          $slice: -PUBLISH_SESSION_EVENT_LIMIT,
+        },
+      },
+    }
+  );
+}
+
+async function failPublishSession({ sessionId, error }) {
+  await markPublishSessionFinished({
+    sessionId,
+    status: PUBLISH_SESSION_STATUSES.FAILED,
+    error: error?.message || error || 'Publish failed',
+  });
+}
+
+async function requestPublishSessionPause({ sessionId, actor }) {
+  const session = await getPublishSessionDocForActor(sessionId, actor);
+
+  if (session.status === PUBLISH_SESSION_STATUSES.PAUSED) {
+    return session.toSafeObject();
+  }
+
+  if (session.status !== PUBLISH_SESSION_STATUSES.ACTIVE && session.status !== PUBLISH_SESSION_STATUSES.PAUSE_REQUESTED) {
+    throw new HttpError(400, 'Only a running publish can be paused');
+  }
+
+  const now = new Date();
+  const event = {
+    type: 'progress',
+    sessionId: session.sessionId,
+    step: 'pause-requested',
+    status: 'pausing',
+    timestamp: now.toISOString(),
+    message: 'Pause requested. The current ad account will finish first, then publishing will stop safely.',
+    progress: session.progress?.progress || null,
+  };
+
+  session.status = PUBLISH_SESSION_STATUSES.PAUSE_REQUESTED;
+  session.pauseRequested = true;
+  session.pauseRequestedAt = now;
+  session.progress = event;
+  session.events.push(event);
+  session.events = session.events.slice(-PUBLISH_SESSION_EVENT_LIMIT);
+  session.updatedBy = actor?._id || null;
+  await session.save();
+
+  return session.toSafeObject();
+}
+
+async function isPublishSessionPauseRequested(sessionId) {
+  const normalizedSessionId = normalizePublishSessionId(sessionId);
+
+  if (!normalizedSessionId) {
+    return false;
+  }
+
+  const session = await AdsLaunchPublishSession.findOne({ sessionId: normalizedSessionId })
+    .select('status pauseRequested')
+    .lean();
+
+  return Boolean(
+    session?.pauseRequested ||
+      session?.status === PUBLISH_SESSION_STATUSES.PAUSE_REQUESTED ||
+      session?.status === PUBLISH_SESSION_STATUSES.PAUSED
+  );
+}
+
+async function listPublishSessions({ actor, limit = 15 }) {
+  const safeLimit = Math.min(Math.max(Number.parseInt(limit, 10) || 15, 1), 30);
+  const sessions = await AdsLaunchPublishSession.find({
+    ...publishSessionAccessFilter(actor),
+  })
+    .sort({ updatedAt: -1 })
+    .limit(safeLimit);
+
+  return {
+    sessions: sessions.map((session) => session.toSafeObject()),
+  };
+}
+
+async function resumePublishSession({ sessionId, actor, req }) {
+  const session = await getPublishSessionDocForActor(sessionId, actor);
+
+  if (session.status !== PUBLISH_SESSION_STATUSES.PAUSED) {
+    throw new HttpError(400, 'Only a paused publish can be continued');
+  }
+
+  const resumePayload = session.resumePayload;
+  const remainingCount = Array.isArray(resumePayload?.selectedAdAccountIds)
+    ? resumePayload.selectedAdAccountIds.length
+    : 0;
+
+  if (!remainingCount) {
+    throw new HttpError(400, 'This paused publish does not have remaining ad accounts to continue');
+  }
+
+  await startPublishSession({
+    sessionId: session.sessionId,
+    title: session.title,
+    source: session.source,
+    payload: {
+      ...resumePayload,
+      publishSessionId: session.sessionId,
+    },
+    actor,
+  });
+  await appendPublishSessionEvent({
+    sessionId: session.sessionId,
+    event: {
+      type: 'progress',
+      status: 'active',
+      step: 'resume',
+      message: `Continuing paused publish with ${remainingCount} remaining ad account${remainingCount === 1 ? '' : 's'}`,
+      progress: session.progress?.progress || null,
+    },
+  });
+
+  setImmediate(() => {
+    publishLaunch({
+      payload: {
+        ...resumePayload,
+        publishSessionId: session.sessionId,
+      },
+      actor,
+      req: null,
+      tokenType: resumePayload.tokenType,
+      publishSessionId: session.sessionId,
+    }).catch((error) => {
+      markPublishSessionFinished({
+        sessionId: session.sessionId,
+        status: PUBLISH_SESSION_STATUSES.FAILED,
+        error: error.message || 'Paused publish resume failed',
+      }).catch(() => undefined);
+    });
+  });
+
+  const nextSession = await getPublishSessionDocForActor(session.sessionId, actor);
+  return nextSession.toSafeObject();
 }
 
 function normalizeMediaFolderId(folderId) {
@@ -1944,10 +2258,10 @@ function getBudgetMultiplier(currency) {
   return ZERO_DECIMAL_CURRENCIES.has(String(currency || '').toUpperCase()) ? 1 : 100;
 }
 
-function toMetaBudget(value, currency) {
+function toMetaBudget(value, currency, label = 'Daily budget') {
   const numericValue = Number(value);
   if (!Number.isFinite(numericValue) || numericValue <= 0) {
-    throw new HttpError(400, 'Daily budget must be a positive number');
+    throw new HttpError(400, `${label} must be a positive number`);
   }
 
   return String(Math.round(numericValue * getBudgetMultiplier(currency)));
@@ -2039,6 +2353,7 @@ function ensurePublishPayload(payload) {
       genderTargeting: normalizeText(staticDefaults.genderTargeting) || DEFAULT_STATIC_DEFAULTS.genderTargeting,
       billingEvent: normalizeText(staticDefaults.billingEvent) || DEFAULT_STATIC_DEFAULTS.billingEvent,
       bidStrategy: normalizeText(staticDefaults.bidStrategy) || DEFAULT_STATIC_DEFAULTS.bidStrategy,
+      bidAmount: normalizeText(staticDefaults.bidAmount),
     },
     media: sanitizeTemplateAssetInput(payload.media),
     thumbnail: sanitizeTemplateAssetInput(payload.thumbnail),
@@ -2164,6 +2479,7 @@ function createPublishProgressReporter({ onProgress, totalSteps }) {
   };
 
   return {
+    getProgress,
     complete(event) {
       completedSteps += 1;
       emit({
@@ -2190,6 +2506,7 @@ function getPublishStepCountPerAccount(media) {
 async function createCampaign({ token, adAccountId, name, objective, dailyBudget, currency, staticDefaults }) {
   const specialAdCategories = getSpecialAdCategoriesValue(staticDefaults.specialAdCategories);
   const campaignBudget = usesCampaignBudget(staticDefaults);
+  const bidStrategy = resolveBidStrategy(staticDefaults.bidStrategy);
   const params = {
     name,
     objective,
@@ -2201,7 +2518,7 @@ async function createCampaign({ token, adAccountId, name, objective, dailyBudget
 
   if (campaignBudget) {
     params.daily_budget = toMetaBudget(dailyBudget, currency);
-    params.bid_strategy = resolveBidStrategy(staticDefaults.bidStrategy);
+    params.bid_strategy = bidStrategy;
   } else {
     params.is_adset_budget_sharing_enabled = false;
   }
@@ -2234,6 +2551,7 @@ async function createAdSet({
   const ageMax = Number.parseInt(staticDefaults.audienceAgeMax, 10);
   const isSpecialAdCategory = isSpecialAdCategoryCampaign(staticDefaults.specialAdCategories);
   const campaignBudget = usesCampaignBudget(staticDefaults);
+  const bidStrategy = resolveBidStrategy(staticDefaults.bidStrategy);
   const targeting = {
     geo_locations: {
       countries,
@@ -2271,7 +2589,11 @@ async function createAdSet({
 
   if (!campaignBudget) {
     params.daily_budget = toMetaBudget(dailyBudget, currency);
-    params.bid_strategy = resolveBidStrategy(staticDefaults.bidStrategy);
+    params.bid_strategy = bidStrategy;
+  }
+
+  if (bidStrategyRequiresAmount(bidStrategy)) {
+    params.bid_amount = toMetaBudget(staticDefaults.bidAmount, currency, 'Bid amount');
   }
 
   if (scheduleStart) {
@@ -3183,7 +3505,25 @@ async function resolveAccountLaunchFromTemplates({ baseLaunch, accountLaunch, se
   };
 }
 
-async function publishLaunch({ payload, actor, req, onProgress = null, tokenType = null }) {
+async function publishLaunch({ payload, actor, req, onProgress = null, tokenType = null, publishSessionId = '' }) {
+  const sessionId = normalizePublishSessionId(publishSessionId || payload?.publishSessionId);
+  let sessionEventChain = Promise.resolve();
+  const emitProgress = (event) => {
+    const nextEvent = sessionId
+      ? {
+          sessionId,
+          ...event,
+        }
+      : event;
+
+    onProgress?.(nextEvent);
+
+    if (sessionId) {
+      sessionEventChain = sessionEventChain
+        .then(() => appendPublishSessionEvent({ sessionId, event: nextEvent }))
+        .catch(() => undefined);
+    }
+  };
   const launch = ensurePublishPayload(payload);
   launch.staticDefaults = {
     ...launch.staticDefaults,
@@ -3213,8 +3553,10 @@ async function publishLaunch({ payload, actor, req, onProgress = null, tokenType
   const accountMap = new Map(launch.selectedAdAccounts.map((account) => [account.id, account]));
   const results = [];
   const failed = [];
+  let paused = false;
+  let pauseResumePayload = null;
   const progress = createPublishProgressReporter({
-    onProgress,
+    onProgress: emitProgress,
     totalSteps: launch.selectedAdAccountIds.length * (usesAccountTemplates ? 6 : getPublishStepCountPerAccount(baseCreativeAssets.media)),
   });
 
@@ -3541,6 +3883,22 @@ async function publishLaunch({ payload, actor, req, onProgress = null, tokenType
         message: error.publishQueueable ? `${accountLabel}: publish queued after Meta/API block` : `${accountLabel}: publish failed`,
       });
     }
+
+    const remainingAdAccountIds = launch.selectedAdAccountIds.slice(index + 1);
+    if (remainingAdAccountIds.length && (await isPublishSessionPauseRequested(sessionId))) {
+      paused = true;
+      pauseResumePayload = buildRemainingPublishPayload({
+        payload,
+        remainingAdAccountIds,
+      });
+      progress.info({
+        ...progressContext,
+        step: 'paused',
+        status: 'paused',
+        message: `Publish paused safely after ${accountLabel}. ${remainingAdAccountIds.length} ad account${remainingAdAccountIds.length === 1 ? '' : 's'} left to continue.`,
+      });
+      break;
+    }
   }
 
   if (results.length) {
@@ -3570,9 +3928,12 @@ async function publishLaunch({ payload, actor, req, onProgress = null, tokenType
 
   const queuedCount = failed.filter((item) => item.queued).length;
   const hardFailedCount = failed.length - queuedCount;
+  const pausedCount = pauseResumePayload?.selectedAdAccountIds?.length || 0;
   const publishResult = {
     message:
-      failed.length > 0
+      paused
+        ? `Publish paused after ${results.length} success${failed.length ? ` and ${failed.length} handled failure${failed.length === 1 ? '' : 's'}` : ''}. ${pausedCount} ad account${pausedCount === 1 ? '' : 's'} left to continue`
+        : failed.length > 0
         ? queuedCount && !hardFailedCount
           ? `Publish completed with ${results.length} success and ${queuedCount} queued retry`
           : queuedCount
@@ -3586,13 +3947,35 @@ async function publishLaunch({ payload, actor, req, onProgress = null, tokenType
       published: results.length,
       failed: failed.length,
       queued: queuedCount,
+      paused: pausedCount,
     },
+    paused,
+    canResume: paused,
+    resumeCount: pausedCount,
+    progress: progress.getProgress(),
   };
 
   publishResult.telegram = await settingsService.notifyPublishSummary({
     launch,
     result: publishResult,
   });
+
+  await sessionEventChain;
+  if (sessionId) {
+    await markPublishSessionFinished({
+      sessionId,
+      status: paused
+        ? PUBLISH_SESSION_STATUSES.PAUSED
+        : hardFailedCount > 0
+          ? PUBLISH_SESSION_STATUSES.FAILED
+          : queuedCount > 0
+            ? PUBLISH_SESSION_STATUSES.QUEUED
+            : PUBLISH_SESSION_STATUSES.COMPLETED,
+      result: publishResult,
+      error: hardFailedCount > 0 ? `${hardFailedCount} ad account${hardFailedCount === 1 ? '' : 's'} failed during publish` : '',
+      resumePayload: pauseResumePayload,
+    });
+  }
 
   return publishResult;
 }
@@ -3604,13 +3987,18 @@ module.exports = {
   createTemplate,
   deleteMediaAsset,
   deleteTemplate,
+  failPublishSession,
   getMediaAssetForActor,
   getTemplateAssetForActor,
+  listPublishSessions,
   listMediaAssets,
   listMediaFolders,
   listTemplates,
   publishLaunch,
+  requestPublishSessionPause,
+  resumePublishSession,
   saveMediaUploadChunk,
+  startPublishSession,
   updateMediaAssetBrand,
   updateTemplate,
 };

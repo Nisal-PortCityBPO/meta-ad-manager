@@ -219,6 +219,24 @@ export const adsLaunchApi = {
     apiRequest('/ads-launch/publish-queue', {
       method: 'DELETE',
     }),
+  getPublishSessions: (params = {}) => {
+    const query = new URLSearchParams();
+
+    if (params.limit) {
+      query.set('limit', params.limit);
+    }
+
+    const queryString = query.toString();
+    return apiRequest(`/ads-launch/publish-sessions${queryString ? `?${queryString}` : ''}`);
+  },
+  pausePublishSession: (sessionId) =>
+    apiRequest(`/ads-launch/publish-sessions/${sessionId}/pause`, {
+      method: 'POST',
+    }),
+  resumePublishSession: (sessionId) =>
+    apiRequest(`/ads-launch/publish-sessions/${sessionId}/resume`, {
+      method: 'POST',
+    }),
   publishLaunch: (payload) =>
     apiRequest('/ads-launch/publish', {
       method: 'POST',

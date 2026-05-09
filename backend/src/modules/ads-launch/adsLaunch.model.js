@@ -190,6 +190,11 @@ const launchTemplateConfigSchema = new mongoose.Schema(
         default: 'LOWEST_COST_WITHOUT_CAP',
         trim: true,
       },
+      bidAmount: {
+        type: String,
+        default: '',
+        trim: true,
+      },
     },
   },
   {
