@@ -20,6 +20,7 @@ import { businessDataApi } from '../../dashboard/api/businessDataApi';
 import DashboardHeader from '../../dashboard/components/DashboardHeader';
 import DashboardPanel from '../../dashboard/components/DashboardPanel';
 import { adsLaunchApi } from '../api/adsLaunchApi';
+import { createVideoThumbnailFile } from '../utils/videoThumbnail';
 
 const ROOT_FOLDER_ID = 'root';
 const MIN_DIMENSION = 600;
@@ -264,7 +265,7 @@ const MediaTile = ({ brands, brandsLoading, mediaAsset, onBrandChange, onDelete,
     <div className="group overflow-hidden rounded-2xl border border-sky-100 bg-white shadow-sm shadow-sky-100/70 transition hover:-translate-y-0.5 hover:shadow-md hover:shadow-sky-100">
       <div className="relative flex h-40 items-center justify-center bg-slate-950">
         {isVideo ? (
-          <video src={media.url} controls className="h-full w-full object-contain" />
+          <video src={media.url} poster={mediaAsset.thumbnail?.url || ''} controls className="h-full w-full object-contain" />
         ) : (
           <img src={media.url} alt={mediaAsset.name} className="h-full w-full object-cover" />
         )}
@@ -331,7 +332,18 @@ const MediaTile = ({ brands, brandsLoading, mediaAsset, onBrandChange, onDelete,
           </div>
         </div>
         {isVideo ? (
-          <p className="mt-2 text-xs font-semibold text-amber-700">{formatDuration(media.duration)} video</p>
+          <div className="mt-2 flex flex-wrap items-center gap-2">
+            <p className="text-xs font-semibold text-amber-700">{formatDuration(media.duration)} video</p>
+            {mediaAsset.thumbnail?.url ? (
+              <span className="rounded-full bg-emerald-50 px-2.5 py-1 text-[11px] font-black text-emerald-700">
+                Auto thumbnail
+              </span>
+            ) : (
+              <span className="rounded-full bg-amber-50 px-2.5 py-1 text-[11px] font-black text-amber-700">
+                No thumbnail
+              </span>
+            )}
+          </div>
         ) : null}
       </div>
     </div>
@@ -522,9 +534,12 @@ const AdsMediaLibraryPage = () => {
       throw new Error(`${file.name}: ${validationError}`);
     }
 
+    const thumbnail = isVideo ? await createVideoThumbnailFile(normalizedFile) : null;
+
     return {
       file: normalizedFile,
       details,
+      thumbnail,
     };
   };
 
@@ -556,6 +571,7 @@ const AdsMediaLibraryPage = () => {
 
         try {
           const prepared = await prepareMediaFile(file);
+          const isVideoUpload = prepared.file.type.startsWith('video/');
           await adsLaunchApi.uploadMediaAssetWithProgress(
             {
               name: getMediaDisplayName(prepared.file.name),
@@ -568,11 +584,13 @@ const AdsMediaLibraryPage = () => {
                 height: prepared.details.height,
                 duration: prepared.details.duration || 0,
               },
+              thumbnailFile: prepared.thumbnail?.file || null,
+              thumbnailMetadata: prepared.thumbnail?.metadata || null,
             },
             {
               onUploadProgress: (percent) => {
                 setUploadProgress({
-                  label: `Uploading ${prepared.file.name}`,
+                  label: `Uploading ${prepared.file.name}${isVideoUpload ? ' with auto thumbnail' : ''}`,
                   percent,
                   index: index + 1,
                   total: files.length,

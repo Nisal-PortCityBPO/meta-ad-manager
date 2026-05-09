@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import toast from 'react-hot-toast';
-import { AlertTriangle, CheckCircle2, ChevronLeft, ChevronRight, Eye, ImageIcon, LoaderCircle, Rocket, Shuffle, Upload, X } from 'lucide-react';
+import { AlertTriangle, CheckCircle2, ChevronLeft, ChevronRight, Eye, ImageIcon, LoaderCircle, RefreshCw, Rocket, Shuffle, Upload, X } from 'lucide-react';
 import DashboardHeader from '../../dashboard/components/DashboardHeader';
 import DashboardPanel from '../../dashboard/components/DashboardPanel';
 import { businessDataApi } from '../../dashboard/api/businessDataApi';
@@ -180,7 +180,7 @@ const TemplatePreviewModal = ({ template, onClose }) => {
 };
 
 const MediaLibraryPicker = ({
-  description = 'Saved videos are stored without thumbnails. Choose a separate image media asset when a video needs a thumbnail.',
+  description = 'Saved videos can include an auto thumbnail. Choose a separate image only when you want to override it.',
   mediaFolders,
   mode = 'media',
   loading,
@@ -458,18 +458,25 @@ const DynamicAdsLaunchPage = () => {
           account,
           ...(assignments[account.id] || {}),
         }))
-        .filter((assignment) =>
-          assignment.campaignTemplateId &&
-          assignment.mediaTemplateId &&
-          assignment.mediaAssetId &&
-          brandScopedMediaAssets.some((mediaAsset) => {
-            if (mediaAsset.id !== assignment.mediaAssetId) {
-              return false;
-            }
+        .filter((assignment) => {
+          if (!assignment.campaignTemplateId || !assignment.mediaTemplateId || !assignment.mediaAssetId) {
+            return false;
+          }
 
-            return mediaAsset.mediaType !== 'VIDEO' || brandScopedMediaAssets.some((asset) => asset.id === assignment.thumbnailAssetId && asset.mediaType === 'IMAGE');
-          })
-        ),
+          const mediaAsset = brandScopedMediaAssets.find((asset) => asset.id === assignment.mediaAssetId);
+          if (!mediaAsset) {
+            return false;
+          }
+
+          if (mediaAsset.mediaType !== 'VIDEO') {
+            return true;
+          }
+
+          return Boolean(
+            mediaAsset.thumbnail?.url ||
+              brandScopedMediaAssets.some((asset) => asset.id === assignment.thumbnailAssetId && asset.mediaType === 'IMAGE')
+          );
+        }),
     [assignments, brandScopedMediaAssets, scopedAdAccounts]
   );
 
@@ -479,8 +486,29 @@ const DynamicAdsLaunchPage = () => {
   const getAssignmentMediaAsset = (assignment) =>
     brandScopedMediaAssets.find((mediaAsset) => mediaAsset.id === assignment.mediaAssetId);
 
-  const getAssignmentThumbnailAsset = (assignment) =>
+  const getAssignmentExplicitThumbnailAsset = (assignment) =>
     brandScopedMediaAssets.find((mediaAsset) => mediaAsset.id === assignment.thumbnailAssetId && mediaAsset.mediaType === 'IMAGE');
+
+  const getAssignmentThumbnailAsset = (assignment) => {
+    const explicitThumbnail = getAssignmentExplicitThumbnailAsset(assignment);
+
+    if (explicitThumbnail) {
+      return explicitThumbnail;
+    }
+
+    const mediaAsset = getAssignmentMediaAsset(assignment);
+    if (mediaAsset?.mediaType !== 'VIDEO' || !mediaAsset.thumbnail?.url) {
+      return null;
+    }
+
+    return {
+      id: `${mediaAsset.id}:default-thumbnail`,
+      name: mediaAsset.thumbnail.name || `${mediaAsset.name} thumbnail`,
+      mediaType: 'IMAGE',
+      media: mediaAsset.thumbnail,
+      isDefaultVideoThumbnail: true,
+    };
+  };
 
   const getAssignmentPageId = (assignment) => {
     const campaignTemplate = getAssignmentCampaignTemplate(assignment);
@@ -535,6 +563,30 @@ const DynamicAdsLaunchPage = () => {
       requiredMissing,
     };
   };
+
+  const readyAssignments = useMemo(
+    () =>
+      selectedAssignments.filter((assignment) => {
+        const campaignTemplate = getAssignmentCampaignTemplate(assignment);
+        const mediaTemplate = mediaTemplates.find((template) => template.id === assignment.mediaTemplateId);
+        const mediaAsset = getAssignmentMediaAsset(assignment);
+        const thumbnailAsset = getAssignmentThumbnailAsset(assignment);
+        const videoMediaSelected = mediaAsset?.mediaType === 'VIDEO';
+        const assignmentPageId = getAssignmentPageId(assignment);
+        const requiresPixel = campaignRequiresPixel(campaignTemplate);
+        const assignmentPixelId = getAssignmentPixelId(assignment);
+
+        return Boolean(
+          campaignTemplate &&
+            mediaTemplate &&
+            mediaAsset &&
+            (!videoMediaSelected || thumbnailAsset) &&
+            assignmentPageId &&
+            (!requiresPixel || assignmentPixelId)
+        );
+      }),
+    [brandScopedMediaAssets, campaignTemplates, mediaTemplates, pageId, selectedAssignments]
+  );
 
   useEffect(() => {
     let mounted = true;
@@ -698,7 +750,12 @@ const DynamicAdsLaunchPage = () => {
 
       if (mediaAsset.mediaType !== 'VIDEO') {
         nextAssignment.thumbnailAssetId = '';
-      } else if (!brandScopedMediaAssets.some((asset) => asset.id === previousAssignment.thumbnailAssetId && asset.mediaType === 'IMAGE')) {
+      } else if (
+        !mediaAsset.thumbnail?.url &&
+        !brandScopedMediaAssets.some((asset) => asset.id === previousAssignment.thumbnailAssetId && asset.mediaType === 'IMAGE')
+      ) {
+        nextAssignment.thumbnailAssetId = '';
+      } else if (mediaAsset.thumbnail?.url && !brandScopedMediaAssets.some((asset) => asset.id === previousAssignment.thumbnailAssetId && asset.mediaType === 'IMAGE')) {
         nextAssignment.thumbnailAssetId = '';
       }
 
@@ -711,6 +768,11 @@ const DynamicAdsLaunchPage = () => {
     setMediaPickerAccountId('');
 
     if (mediaAsset.mediaType === 'VIDEO') {
+      if (mediaAsset.thumbnail?.url) {
+        toast.success('Video selected with its auto thumbnail');
+        return;
+      }
+
       toast.success('Video selected. Choose a thumbnail image next.');
       window.setTimeout(() => setThumbnailPickerAccountId(accountId), 150);
       return;
@@ -732,11 +794,11 @@ const DynamicAdsLaunchPage = () => {
   };
 
   const buildPublishPayload = () => {
-    const firstAssignment = selectedAssignments[0];
+    const firstAssignment = readyAssignments[0];
     const firstCampaignTemplate = campaignTemplates.find((template) => template.id === firstAssignment.campaignTemplateId);
     const firstMediaTemplate = mediaTemplates.find((template) => template.id === firstAssignment.mediaTemplateId);
     const firstMediaAsset = brandScopedMediaAssets.find((mediaAsset) => mediaAsset.id === firstAssignment.mediaAssetId);
-    const firstThumbnailAsset = brandScopedMediaAssets.find((mediaAsset) => mediaAsset.id === firstAssignment.thumbnailAssetId);
+    const firstThumbnailAsset = getAssignmentThumbnailAsset(firstAssignment);
     const campaignConfig = firstCampaignTemplate?.config || {};
     const mediaConfig = firstMediaTemplate?.config || {};
     const countries = sanitizeCountries(campaignConfig);
@@ -756,8 +818,8 @@ const DynamicAdsLaunchPage = () => {
       countryLabel: countries.join(', '),
       objective: campaignConfig.objective || 'OUTCOME_TRAFFIC',
       dailyBudget: campaignConfig.dailyBudget || '15',
-      selectedAdAccountIds: selectedAssignments.map((assignment) => assignment.account.id),
-      selectedAdAccounts: selectedAssignments.map((assignment) => ({
+      selectedAdAccountIds: readyAssignments.map((assignment) => assignment.account.id),
+      selectedAdAccounts: readyAssignments.map((assignment) => ({
         id: assignment.account.id,
         accountId: assignment.account.accountId,
         name: assignment.account.name,
@@ -783,7 +845,7 @@ const DynamicAdsLaunchPage = () => {
         ...defaultStaticDefaults,
         ...(campaignConfig.staticDefaults || {}),
       },
-      accountLaunches: selectedAssignments.map((assignment) => ({
+      accountLaunches: readyAssignments.map((assignment) => ({
         adAccountId: assignment.account.id,
         campaignTemplateId: assignment.campaignTemplateId,
         mediaTemplateId: assignment.mediaTemplateId,
@@ -817,55 +879,12 @@ const DynamicAdsLaunchPage = () => {
       return;
     }
 
-    const missingAssignments = scopedAdAccounts.filter((account) => {
-      const assignment = assignments[account.id];
-      const selectedMediaAsset = brandScopedMediaAssets.find((mediaAsset) => mediaAsset.id === assignment?.mediaAssetId);
-      const hasMediaAsset = Boolean(selectedMediaAsset);
-      const needsThumbnail = selectedMediaAsset?.mediaType === 'VIDEO';
-      const hasThumbnailAsset = brandScopedMediaAssets.some((mediaAsset) => mediaAsset.id === assignment?.thumbnailAssetId && mediaAsset.mediaType === 'IMAGE');
-      return assignment?.campaignTemplateId || assignment?.mediaTemplateId || assignment?.mediaAssetId
-        ? !assignment.campaignTemplateId || !assignment.mediaTemplateId || !assignment.mediaAssetId || !hasMediaAsset || (needsThumbnail && !hasThumbnailAsset)
-        : false;
-    });
-
-    if (missingAssignments.length) {
-      const firstMissingThumbnail = missingAssignments.find((account) => {
-        const assignment = assignments[account.id];
-        const selectedMediaAsset = mediaAssets.find((mediaAsset) => mediaAsset.id === assignment?.mediaAssetId);
-        const hasThumbnailAsset = mediaAssets.some((mediaAsset) => mediaAsset.id === assignment?.thumbnailAssetId && mediaAsset.mediaType === 'IMAGE');
-        return selectedMediaAsset?.mediaType === 'VIDEO' && !hasThumbnailAsset;
-      });
-
-      if (firstMissingThumbnail) {
-        setThumbnailPickerAccountId(firstMissingThumbnail.id);
-        toast.error('Video selected. Choose or upload a JPG thumbnail before publishing.');
-        return;
-      }
-
-      toast.error('Every selected account row must have campaign template, media template, media asset, and thumbnail for videos');
+    if (!readyAssignments.length) {
+      toast.error('No ready ad account rows. Complete campaign template, media template, media asset, page, and required pixel for at least one row.');
       return;
     }
 
-    if (!selectedAssignments.length) {
-      toast.error('Assign campaign template, media template, media asset, and video thumbnail when needed to at least one ad account');
-      return;
-    }
-
-    const missingRequiredPage = selectedAssignments.some((assignment) => !getAssignmentPageId(assignment));
-
-    if (missingRequiredPage) {
-      toast.error('Select a page for every assigned account, or choose a shared fallback page');
-      return;
-    }
-
-    const pixelPromptDetails = getPixelPromptDetails();
-
-    if (pixelPromptDetails.requiredMissing.length) {
-      showPixelPrompt({
-        items: pixelPromptDetails.requiredMissing,
-      });
-      return;
-    }
+    const ignoredRows = scopedAdAccounts.length - readyAssignments.length;
 
     setPixelPrompt(null);
     setPublishing(true);
@@ -879,6 +898,9 @@ const DynamicAdsLaunchPage = () => {
         ...buildPublishPayload(),
         tokenType: publishTokenType,
       };
+      if (ignoredRows > 0) {
+        toast.success(`Publishing ${readyAssignments.length} ready row${readyAssignments.length === 1 ? '' : 's'} and ignoring ${ignoredRows} waiting row${ignoredRows === 1 ? '' : 's'}`);
+      }
       const data = await adsLaunchApi.publishLaunchStream(payload, {
         onProgress: pushPublishEvent,
       });
@@ -892,7 +914,7 @@ const DynamicAdsLaunchPage = () => {
     }
   };
 
-  const selectedCount = selectedAssignments.length;
+  const selectedCount = readyAssignments.length;
 
   return (
     <div>
@@ -907,7 +929,7 @@ const DynamicAdsLaunchPage = () => {
             className="flex h-11 items-center gap-2 rounded-xl bg-slate-950 px-5 text-sm font-bold text-white transition hover:bg-slate-800 disabled:opacity-70"
           >
             {publishing || isPublishing ? <LoaderCircle size={17} className="animate-spin" /> : <Rocket size={17} />}
-            Publish assigned accounts
+            Publish ready accounts
           </button>
         }
       />
@@ -985,7 +1007,7 @@ const DynamicAdsLaunchPage = () => {
           title="Ad account template assignments"
           headerAction={
             <span className="rounded-full bg-sky-50 px-3 py-1 text-xs font-black text-sky-700">
-              {selectedCount} assigned
+              {selectedCount} ready
             </span>
           }
         >
@@ -1018,10 +1040,11 @@ const DynamicAdsLaunchPage = () => {
                 onScroll={updateAssignmentScrollState}
                 className="overflow-x-auto overscroll-x-contain rounded-2xl border border-sky-100 bg-white pb-2 shadow-inner shadow-sky-50 [scrollbar-gutter:stable] [scrollbar-width:thin]"
               >
-              <table className="min-w-[1420px] text-left text-sm">
+              <table className="min-w-[1500px] text-left text-sm">
                 <thead className="text-xs font-black uppercase tracking-[0.14em] text-slate-400">
                   <tr>
-                    <th className="sticky left-0 z-20 min-w-56 bg-white px-3 py-3 shadow-[8px_0_16px_-16px_rgba(15,23,42,0.45)]">Ad account</th>
+                    <th className="sticky left-0 z-30 w-14 min-w-[3.5rem] bg-white px-3 py-3 text-center shadow-[8px_0_16px_-16px_rgba(15,23,42,0.35)]">#</th>
+                    <th className="sticky left-[3.5rem] z-20 min-w-56 bg-white px-3 py-3 shadow-[8px_0_16px_-16px_rgba(15,23,42,0.45)]">Ad account</th>
                     <th className="px-3 py-3">Page</th>
                     <th className="px-3 py-3">Pixel</th>
                     <th className="px-3 py-3">Campaign template</th>
@@ -1031,7 +1054,7 @@ const DynamicAdsLaunchPage = () => {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-sky-50">
-                  {scopedAdAccounts.map((account) => {
+                  {scopedAdAccounts.map((account, index) => {
                     const assignment = {
                       account,
                       ...(assignments[account.id] || {}),
@@ -1053,7 +1076,12 @@ const DynamicAdsLaunchPage = () => {
 
                     return (
                       <tr key={account.id} className="align-top">
-                        <td className="sticky left-0 z-10 min-w-56 bg-white px-3 py-3 shadow-[8px_0_16px_-16px_rgba(15,23,42,0.45)]">
+                        <td className="sticky left-0 z-20 w-14 min-w-[3.5rem] bg-white px-3 py-3 text-center shadow-[8px_0_16px_-16px_rgba(15,23,42,0.35)]">
+                          <span className="inline-flex h-7 w-7 items-center justify-center rounded-full bg-sky-50 text-xs font-black text-sky-700">
+                            {index + 1}
+                          </span>
+                        </td>
+                        <td className="sticky left-[3.5rem] z-10 min-w-56 bg-white px-3 py-3 shadow-[8px_0_16px_-16px_rgba(15,23,42,0.45)]">
                           <p className="font-black text-slate-950">{account.name}</p>
                           <p className="mt-1 text-xs font-semibold text-slate-400">{account.accountId} {account.currency || ''}</p>
                         </td>
@@ -1191,9 +1219,22 @@ const DynamicAdsLaunchPage = () => {
                               <span className="min-w-0">
                                 <span className="block truncate font-black">{thumbnailAsset?.name || 'Choose thumbnail'}</span>
                                 <span className="mt-0.5 block truncate text-[11px] font-semibold opacity-75">
-                                  {thumbnailAsset ? `${thumbnailAsset.media?.width || 0}x${thumbnailAsset.media?.height || 0}` : 'Required for video'}
+                                  {thumbnailAsset
+                                    ? `${thumbnailAsset.media?.width || 0}x${thumbnailAsset.media?.height || 0}${thumbnailAsset.isDefaultVideoThumbnail ? ' | Auto default' : ''}`
+                                    : 'Required for video'}
                                 </span>
                               </span>
+                            </button>
+                          ) : null}
+                          {videoMediaSelected && mediaAsset?.thumbnail?.url ? (
+                            <button
+                              type="button"
+                              onClick={() => updateAssignment(account.id, 'thumbnailAssetId', '')}
+                              disabled={!assignment.thumbnailAssetId}
+                              className="mt-2 inline-flex h-8 w-8 items-center justify-center rounded-lg border border-emerald-100 bg-emerald-50 text-emerald-700 transition hover:bg-emerald-100 disabled:cursor-not-allowed disabled:opacity-45"
+                              title="Reload default thumbnail"
+                            >
+                              <RefreshCw size={14} strokeWidth={2.5} />
                             </button>
                           ) : null}
                         </td>

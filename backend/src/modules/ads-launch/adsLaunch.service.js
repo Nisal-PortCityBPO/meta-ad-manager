@@ -770,7 +770,8 @@ function validateMediaLibraryParsedAsset(parsed, mediaType, assetKind = 'media')
 }
 
 function persistMediaLibraryAsset({ mediaId, asset, assetKind, mediaType }) {
-  const parsed = parseMediaLibraryAsset(asset, assetKind === 'thumbnail' ? 'Video thumbnail' : 'Media', mediaType);
+  const effectiveMediaType = assetKind === 'thumbnail' ? ADS_MEDIA_TYPES.IMAGE : mediaType;
+  const parsed = parseMediaLibraryAsset(asset, assetKind === 'thumbnail' ? 'Video thumbnail' : 'Media', effectiveMediaType);
 
   if (assetKind === 'thumbnail') {
     validateMediaLibraryParsedAsset(parsed, mediaType, 'thumbnail');
@@ -797,11 +798,12 @@ function persistMediaLibraryAsset({ mediaId, asset, assetKind, mediaType }) {
 }
 
 function persistUploadedMediaLibraryAsset({ mediaId, file, metadata, assetKind, mediaType }) {
+  const effectiveMediaType = assetKind === 'thumbnail' ? ADS_MEDIA_TYPES.IMAGE : mediaType;
   const parsed = parseUploadedMediaLibraryAsset(
     file,
     metadata,
     assetKind === 'thumbnail' ? 'Video thumbnail' : 'Media',
-    mediaType
+    effectiveMediaType
   );
 
   if (!parsed) {
@@ -1080,7 +1082,13 @@ async function applyTemplateAssets({ template, snapshotInput, existingSnapshot =
       assetKind: 'media',
     });
 
-    thumbnailAsset = null;
+    thumbnailAsset = libraryMediaAsset.thumbnail
+      ? copyMediaLibraryAssetToTemplateAsset({
+          templateId: template._id.toString(),
+          asset: libraryMediaAsset.thumbnail,
+          assetKind: 'thumbnail',
+        })
+      : null;
 
     deleteStoredTemplateAsset(previousMedia);
     deleteStoredTemplateAsset(previousThumbnail);
@@ -1313,14 +1321,17 @@ async function createMediaAsset({
   brandName,
   folderId = null,
   media,
+  thumbnail,
   uploadedMedia = null,
   uploadedThumbnail = null,
   mediaMetadata = null,
+  thumbnailMetadata = null,
   actor,
   req,
 }) {
   const normalizedName = normalizeText(name);
   const mediaInput = uploadedMedia ? null : sanitizeMediaLibraryAssetInput(media);
+  const thumbnailInput = uploadedThumbnail ? null : sanitizeMediaLibraryAssetInput(thumbnail);
 
   if (!normalizedName) {
     cleanupUploadedMediaFile(uploadedMedia);
@@ -1373,7 +1384,23 @@ async function createMediaAsset({
           assetKind: 'media',
           mediaType,
         });
-    mediaAsset.thumbnail = null;
+    mediaAsset.thumbnail =
+      mediaType === ADS_MEDIA_TYPES.VIDEO && (uploadedThumbnail || thumbnailInput)
+        ? uploadedThumbnail
+          ? persistUploadedMediaLibraryAsset({
+              mediaId: mediaAsset._id.toString(),
+              file: uploadedThumbnail,
+              metadata: thumbnailMetadata,
+              assetKind: 'thumbnail',
+              mediaType,
+            })
+          : persistMediaLibraryAsset({
+              mediaId: mediaAsset._id.toString(),
+              asset: thumbnailInput,
+              assetKind: 'thumbnail',
+              mediaType,
+            })
+        : null;
     await mediaAsset.save();
   } catch (error) {
     deleteStoredMediaLibraryAsset(mediaAsset.media);
@@ -1415,6 +1442,8 @@ async function completeChunkedMediaAsset({
   mediaMimeType,
   mediaSize,
   mediaMetadata,
+  thumbnail,
+  thumbnailMetadata,
   thumbnailUploadId,
   actor,
   req,
@@ -1440,6 +1469,8 @@ async function completeChunkedMediaAsset({
       folderId,
       uploadedMedia,
       mediaMetadata,
+      thumbnail,
+      thumbnailMetadata,
       actor,
       req,
     });
@@ -2692,6 +2723,7 @@ async function resolvePublishCreativeAssets({ launch, actor }) {
 
 function readCreativeAssetsFromMediaAsset(mediaAsset) {
   const media = readStoredMediaLibraryAsset(mediaAsset?.media);
+  const thumbnail = readStoredMediaLibraryAsset(mediaAsset?.thumbnail);
 
   if (!media) {
     throw new HttpError(400, `Media library asset "${mediaAsset?.name || 'selected'}" is missing its saved file`);
@@ -2699,7 +2731,7 @@ function readCreativeAssetsFromMediaAsset(mediaAsset) {
 
   return {
     media,
-    thumbnail: null,
+    thumbnail,
   };
 }
 
@@ -2898,11 +2930,13 @@ async function resolveAccountLaunchFromTemplates({ baseLaunch, accountLaunch, se
         });
 
   if (mediaAsset && String(creativeAssets.media?.type || '').startsWith('video/')) {
-    if (!thumbnailAsset) {
+    if (!thumbnailAsset && !creativeAssets.thumbnail) {
       throw new HttpError(400, `Select a thumbnail image for video media "${mediaAsset.name}"`);
     }
 
-    creativeAssets.thumbnail = readThumbnailFromMediaLibraryAsset(thumbnailAsset);
+    if (thumbnailAsset) {
+      creativeAssets.thumbnail = readThumbnailFromMediaLibraryAsset(thumbnailAsset);
+    }
   }
 
   return {

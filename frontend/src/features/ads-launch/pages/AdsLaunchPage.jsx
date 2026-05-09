@@ -31,6 +31,7 @@ import { adsLaunchApi } from '../api/adsLaunchApi';
 import MediaLibraryFolderPicker from '../components/MediaLibraryFolderPicker';
 import { useLaunchTemplates } from '../hooks/useLaunchTemplates';
 import { useTokenMetaAssets } from '../hooks/useTokenMetaAssets';
+import { createVideoThumbnailFile } from '../utils/videoThumbnail';
 
 const countryOptions = [
   { value: 'ID', label: 'Indonesia' },
@@ -675,6 +676,7 @@ const AdsLaunchPage = () => {
   const [mediaLibraryPickerMode, setMediaLibraryPickerMode] = useState('');
   const [creativeSource, setCreativeSource] = useState('saved');
   const [thumbnailSource, setThumbnailSource] = useState('saved');
+  const [defaultVideoThumbnail, setDefaultVideoThumbnail] = useState(null);
   const [creativeUploadProgress, setCreativeUploadProgress] = useState(null);
 
   const activeTokens = useMemo(() => tokens.filter((token) => token.status === 'ACTIVE'), [tokens]);
@@ -1192,6 +1194,7 @@ const AdsLaunchPage = () => {
   const clearUploadedCreativeFiles = () => {
     setMediaFile(null);
     setThumbnailFile(null);
+    setDefaultVideoThumbnail(null);
   };
 
   const resetCreativeFiles = () => {
@@ -1253,17 +1256,42 @@ const AdsLaunchPage = () => {
     }));
   };
 
-  const handleMediaChange = (event) => {
+  const handleMediaChange = async (event) => {
     const file = event.target.files?.[0] || null;
     event.target.value = '';
     setMediaFile(file);
     setSavedMediaAsset(null);
+    setSavedThumbnailAsset(null);
+    setDefaultVideoThumbnail(null);
     setCreativeSource(file ? 'upload' : 'saved');
 
     if (file && !file.type.startsWith('video/')) {
       setThumbnailFile(null);
-      setSavedThumbnailAsset(null);
       setThumbnailSource('saved');
+      return;
+    }
+
+    if (!file) {
+      setThumbnailFile(null);
+      setThumbnailSource('saved');
+      return;
+    }
+
+    setThumbnailFile(null);
+    setThumbnailSource('saved');
+    setCreativeUploadProgress({ label: 'Generating video thumbnail', percent: 20 });
+
+    try {
+      const generatedThumbnail = await createVideoThumbnailFile(file);
+      setDefaultVideoThumbnail(generatedThumbnail);
+      setThumbnailFile(generatedThumbnail.file);
+      setThumbnailSource('auto');
+      setCreativeUploadProgress({ label: 'Video thumbnail ready', percent: 100 });
+      window.setTimeout(() => setCreativeUploadProgress(null), 500);
+      toast.success('Video thumbnail generated automatically');
+    } catch (error) {
+      setCreativeUploadProgress(null);
+      toast.error(error.message);
     }
   };
 
@@ -1273,6 +1301,26 @@ const AdsLaunchPage = () => {
     setThumbnailFile(file);
     setSavedThumbnailAsset(null);
     setThumbnailSource(file ? 'upload' : 'saved');
+  };
+
+  const restoreDefaultVideoThumbnail = () => {
+    if (mediaFile && defaultVideoThumbnail?.file) {
+      setThumbnailFile(defaultVideoThumbnail.file);
+      setSavedThumbnailAsset(null);
+      setThumbnailSource('auto');
+      toast.success('Default video thumbnail restored');
+      return;
+    }
+
+    if (savedMediaAsset?.defaultThumbnail) {
+      setThumbnailFile(null);
+      setSavedThumbnailAsset(savedMediaAsset.defaultThumbnail);
+      setThumbnailSource('auto');
+      toast.success('Default video thumbnail restored');
+      return;
+    }
+
+    toast.error('No default thumbnail is available for this video');
   };
 
   const normalizeMediaLibraryMediaAsset = (mediaAsset) => {
@@ -1286,6 +1334,14 @@ const AdsLaunchPage = () => {
       url: mediaAsset.media.url,
       size: mediaAsset.media.size || 0,
       mediaAssetId: mediaAsset.id,
+      defaultThumbnail: mediaAsset.thumbnail?.url
+        ? {
+            name: mediaAsset.thumbnail.name || `${mediaAsset.name} thumbnail`,
+            type: mediaAsset.thumbnail.type || 'image/jpeg',
+            url: mediaAsset.thumbnail.url,
+            size: mediaAsset.thumbnail.size || 0,
+          }
+        : null,
     };
   };
 
@@ -1310,13 +1366,18 @@ const AdsLaunchPage = () => {
 
     setMediaFile(null);
     setSavedMediaAsset(libraryMedia);
+    setDefaultVideoThumbnail(null);
     setCreativeSource('library');
 
     if (mediaAsset.mediaType === 'VIDEO') {
       setThumbnailFile(null);
-      setSavedThumbnailAsset(null);
-      setThumbnailSource('saved');
-      toast.success('Video selected. Choose or upload a separate image thumbnail.');
+      setSavedThumbnailAsset(libraryMedia.defaultThumbnail || null);
+      setThumbnailSource(libraryMedia.defaultThumbnail ? 'auto' : 'saved');
+      toast.success(
+        libraryMedia.defaultThumbnail
+          ? 'Video selected with its auto thumbnail'
+          : 'Video selected. Choose or upload a separate image thumbnail.'
+      );
     } else {
       setThumbnailFile(null);
       setSavedThumbnailAsset(null);
@@ -1383,6 +1444,8 @@ const AdsLaunchPage = () => {
 
     const mediaMetadata = await readMediaMetadata(mediaFile);
     const isVideoUpload = mediaFile.type.startsWith('video/');
+    const linkedVideoThumbnailFile = isVideoUpload ? thumbnailFile || defaultVideoThumbnail?.file || null : null;
+    const thumbnailMetadata = linkedVideoThumbnailFile ? await readImageMetadata(linkedVideoThumbnailFile) : null;
     const uploadLabel = `Uploading ${isVideoUpload ? `${label} video` : `${label} image`}`;
     const data = await adsLaunchApi.uploadMediaAssetWithProgress({
       name: (templateName || form.launchLabel || mediaFile.name).trim(),
@@ -1390,6 +1453,8 @@ const AdsLaunchPage = () => {
       brandName: selectedBrand?.name || '',
       mediaFile,
       mediaMetadata,
+      thumbnailFile: linkedVideoThumbnailFile,
+      thumbnailMetadata,
     }, {
       onUploadProgress: (percent) => {
         setCreativeUploadProgress({
@@ -1427,8 +1492,11 @@ const AdsLaunchPage = () => {
   };
 
   const buildTemplatePayload = async ({ includeStoredAssets = false } = {}) => {
+    const thumbnailAttachedToUploadedVideo = Boolean(
+      mediaFile?.type?.startsWith('video/') && (thumbnailFile || defaultVideoThumbnail?.file)
+    );
     const uploadedMediaAsset = mediaFile ? await saveUploadedCreativeToMediaLibrary({ label: 'template media' }) : null;
-    const uploadedThumbnailAsset = thumbnailFile
+    const uploadedThumbnailAsset = thumbnailFile && !thumbnailAttachedToUploadedVideo
       ? await saveUploadedThumbnailToMediaLibrary({ label: 'template thumbnail' })
       : null;
     const mediaAssetId = uploadedMediaAsset?.id || (creativeSource === 'library' ? savedMediaAsset?.mediaAssetId : '');
@@ -1443,7 +1511,7 @@ const AdsLaunchPage = () => {
     const thumbnail = isVideoAsset
       ? thumbnailFile
         ? null
-        : thumbnailAssetId
+        : thumbnailAssetId || mediaAssetId
           ? null
           : includeStoredAssets || thumbnailSource === 'library'
           ? await serializeStoredAssetForTemplate(savedThumbnailAsset)
@@ -1480,8 +1548,11 @@ const AdsLaunchPage = () => {
   };
 
   const buildPublishPayload = async () => {
+    const thumbnailAttachedToUploadedVideo = Boolean(
+      mediaFile?.type?.startsWith('video/') && (thumbnailFile || defaultVideoThumbnail?.file)
+    );
     const uploadedMediaAsset = mediaFile ? await saveUploadedCreativeToMediaLibrary({ label: 'publish media' }) : null;
-    const uploadedThumbnailAsset = thumbnailFile
+    const uploadedThumbnailAsset = thumbnailFile && !thumbnailAttachedToUploadedVideo
       ? await saveUploadedThumbnailToMediaLibrary({ label: 'publish thumbnail' })
       : null;
     const mediaAssetId = uploadedMediaAsset?.id || (creativeSource === 'library' ? activeMediaAsset?.mediaAssetId : '');
@@ -1496,7 +1567,7 @@ const AdsLaunchPage = () => {
     const thumbnail = isVideoAsset
       ? thumbnailFile
         ? null
-        : thumbnailAssetId || activeTemplateId
+        : thumbnailAssetId || mediaAssetId || activeTemplateId
           ? null
           : activeThumbnailAsset
           ? await serializeStoredAssetForTemplate(activeThumbnailAsset)
@@ -1585,6 +1656,7 @@ const AdsLaunchPage = () => {
       setTemplateName(data.template.name);
       setSavedMediaAsset(normalizeStoredAsset(data.template.snapshot?.media));
       setSavedThumbnailAsset(normalizeStoredAsset(data.template.snapshot?.thumbnail));
+      setDefaultVideoThumbnail(null);
       setCreativeSource('saved');
       setThumbnailSource('saved');
       clearUploadedCreativeFiles();
@@ -1617,6 +1689,7 @@ const AdsLaunchPage = () => {
         setTemplateName('');
         setSavedMediaAsset(null);
         setSavedThumbnailAsset(null);
+        setDefaultVideoThumbnail(null);
         setCreativeSource('saved');
         setThumbnailSource('saved');
       }
@@ -1721,6 +1794,7 @@ const AdsLaunchPage = () => {
     clearUploadedCreativeFiles();
     setSavedMediaAsset(normalizeStoredAsset(template.snapshot?.media));
     setSavedThumbnailAsset(normalizeStoredAsset(template.snapshot?.thumbnail));
+    setDefaultVideoThumbnail(null);
     setCreativeSource('saved');
     setThumbnailSource('saved');
     toast.success(`Loaded template "${template.name}"`);
@@ -1845,7 +1919,7 @@ const AdsLaunchPage = () => {
           description={
             mediaLibraryPickerMode === 'thumbnail'
               ? 'Choose an image from the library to use as this video thumbnail.'
-              : 'Choose an image or video from the library. It can publish now and be copied into the saved launch template.'
+              : 'Choose an image or video from the library. Videos with auto thumbnails will fill the thumbnail section automatically.'
           }
           loading={mediaAssetsLoading}
           mediaAssets={mediaLibraryPickerMode === 'thumbnail' ? imageMediaAssets : brandScopedMediaAssets}
@@ -2521,20 +2595,30 @@ const AdsLaunchPage = () => {
               <div className="space-y-2">
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <FieldLabel htmlFor="thumbnail-upload">Thumbnail for video</FieldLabel>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      if (!mediaAssets.length) {
-                        loadMediaAssets();
-                      }
-                      setMediaLibraryPickerMode('thumbnail');
-                    }}
-                    disabled={!isVideoAsset}
-                    className="inline-flex h-9 items-center gap-2 rounded-lg border border-sky-100 bg-white px-3 text-xs font-black uppercase tracking-[0.14em] text-sky-700 transition hover:bg-sky-50 disabled:cursor-not-allowed disabled:opacity-40"
-                  >
-                    <FolderOpen size={14} strokeWidth={2.3} />
-                    Library
-                  </button>
+                  <div className="flex flex-wrap gap-2">
+                    <button
+                      type="button"
+                      onClick={restoreDefaultVideoThumbnail}
+                      disabled={!isVideoAsset || (!defaultVideoThumbnail?.file && !savedMediaAsset?.defaultThumbnail)}
+                      className="inline-flex h-9 items-center gap-2 rounded-lg border border-emerald-100 bg-emerald-50 px-3 text-xs font-black uppercase tracking-[0.14em] text-emerald-700 transition hover:bg-emerald-100 disabled:cursor-not-allowed disabled:opacity-40"
+                    >
+                      Reload default
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (!mediaAssets.length) {
+                          loadMediaAssets();
+                        }
+                        setMediaLibraryPickerMode('thumbnail');
+                      }}
+                      disabled={!isVideoAsset}
+                      className="inline-flex h-9 items-center gap-2 rounded-lg border border-sky-100 bg-white px-3 text-xs font-black uppercase tracking-[0.14em] text-sky-700 transition hover:bg-sky-50 disabled:cursor-not-allowed disabled:opacity-40"
+                    >
+                      <FolderOpen size={14} strokeWidth={2.3} />
+                      Library
+                    </button>
+                  </div>
                 </div>
                 <label
                   htmlFor="thumbnail-upload"
@@ -2564,7 +2648,11 @@ const AdsLaunchPage = () => {
                       <p className="truncate text-sm font-black text-slate-950">{activeThumbnailAsset?.name}</p>
                       <p className="mt-1 text-xs font-semibold text-slate-400">
                         {activeThumbnailAsset?.type || 'Unknown file type'}
-                        {thumbnailSource === 'library' ? ' | Ads Media Library' : ''}
+                        {thumbnailSource === 'library'
+                          ? ' | Ads Media Library'
+                          : thumbnailSource === 'auto'
+                            ? ' | Auto thumbnail'
+                            : ''}
                       </p>
                     </div>
                   </div>

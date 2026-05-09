@@ -111,7 +111,16 @@ const requestWithUploadProgress = (path, payload, { onUploadProgress } = {}) =>
     xhr.send(isFormData ? payload : JSON.stringify(payload));
   });
 
-const buildMediaUploadFormData = ({ name, brandId, brandName, folderId, mediaFile, mediaMetadata }) => {
+const buildMediaUploadFormData = ({
+  name,
+  brandId,
+  brandName,
+  folderId,
+  mediaFile,
+  mediaMetadata,
+  thumbnailFile,
+  thumbnailMetadata,
+}) => {
   const formData = new FormData();
   formData.append('name', name);
   formData.append('brandId', brandId || '');
@@ -119,6 +128,11 @@ const buildMediaUploadFormData = ({ name, brandId, brandName, folderId, mediaFil
   formData.append('folderId', folderId || '');
   formData.append('media', mediaFile, mediaFile.name);
   formData.append('mediaMetadata', JSON.stringify(mediaMetadata || {}));
+
+  if (thumbnailFile) {
+    formData.append('thumbnail', thumbnailFile, thumbnailFile.name);
+    formData.append('thumbnailMetadata', JSON.stringify(thumbnailMetadata || {}));
+  }
 
   return formData;
 };
