@@ -186,6 +186,10 @@ export const adsLaunchApi = {
       method: 'POST',
       body: payload,
     }),
+  deleteMediaFolder: (id) =>
+    apiRequest(`/ads-launch/media-folders/${id}`, {
+      method: 'DELETE',
+    }),
   createMediaAsset: (payload) =>
     apiRequest('/ads-launch/media', {
       method: 'POST',

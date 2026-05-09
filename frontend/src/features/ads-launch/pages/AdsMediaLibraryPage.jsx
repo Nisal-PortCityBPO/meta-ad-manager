@@ -433,6 +433,7 @@ const AdsMediaLibraryPage = () => {
   const [updatingBrandAssetId, setUpdatingBrandAssetId] = useState('');
   const [selectedMediaIds, setSelectedMediaIds] = useState(new Set());
   const [bulkDeleting, setBulkDeleting] = useState(false);
+  const [deletingFolder, setDeletingFolder] = useState(false);
 
   const filteredMediaFolders = useMemo(
     () => mediaFolders.filter((folder) => !filterBrandId || folder.brandId === filterBrandId),
@@ -840,6 +841,39 @@ const AdsMediaLibraryPage = () => {
     }
   };
 
+  const deleteSelectedFolder = async () => {
+    if (!selectedFolder) {
+      toast.error('Open a folder before deleting it');
+      return;
+    }
+
+    const childFolderCount = (foldersByParent.get(selectedFolder.id) || []).length;
+    const currentFolderMediaCount = getFolderMediaCount(selectedFolder.id);
+    const warningParts = [
+      `"${selectedFolder.name}"`,
+      childFolderCount ? `${childFolderCount} direct child folder${childFolderCount === 1 ? '' : 's'}` : '',
+      currentFolderMediaCount ? `${currentFolderMediaCount} media item${currentFolderMediaCount === 1 ? '' : 's'} in this folder` : '',
+    ].filter(Boolean);
+
+    if (!window.confirm(`Delete folder ${warningParts.join(' with ')}? This also deletes all nested folders and media inside them.`)) {
+      return;
+    }
+
+    const parentFolderId = selectedFolder.parentId || null;
+    setDeletingFolder(true);
+    try {
+      const data = await adsLaunchApi.deleteMediaFolder(selectedFolder.id);
+      toast.success(data.message || 'Folder deleted successfully');
+      setSelectedMediaIds(new Set());
+      setSelectedFolderId(parentFolderId);
+      await loadLibrary();
+    } catch (requestError) {
+      toast.error(requestError.message);
+    } finally {
+      setDeletingFolder(false);
+    }
+  };
+
   const updateMediaBrand = async (mediaAsset, brandId) => {
     if ((mediaAsset.brandId || '') === brandId) {
       return;
@@ -1062,13 +1096,25 @@ const AdsMediaLibraryPage = () => {
                 <button
                   type="button"
                   onClick={() => fileInputRef.current?.click()}
-                  disabled={uploading || !selectedFolderId}
+                  disabled={uploading || deletingFolder || !selectedFolderId}
                   className="flex h-11 items-center justify-center gap-2 rounded-xl bg-slate-950 px-4 text-sm font-bold text-white transition hover:bg-slate-800 disabled:opacity-70"
                   title={selectedFolderId ? 'Upload media to selected folder' : 'Select a brand folder before uploading media'}
                 >
                   {uploading ? <LoaderCircle size={17} className="animate-spin" /> : <FileUp size={17} />}
                   Upload media
                 </button>
+                {selectedFolder ? (
+                  <button
+                    type="button"
+                    onClick={deleteSelectedFolder}
+                    disabled={deletingFolder || uploading || creatingFolder}
+                    className="flex h-11 items-center justify-center gap-2 rounded-xl border border-red-100 bg-white px-4 text-sm font-bold text-red-600 transition hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-60"
+                    title="Delete this folder, child folders, and all media inside"
+                  >
+                    {deletingFolder ? <LoaderCircle size={17} className="animate-spin" /> : <Trash2 size={17} />}
+                    Delete folder
+                  </button>
+                ) : null}
                 <input
                   ref={fileInputRef}
                   type="file"

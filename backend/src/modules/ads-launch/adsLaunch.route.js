@@ -93,6 +93,7 @@ router.use(authenticate, authorize(USER_ROLES.SUPER_ADMIN, USER_ROLES.ADMIN));
 
 router.get('/media-folders', adsLaunchController.getMediaFolders);
 router.post('/media-folders', adsLaunchController.createMediaFolder);
+router.delete('/media-folders/:id', adsLaunchController.deleteMediaFolder);
 router.get('/media', adsLaunchController.getMediaAssets);
 router.post('/media', handleMediaUpload, adsLaunchController.createMediaAsset);
 router.post('/media/chunk', handleMediaChunkUpload, adsLaunchController.uploadMediaChunk);

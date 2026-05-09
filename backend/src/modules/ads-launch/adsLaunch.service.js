@@ -1612,6 +1612,34 @@ async function listMediaFolders({ actor }) {
   return mediaFolders.map((mediaFolder) => mediaFolder.toSafeObject());
 }
 
+async function getMediaFolderTreeIds({ folderId, actor }) {
+  const rootFolder = await getMediaFolderDocForActor(folderId, actor);
+  const mediaFolders = await AdsLaunchMediaFolder.find({
+    ...mediaLibraryAccessFilter(actor),
+  }).select('_id parent');
+  const foldersByParent = mediaFolders.reduce((groups, folder) => {
+    const parentId = folder.parent?._id?.toString?.() || folder.parent?.toString?.() || '';
+    const nextGroup = groups.get(parentId) || [];
+    nextGroup.push(folder);
+    groups.set(parentId, nextGroup);
+    return groups;
+  }, new Map());
+  const folderIds = [];
+  const stack = [rootFolder];
+
+  while (stack.length) {
+    const folder = stack.pop();
+    const currentFolderId = folder._id.toString();
+    folderIds.push(folder._id);
+    stack.push(...(foldersByParent.get(currentFolderId) || []));
+  }
+
+  return {
+    folderIds,
+    rootFolder,
+  };
+}
+
 async function createMediaFolder({ name, parentId = null, brandId = '', brandName = '', actor, req }) {
   const normalizedName = normalizeText(name);
 
@@ -1880,6 +1908,59 @@ async function deleteMediaAsset({ mediaId, actor, req }) {
     },
     req,
   });
+}
+
+async function deleteMediaFolder({ folderId, actor, req }) {
+  const { folderIds, rootFolder } = await getMediaFolderTreeIds({
+    folderId,
+    actor,
+  });
+  const mediaAssets = await AdsLaunchMedia.find({
+    ...mediaLibraryAccessFilter(actor),
+    folder: {
+      $in: folderIds,
+    },
+  });
+
+  mediaAssets.forEach((mediaAsset) => {
+    deleteStoredMediaLibraryAsset(mediaAsset.media);
+    deleteStoredMediaLibraryAsset(mediaAsset.thumbnail);
+  });
+
+  const mediaDeleteResult = mediaAssets.length
+    ? await AdsLaunchMedia.deleteMany({
+        ...mediaLibraryAccessFilter(actor),
+        _id: {
+          $in: mediaAssets.map((mediaAsset) => mediaAsset._id),
+        },
+      })
+    : { deletedCount: 0 };
+  const folderDeleteResult = await AdsLaunchMediaFolder.deleteMany({
+    ...mediaLibraryAccessFilter(actor),
+    _id: {
+      $in: folderIds,
+    },
+  });
+
+  await writeActivityLog({
+    user: actor,
+    action: 'ADS_MEDIA_FOLDER_DELETED',
+    entity: 'AdsLaunchMediaFolder',
+    entityId: rootFolder._id.toString(),
+    metadata: {
+      name: rootFolder.name,
+      brandId: rootFolder.brandId,
+      brandName: rootFolder.brandName,
+      deletedFolders: folderDeleteResult.deletedCount || 0,
+      deletedMedia: mediaDeleteResult.deletedCount || 0,
+    },
+    req,
+  });
+
+  return {
+    deletedFolders: folderDeleteResult.deletedCount || 0,
+    deletedMedia: mediaDeleteResult.deletedCount || 0,
+  };
 }
 
 async function updateMediaAssetBrand({ mediaId, brandId = '', brandName = '', actor, req }) {
@@ -3986,6 +4067,7 @@ module.exports = {
   createMediaFolder,
   createTemplate,
   deleteMediaAsset,
+  deleteMediaFolder,
   deleteTemplate,
   failPublishSession,
   getMediaAssetForActor,

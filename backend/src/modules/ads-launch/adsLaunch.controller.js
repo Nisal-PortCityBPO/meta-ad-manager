@@ -146,6 +146,19 @@ const deleteMediaAsset = asyncHandler(async (req, res) => {
   });
 });
 
+const deleteMediaFolder = asyncHandler(async (req, res) => {
+  const result = await adsLaunchService.deleteMediaFolder({
+    folderId: req.params.id,
+    actor: req.user,
+    req,
+  });
+
+  res.json({
+    message: `Folder deleted successfully (${result.deletedFolders} folder${result.deletedFolders === 1 ? '' : 's'}, ${result.deletedMedia} media item${result.deletedMedia === 1 ? '' : 's'})`,
+    ...result,
+  });
+});
+
 const retryFailedLaunch = asyncHandler(async (req, res) => {
   const result = await adsManageService.retryFailedLaunch({
     tokenId: req.body.tokenId,
@@ -377,6 +390,7 @@ module.exports = {
   createMediaFolder,
   createTemplate,
   deleteMediaAsset,
+  deleteMediaFolder,
   deleteTemplate,
   getMediaAsset,
   getMediaAssets,
