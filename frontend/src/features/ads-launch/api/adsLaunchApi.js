@@ -209,6 +209,16 @@ export const adsLaunchApi = {
       method: 'POST',
       body: payload,
     }),
+  getPublishQueue: () => apiRequest('/ads-launch/publish-queue'),
+  runPublishQueue: (payload = {}) =>
+    apiRequest('/ads-launch/publish-queue/run', {
+      method: 'POST',
+      body: payload,
+    }),
+  clearPublishQueue: () =>
+    apiRequest('/ads-launch/publish-queue', {
+      method: 'DELETE',
+    }),
   publishLaunch: (payload) =>
     apiRequest('/ads-launch/publish', {
       method: 'POST',

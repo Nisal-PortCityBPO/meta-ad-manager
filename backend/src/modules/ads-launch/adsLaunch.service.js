@@ -32,6 +32,10 @@ const MEDIA_LIBRARY_MAX_VIDEO_BYTES = 100 * 1024 * 1024;
 const MEDIA_LIBRARY_MAX_THUMBNAIL_BYTES = 10 * 1024 * 1024;
 const MEDIA_LIBRARY_IMAGE_MIME_TYPES = new Set(['image/jpeg']);
 const MEDIA_LIBRARY_VIDEO_MIME_TYPES = new Set(['video/mp4', 'video/quicktime']);
+const META_QUEUEABLE_ERROR_CODES = new Set([4, 17, 32, 368, 613, 80004]);
+const META_QUEUEABLE_HTTP_STATUSES = new Set([429, 500, 502, 503, 504]);
+const DEFAULT_QUEUE_RETRY_AFTER_SECONDS = 300;
+const MAX_QUEUE_RETRY_AFTER_SECONDS = 3600;
 
 const SUPPORTED_WEBSITE_EVENTS = new Set([
   'LEAD',
@@ -399,6 +403,69 @@ function buildMetaErrorMessage(path, payload) {
   }
 
   return details.length ? `${message}. ${details.join('. ')}` : message;
+}
+
+function getRetryAfterSeconds(response) {
+  const headerValue = response?.headers?.get?.('retry-after');
+
+  if (!headerValue) {
+    return DEFAULT_QUEUE_RETRY_AFTER_SECONDS;
+  }
+
+  const numericValue = Number.parseInt(headerValue, 10);
+
+  if (Number.isFinite(numericValue) && numericValue > 0) {
+    return Math.min(numericValue, MAX_QUEUE_RETRY_AFTER_SECONDS);
+  }
+
+  const retryDate = new Date(headerValue);
+  const retrySeconds = Math.ceil((retryDate.getTime() - Date.now()) / 1000);
+
+  return Number.isFinite(retrySeconds) && retrySeconds > 0
+    ? Math.min(retrySeconds, MAX_QUEUE_RETRY_AFTER_SECONDS)
+    : DEFAULT_QUEUE_RETRY_AFTER_SECONDS;
+}
+
+function isMetaPublishQueueableError({ payload, response }) {
+  const error = payload?.error || {};
+  const code = Number(error.code);
+  const status = Number(response?.status);
+  const message = [error.message, error.error_user_title, error.error_user_msg]
+    .filter(Boolean)
+    .join(' ')
+    .toLowerCase();
+
+  if (META_QUEUEABLE_HTTP_STATUSES.has(status) || META_QUEUEABLE_ERROR_CODES.has(code)) {
+    return true;
+  }
+
+  return [
+    'api access blocked',
+    'api access has been blocked',
+    'api access is blocked',
+    'application request limit',
+    'business use case usage',
+    'call count',
+    'calls to this api have exceeded',
+    'currently blocked',
+    'please reduce',
+    'rate limit',
+    'request limit',
+    'temporarily blocked',
+    'temporarily unavailable',
+    'too many calls',
+    'try again later',
+    'user request limit',
+  ].some((pattern) => message.includes(pattern));
+}
+
+function createMetaApiHttpError({ path, payload, response }) {
+  const queueable = isMetaPublishQueueableError({ payload, response });
+  return new HttpError(400, buildMetaErrorMessage(path, payload), {
+    metaError: payload?.error || null,
+    publishQueueable: queueable,
+    retryAfterSeconds: queueable ? getRetryAfterSeconds(response) : null,
+  });
 }
 
 function getSpecialAdCategoriesValue(value) {
@@ -1685,7 +1752,12 @@ async function postToMeta({ token, path, params = {}, formData = null, videoHost
   const payload = await response.json().catch(() => ({}));
 
   if (!response.ok || payload.error) {
-    throw new HttpError(400, buildMetaErrorMessage(path, payload));
+    await tokenService.markTokenBlockedFromMetaError({
+      tokenId: token.id,
+      payload,
+      tokenType: token.tokenType,
+    });
+    throw createMetaApiHttpError({ path, payload, response });
   }
 
   await tokenService.markTokenConnected({ tokenId: token.id, tokenType: token.tokenType });
@@ -1715,7 +1787,12 @@ async function getFromMeta({ token, path, params = {}, videoHost = false }) {
   const payload = await response.json().catch(() => ({}));
 
   if (!response.ok || payload.error) {
-    throw new HttpError(400, buildMetaErrorMessage(path, payload));
+    await tokenService.markTokenBlockedFromMetaError({
+      tokenId: token.id,
+      payload,
+      tokenType: token.tokenType,
+    });
+    throw createMetaApiHttpError({ path, payload, response });
   }
 
   await tokenService.markTokenConnected({ tokenId: token.id, tokenType: token.tokenType });
@@ -2634,7 +2711,11 @@ async function runPublishStep(stepLabel, operation, progress = null, progressCon
       error: error.message,
       message: `${progressContext.accountLabel || 'Account'}: ${stepLabel} failed`,
     });
-    throw new HttpError(error.statusCode || 400, `${stepLabel} failed. ${error.message}`);
+    throw new HttpError(error.statusCode || 400, `${stepLabel} failed. ${error.message}`, {
+      metaError: error.metaError || null,
+      publishQueueable: Boolean(error.publishQueueable),
+      retryAfterSeconds: error.retryAfterSeconds || null,
+    });
   }
 }
 
@@ -2804,6 +2885,159 @@ function getResumeStateForAccount(resumeStateMap, adAccountId) {
     resumeStateMap.get(`act_${normalizedAdAccountId.replace(/^act_/, '')}`) ||
     {}
   );
+}
+
+function isDeletedMetaStatus(value) {
+  return normalizeText(value).toUpperCase() === 'DELETED';
+}
+
+function getResumeMetaUnavailableReason(error) {
+  const message = normalizeText(error?.message);
+  const lowerMessage = message.toLowerCase();
+  const missingPatterns = [
+    'does not exist',
+    'object does not exist',
+    'unsupported get request',
+    'cannot be loaded',
+    'no object found',
+    'not found',
+    'was deleted',
+    'deleted',
+  ];
+
+  if (missingPatterns.some((pattern) => lowerMessage.includes(pattern))) {
+    return message || 'Meta object is no longer available';
+  }
+
+  return '';
+}
+
+async function getResumeMetaObject({ token, objectId, fields }) {
+  try {
+    const payload = await getFromMeta({
+      token,
+      path: objectId,
+      params: {
+        fields,
+      },
+    });
+
+    return {
+      available: true,
+      payload,
+      reason: '',
+    };
+  } catch (error) {
+    const reason = getResumeMetaUnavailableReason(error);
+
+    if (!reason) {
+      throw error;
+    }
+
+    return {
+      available: false,
+      payload: null,
+      reason,
+    };
+  }
+}
+
+function hasDeletedStatus(payload = {}) {
+  return (
+    isDeletedMetaStatus(payload.status) ||
+    isDeletedMetaStatus(payload.effective_status) ||
+    isDeletedMetaStatus(payload.configured_status)
+  );
+}
+
+async function verifyResumeStateForAccount({ token, resumeState, progress, progressContext }) {
+  const nextState = {
+    ...resumeState,
+  };
+  const notices = [];
+
+  if (nextState.campaignId) {
+    const campaign = await getResumeMetaObject({
+      token,
+      objectId: nextState.campaignId,
+      fields: 'id,status,effective_status,configured_status',
+    });
+
+    if (!campaign.available || hasDeletedStatus(campaign.payload)) {
+      const reason = campaign.reason || 'Campaign was deleted in Meta';
+      notices.push(`Saved campaign ${nextState.campaignId} cannot be continued (${reason}). Recreating campaign, ad set, creative, and ad.`);
+      nextState.campaignId = '';
+      nextState.adSetId = '';
+      nextState.creativeId = '';
+      nextState.adId = '';
+    }
+  }
+
+  if (nextState.campaignId && nextState.adSetId) {
+    const adSet = await getResumeMetaObject({
+      token,
+      objectId: nextState.adSetId,
+      fields: 'id,campaign_id,status,effective_status,configured_status',
+    });
+
+    if (!adSet.available || hasDeletedStatus(adSet.payload)) {
+      const reason = adSet.reason || 'Ad set was deleted in Meta';
+      notices.push(`Saved ad set ${nextState.adSetId} cannot be continued (${reason}). Recreating ad set, creative, and ad.`);
+      nextState.adSetId = '';
+      nextState.creativeId = '';
+      nextState.adId = '';
+    } else if (adSet.payload?.campaign_id && adSet.payload.campaign_id !== nextState.campaignId) {
+      notices.push(`Saved ad set ${nextState.adSetId} belongs to a different campaign. Recreating ad set, creative, and ad.`);
+      nextState.adSetId = '';
+      nextState.creativeId = '';
+      nextState.adId = '';
+    }
+  }
+
+  if (nextState.creativeId) {
+    const creative = await getResumeMetaObject({
+      token,
+      objectId: nextState.creativeId,
+      fields: 'id,name',
+    });
+
+    if (!creative.available) {
+      notices.push(`Saved creative ${nextState.creativeId} cannot be continued (${creative.reason}). Recreating creative and ad.`);
+      nextState.creativeId = '';
+      nextState.adId = '';
+    }
+  }
+
+  if (nextState.adId) {
+    const ad = await getResumeMetaObject({
+      token,
+      objectId: nextState.adId,
+      fields: 'id,adset_id,status,effective_status,configured_status',
+    });
+
+    if (!ad.available || hasDeletedStatus(ad.payload)) {
+      const reason = ad.reason || 'Ad was deleted in Meta';
+      notices.push(`Saved ad ${nextState.adId} cannot be continued (${reason}). Recreating ad only.`);
+      nextState.adId = '';
+    } else if (nextState.adSetId && ad.payload?.adset_id && ad.payload.adset_id !== nextState.adSetId) {
+      notices.push(`Saved ad ${nextState.adId} belongs to a different ad set. Recreating ad only.`);
+      nextState.adId = '';
+    }
+  }
+
+  notices.forEach((message) => {
+    progress?.info({
+      ...progressContext,
+      step: 'resume-check',
+      status: 'active',
+      message,
+    });
+  });
+
+  return {
+    resumeState: nextState,
+    notices,
+  };
 }
 
 function mergeTemplateConfig(baseLaunch, campaignConfig = {}, mediaConfig = {}, templateNames = {}) {
@@ -3006,10 +3240,11 @@ async function publishLaunch({ payload, actor, req, onProgress = null, tokenType
       accountLabel,
     };
     const accountTemplate = accountLaunchMap.get(adAccountId);
-    const resumeState = getResumeStateForAccount(resumeStateMap, adAccountId);
+    let resumeState = getResumeStateForAccount(resumeStateMap, adAccountId);
     let accountResolved = null;
     let effectiveLaunch = launch;
     let creativeAssets = baseCreativeAssets;
+    let resumeNotices = [];
     let names = {};
     let campaign = null;
     let adSet = null;
@@ -3053,6 +3288,17 @@ async function publishLaunch({ payload, actor, req, onProgress = null, tokenType
         status: 'active',
         message: `${accountLabel}: starting`,
       });
+
+      if (resumeState.campaignId || resumeState.adSetId || resumeState.creativeId || resumeState.adId) {
+        const resumeCheck = await verifyResumeStateForAccount({
+          token,
+          resumeState,
+          progress,
+          progressContext,
+        });
+        resumeState = resumeCheck.resumeState;
+        resumeNotices = resumeCheck.notices;
+      }
 
       if (resumeState.campaignId) {
         campaign = { id: resumeState.campaignId };
@@ -3204,6 +3450,7 @@ async function publishLaunch({ payload, actor, req, onProgress = null, tokenType
         historyRecordId: historyRecord?.recordId || null,
         historySaved: Boolean(historyRecord),
         historyError,
+        resumeNotices,
       });
       progress.info({
         ...progressContext,
@@ -3231,14 +3478,35 @@ async function publishLaunch({ payload, actor, req, onProgress = null, tokenType
           thumbnail: creativeAssets?.thumbnail || null,
           accountLaunch: accountTemplate,
           error,
+          queue: error.publishQueueable
+            ? {
+                notify: false,
+                reason: error.message,
+                retryAfterSeconds: error.retryAfterSeconds,
+                tokenType: token.tokenType,
+              }
+            : null,
           actor,
           req,
         });
+        const queueStatus = failureRecord?.publishQueue?.status || 'NONE';
+        const queued = ['PENDING', 'BLOCKED', 'RUNNING'].includes(queueStatus);
+        if (queued) {
+          adsManageService.schedulePublishQueueRun?.(
+            failureRecord.publishQueue?.nextAttemptAt
+              ? Math.max(new Date(failureRecord.publishQueue.nextAttemptAt).getTime() - Date.now(), 0)
+              : 0
+          );
+        }
         Object.assign(failed[failed.length - 1], {
           historyRecordId: failureRecord?.recordId || null,
           campaignId: failureRecord?.campaignId || null,
           tokenId: failureRecord?.tokenId || token.id,
           canRetry: Boolean(failureRecord?.launch?.retryPayload),
+          queued,
+          queueStatus,
+          nextAttemptAt: failureRecord?.publishQueue?.nextAttemptAt || null,
+          retryAfterSeconds: error.retryAfterSeconds || null,
           resumeFromStep: failureRecord?.adId
             ? 'history save'
             : failureRecord?.creativeId
@@ -3268,9 +3536,9 @@ async function publishLaunch({ payload, actor, req, onProgress = null, tokenType
       progress.info({
         ...progressContext,
         step: 'account',
-        status: 'failed',
+        status: error.publishQueueable ? 'queued' : 'failed',
         error: error.message,
-        message: `${accountLabel}: publish failed`,
+        message: error.publishQueueable ? `${accountLabel}: publish queued after Meta/API block` : `${accountLabel}: publish failed`,
       });
     }
   }
@@ -3300,10 +3568,16 @@ async function publishLaunch({ payload, actor, req, onProgress = null, tokenType
     req,
   });
 
+  const queuedCount = failed.filter((item) => item.queued).length;
+  const hardFailedCount = failed.length - queuedCount;
   const publishResult = {
     message:
       failed.length > 0
-        ? `Publish completed with ${results.length} success and ${failed.length} failure`
+        ? queuedCount && !hardFailedCount
+          ? `Publish completed with ${results.length} success and ${queuedCount} queued retry`
+          : queuedCount
+            ? `Publish completed with ${results.length} success, ${hardFailedCount} failure, and ${queuedCount} queued retry`
+            : `Publish completed with ${results.length} success and ${hardFailedCount} failure`
         : 'Publish completed successfully',
     results,
     failed,
@@ -3311,6 +3585,7 @@ async function publishLaunch({ payload, actor, req, onProgress = null, tokenType
       requested: launch.selectedAdAccountIds.length,
       published: results.length,
       failed: failed.length,
+      queued: queuedCount,
     },
   };
 

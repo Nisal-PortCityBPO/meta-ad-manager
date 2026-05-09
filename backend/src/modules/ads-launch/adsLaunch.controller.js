@@ -151,6 +151,37 @@ const retryFailedLaunch = asyncHandler(async (req, res) => {
     tokenId: req.body.tokenId,
     campaignId: req.params.campaignId,
     tokenType: req.body.tokenType,
+    retryTokenId: req.body.retryTokenId,
+    actor: req.user,
+    req,
+  });
+
+  res.json(result);
+});
+
+const getPublishQueue = asyncHandler(async (req, res) => {
+  const result = await adsManageService.getPublishQueue({
+    actor: req.user,
+  });
+
+  res.json(result);
+});
+
+const runPublishQueue = asyncHandler(async (req, res) => {
+  const result = await adsManageService.runPublishQueue({
+    actor: req.user,
+    req,
+    tokenType: req.body.tokenType,
+    retryTokenId: req.body.retryTokenId,
+    force: req.body.force === true,
+    source: 'manual',
+  });
+
+  res.json(result);
+});
+
+const clearPublishQueue = asyncHandler(async (req, res) => {
+  const result = await adsManageService.clearPublishQueue({
     actor: req.user,
     req,
   });
@@ -269,6 +300,7 @@ const publishLaunchStream = async (req, res, next) => {
 };
 
 module.exports = {
+  clearPublishQueue,
   completeChunkedMediaAsset,
   createMediaAsset,
   createMediaFolder,
@@ -278,11 +310,13 @@ module.exports = {
   getMediaAsset,
   getMediaAssets,
   getMediaFolders,
+  getPublishQueue,
   getTemplates,
   getTemplateAsset,
   publishLaunch,
   publishLaunchStream,
   retryFailedLaunch,
+  runPublishQueue,
   uploadMediaChunk,
   updateMediaAssetBrand,
   updateTemplate,

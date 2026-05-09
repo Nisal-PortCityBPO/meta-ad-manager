@@ -296,6 +296,74 @@ const actionHistorySchema = new mongoose.Schema(
   }
 );
 
+const publishQueueSchema = new mongoose.Schema(
+  {
+    status: {
+      type: String,
+      default: 'NONE',
+      trim: true,
+      index: true,
+    },
+    reason: {
+      type: String,
+      default: '',
+      trim: true,
+    },
+    tokenType: {
+      type: String,
+      default: '',
+      trim: true,
+    },
+    source: {
+      type: String,
+      default: '',
+      trim: true,
+    },
+    queuedAt: {
+      type: Date,
+      default: null,
+    },
+    nextAttemptAt: {
+      type: Date,
+      default: null,
+    },
+    runningStartedAt: {
+      type: Date,
+      default: null,
+    },
+    completedAt: {
+      type: Date,
+      default: null,
+    },
+    clearedAt: {
+      type: Date,
+      default: null,
+    },
+    attemptCount: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
+    lastAttemptAt: {
+      type: Date,
+      default: null,
+    },
+    lastError: {
+      type: String,
+      default: '',
+      trim: true,
+    },
+    queuedBy: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'User',
+      default: null,
+    },
+  },
+  {
+    _id: false,
+  }
+);
+
 const managedCampaignSchema = new mongoose.Schema(
   {
     tokenId: {
@@ -439,6 +507,10 @@ const managedCampaignSchema = new mongoose.Schema(
       type: [actionHistorySchema],
       default: [],
     },
+    publishQueue: {
+      type: publishQueueSchema,
+      default: () => ({}),
+    },
   },
   {
     timestamps: true,
@@ -447,6 +519,7 @@ const managedCampaignSchema = new mongoose.Schema(
 
 managedCampaignSchema.index({ tokenId: 1, 'adAccount.id': 1, status: 1 });
 managedCampaignSchema.index({ tokenId: 1, updatedAt: -1 });
+managedCampaignSchema.index({ 'publishQueue.status': 1, 'publishQueue.nextAttemptAt': 1 });
 
 managedCampaignSchema.methods.toSafeObject = function toSafeObject() {
   return {
@@ -478,6 +551,24 @@ managedCampaignSchema.methods.toSafeObject = function toSafeObject() {
     deletedAt: this.deletedAt,
     lastActionAt: this.lastActionAt,
     lastMetaError: this.lastMetaError,
+    publishQueue: this.publishQueue
+      ? {
+          status: this.publishQueue.status || 'NONE',
+          reason: this.publishQueue.reason || '',
+          tokenType: this.publishQueue.tokenType || '',
+          source: this.publishQueue.source || '',
+          queuedAt: this.publishQueue.queuedAt,
+          nextAttemptAt: this.publishQueue.nextAttemptAt,
+          runningStartedAt: this.publishQueue.runningStartedAt,
+          completedAt: this.publishQueue.completedAt,
+          clearedAt: this.publishQueue.clearedAt,
+          attemptCount: this.publishQueue.attemptCount || 0,
+          lastAttemptAt: this.publishQueue.lastAttemptAt,
+          lastError: this.publishQueue.lastError || '',
+        }
+      : {
+          status: 'NONE',
+        },
     actionHistory: Array.isArray(this.actionHistory)
       ? this.actionHistory
           .slice(-10)

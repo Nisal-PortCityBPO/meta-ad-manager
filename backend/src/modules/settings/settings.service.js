@@ -129,18 +129,21 @@ function buildPublishSummaryText({ launch, result }) {
   const failed = Array.isArray(result?.failed) ? result.failed : [];
   const results = Array.isArray(result?.results) ? result.results : [];
   const summary = result?.summary || {};
+  const queuedCount = summary.queued ?? failed.filter((item) => item.queued).length;
+  const failedCount = Math.max((summary.failed ?? failed.length) - queuedCount, 0);
   const lines = [
     'Meta publish completed',
     `Launch: ${launch?.launchLabel || 'Ads Launch'}`,
     `Requested: ${summary.requested ?? results.length + failed.length}`,
     `Published: ${summary.published ?? results.length}`,
-    `Failed: ${summary.failed ?? failed.length}`,
+    `Failed: ${failedCount}`,
+    `Queued: ${queuedCount}`,
   ];
 
   if (failed.length) {
     lines.push('', 'Failed accounts:');
     failed.slice(0, 8).forEach((item, index) => {
-      lines.push(`${index + 1}. ${item.adAccountName || item.adAccountId}: ${item.message || 'Failed'}`);
+      lines.push(`${index + 1}. ${item.adAccountName || item.adAccountId}: ${item.message || 'Failed'}${item.queued ? ' (queued)' : ''}`);
     });
   }
 
@@ -167,8 +170,45 @@ async function notifyPublishSummary({ launch, result }) {
   }
 }
 
+function buildPublishQueueStatusText({ status, message, records = [] }) {
+  const lines = [
+    `Meta publish queue ${status}`,
+    message || '',
+  ].filter(Boolean);
+
+  if (records.length) {
+    lines.push('', 'Queue records:');
+    records.slice(0, 8).forEach((record, index) => {
+      const queue = record.publishQueue || {};
+      const nextAttempt = queue.nextAttemptAt ? new Date(queue.nextAttemptAt).toLocaleString() : '';
+      lines.push(
+        `${index + 1}. ${record.adAccount?.name || record.adAccount?.id || record.campaignId}: ${queue.status || record.status}${nextAttempt ? `, next ${nextAttempt}` : ''}`
+      );
+      if (queue.lastError || record.lastMetaError) {
+        lines.push(`   ${queue.lastError || record.lastMetaError}`);
+      }
+    });
+  }
+
+  return lines.join('\n').slice(0, 3900);
+}
+
+async function notifyPublishQueueStatus({ status, message, records = [] }) {
+  try {
+    return await sendTelegramMessage({
+      text: buildPublishQueueStatusText({ status, message, records }),
+    });
+  } catch (error) {
+    return {
+      sent: false,
+      error: error.message,
+    };
+  }
+}
+
 module.exports = {
   getTelegramSettings,
+  notifyPublishQueueStatus,
   notifyPublishSummary,
   testTelegramSettings,
   updateTelegramSettings,

@@ -19,6 +19,10 @@ const getProgressTone = (status) => {
     return 'bg-emerald-50 text-emerald-700';
   }
 
+  if (status === 'queued') {
+    return 'bg-amber-50 text-amber-700';
+  }
+
   if (status === 'failed') {
     return 'bg-red-50 text-red-700';
   }
@@ -29,6 +33,10 @@ const getProgressTone = (status) => {
 const getStatusIcon = (status) => {
   if (status === 'completed') {
     return CheckCircle2;
+  }
+
+  if (status === 'queued') {
+    return Clock3;
   }
 
   if (status === 'failed') {
@@ -46,6 +54,13 @@ const PublishProgressPanel = ({ events, label = 'Live publish process', latestEr
   const progressData = progress?.progress || {};
   const percent = progressData.percent || 0;
   const StatusIcon = getStatusIcon(progress?.status);
+  const latestErrorTone =
+    progress?.status === 'queued'
+      ? 'border-amber-100 bg-amber-50 text-amber-700'
+      : 'border-red-100 bg-red-50 text-red-700';
+  const resumeNotices = Array.isArray(latestResult?.results)
+    ? latestResult.results.flatMap((result) => (Array.isArray(result.resumeNotices) ? result.resumeNotices : []))
+    : [];
 
   return (
     <div className="rounded-2xl border border-sky-100 bg-white p-4 shadow-sm shadow-sky-100/70">
@@ -56,7 +71,15 @@ const PublishProgressPanel = ({ events, label = 'Live publish process', latestEr
             <StatusIcon
               size={18}
               strokeWidth={2.4}
-              className={progress?.status === 'active' ? 'animate-spin text-sky-600' : progress?.status === 'failed' ? 'text-red-600' : 'text-emerald-600'}
+              className={
+                progress?.status === 'active'
+                  ? 'animate-spin text-sky-600'
+                  : progress?.status === 'failed'
+                    ? 'text-red-600'
+                    : progress?.status === 'queued'
+                      ? 'text-amber-600'
+                      : 'text-emerald-600'
+              }
             />
             <p className="text-sm font-black text-slate-950">{progress?.message || latestResult?.message || latestError || 'No active publish'}</p>
           </div>
@@ -83,11 +106,23 @@ const PublishProgressPanel = ({ events, label = 'Live publish process', latestEr
       {latestResult ? (
         <div className="mt-4 rounded-xl border border-emerald-100 bg-emerald-50 px-3 py-3 text-sm font-semibold text-emerald-800">
           Published {latestResult.summary?.published || 0} of {latestResult.summary?.requested || 0} requested accounts.
+          {latestResult.summary?.queued ? ` ${latestResult.summary.queued} queued for automatic retry.` : ''}
         </div>
       ) : null}
 
       {latestError ? (
-        <div className="mt-4 rounded-xl border border-red-100 bg-red-50 px-3 py-3 text-sm font-semibold text-red-700">{latestError}</div>
+        <div className={`mt-4 rounded-xl border px-3 py-3 text-sm font-semibold ${latestErrorTone}`}>{latestError}</div>
+      ) : null}
+
+      {resumeNotices.length ? (
+        <div className="mt-4 rounded-xl border border-amber-100 bg-amber-50 px-3 py-3 text-sm font-semibold text-amber-800">
+          <p className="font-black">Resume notes</p>
+          <div className="mt-2 space-y-1">
+            {resumeNotices.slice(0, 4).map((notice, index) => (
+              <p key={`${notice}-${index}`}>{notice}</p>
+            ))}
+          </div>
+        </div>
       ) : null}
 
       {events.length ? (
