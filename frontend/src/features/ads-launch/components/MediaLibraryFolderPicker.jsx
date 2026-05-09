@@ -177,7 +177,7 @@ const MediaLibraryFolderPicker = ({
               <Upload size={16} strokeWidth={2.3} />
               Upload media
             </a>
-            <button type="button" onClick={onRefresh} disabled={loading} className="flex h-10 items-center gap-2 rounded-xl border border-sky-100 bg-white px-4 text-sm font-black text-slate-700 transition hover:bg-sky-50 disabled:opacity-50">
+            <button type="button" onClick={() => onRefresh?.()} disabled={loading} className="flex h-10 items-center gap-2 rounded-xl border border-sky-100 bg-white px-4 text-sm font-black text-slate-700 transition hover:bg-sky-50 disabled:opacity-50">
               <RefreshCw size={16} className={loading ? 'animate-spin' : ''} />
               Refresh
             </button>

@@ -59,8 +59,12 @@ const PublishStatusControl = () => {
     isPublishing,
     latestError,
     latestResult,
+    pauseBusy,
     progress,
     publishHistory,
+    requestPausePublish,
+    resumeBusy,
+    resumePausedPublish,
     showStartPopup,
   } = usePublishProgress();
   const [panelOpen, setPanelOpen] = useState(false);
@@ -69,6 +73,7 @@ const PublishStatusControl = () => {
   const percent = progress?.progress?.percent || 0;
   const hasPublishState = Boolean(isPublishing || progress || latestResult || latestError);
   const historyForPanel = publishHistory.filter((item) => !hasPublishState || item.id !== currentPublishId);
+  const currentPublishItem = publishHistory.find((item) => item.id === currentPublishId) || null;
   const statusLabel = isPublishing ? 'Publishing ads' : latestError ? 'Publish failed' : latestResult ? 'Publish complete' : 'Publish status';
   const statusMessage = progress?.message || latestResult?.message || latestError || 'No active publish';
   const progressData = progress?.progress || {};
@@ -99,6 +104,24 @@ const PublishStatusControl = () => {
     window.addEventListener('pointerdown', handlePointerDown);
     return () => window.removeEventListener('pointerdown', handlePointerDown);
   }, [panelOpen]);
+
+  const pauseLivePublish = async () => {
+    try {
+      const data = await requestPausePublish();
+      toast.success(data.message || 'Pause requested');
+    } catch (requestError) {
+      toast.error(requestError.message);
+    }
+  };
+
+  const resumePublish = async (sessionId = currentPublishId) => {
+    try {
+      const data = await resumePausedPublish(sessionId);
+      toast.success(data.message || 'Publish is continuing');
+    } catch (requestError) {
+      toast.error(requestError.message);
+    }
+  };
 
   return (
     <div
@@ -162,7 +185,19 @@ const PublishStatusControl = () => {
       {hasPublishState && panelOpen ? (
         <div className="absolute right-0 top-14 z-50 max-h-[min(80vh,720px)] w-[min(92vw,520px)] overflow-y-auto rounded-2xl border border-sky-100 bg-white p-3 shadow-xl shadow-sky-200/70">
           {hasPublishState ? (
-            <PublishProgressPanel events={events} latestError={latestError} latestResult={latestResult} progress={progress} compact />
+            <PublishProgressPanel
+              canPause={Boolean(currentPublishItem?.canPause)}
+              canResume={Boolean(currentPublishItem?.canResume)}
+              events={events}
+              latestError={latestError}
+              latestResult={latestResult}
+              onPause={pauseLivePublish}
+              onResume={() => resumePublish(currentPublishId)}
+              pauseBusy={pauseBusy}
+              progress={progress}
+              resumeBusy={resumeBusy}
+              compact
+            />
           ) : null}
           {historyForPanel.length || !hasPublishState ? (
           <div className={hasPublishState ? 'mt-3 border-t border-sky-50 pt-3' : ''}>
@@ -172,7 +207,12 @@ const PublishStatusControl = () => {
                 {historyForPanel.length}
               </span>
             </div>
-            <PublishHistoryList history={historyForPanel} limit={5} />
+            <PublishHistoryList
+              history={historyForPanel}
+              limit={5}
+              onResumePublish={resumePublish}
+              resumingSessionId={resumeBusy ? currentPublishId : ''}
+            />
           </div>
           ) : null}
         </div>
@@ -204,7 +244,7 @@ const PublishStatusControl = () => {
 
 const NotificationsControl = () => {
   const navigate = useNavigate();
-  const { markPublishHistorySeen, publishHistory, publishHistoryUnreadCount } = usePublishProgress();
+  const { markPublishHistorySeen, publishHistory, publishHistoryUnreadCount, resumeBusy, resumePausedPublish } = usePublishProgress();
   const { publishTokenType } = useMetaKeySettings();
   const [open, setOpen] = useState(false);
   const [retryingRecordId, setRetryingRecordId] = useState('');
@@ -243,6 +283,15 @@ const NotificationsControl = () => {
       toast.error(requestError.message);
     } finally {
       setRetryingRecordId('');
+    }
+  };
+
+  const resumePublish = async (sessionId) => {
+    try {
+      const data = await resumePausedPublish(sessionId);
+      toast.success(data.message || 'Publish is continuing');
+    } catch (requestError) {
+      toast.error(requestError.message);
     }
   };
 
@@ -292,7 +341,14 @@ const NotificationsControl = () => {
               Open
             </button>
           </div>
-          <PublishHistoryList history={publishHistory} limit={3} onRetryFailed={retryFailedAccount} retryingRecordId={retryingRecordId} />
+          <PublishHistoryList
+            history={publishHistory}
+            limit={3}
+            onResumePublish={resumePublish}
+            onRetryFailed={retryFailedAccount}
+            resumingSessionId={resumeBusy ? publishHistory.find((item) => item.status === 'active')?.id || '' : ''}
+            retryingRecordId={retryingRecordId}
+          />
         </div>
       ) : null}
     </div>

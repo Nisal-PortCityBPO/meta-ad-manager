@@ -1,4 +1,4 @@
-import { CheckCircle2, Clock3, LoaderCircle, XCircle } from 'lucide-react';
+import { CheckCircle2, Clock3, LoaderCircle, PauseCircle, Play, XCircle } from 'lucide-react';
 
 export const formatDuration = (seconds) => {
   if (seconds === null || seconds === undefined) {
@@ -23,6 +23,10 @@ const getProgressTone = (status) => {
     return 'bg-amber-50 text-amber-700';
   }
 
+  if (status === 'paused' || status === 'pausing') {
+    return 'bg-orange-50 text-orange-700';
+  }
+
   if (status === 'failed') {
     return 'bg-red-50 text-red-700';
   }
@@ -39,6 +43,10 @@ const getStatusIcon = (status) => {
     return Clock3;
   }
 
+  if (status === 'paused') {
+    return PauseCircle;
+  }
+
   if (status === 'failed') {
     return XCircle;
   }
@@ -46,7 +54,19 @@ const getStatusIcon = (status) => {
   return LoaderCircle;
 };
 
-const PublishProgressPanel = ({ events, label = 'Live publish process', latestError, latestResult, progress }) => {
+const PublishProgressPanel = ({
+  canPause = false,
+  canResume = false,
+  events,
+  label = 'Live publish process',
+  latestError,
+  latestResult,
+  onPause = null,
+  onResume = null,
+  pauseBusy = false,
+  progress,
+  resumeBusy = false,
+}) => {
   if (!progress && !events.length && !latestResult && !latestError) {
     return null;
   }
@@ -54,6 +74,9 @@ const PublishProgressPanel = ({ events, label = 'Live publish process', latestEr
   const progressData = progress?.progress || {};
   const percent = progressData.percent || 0;
   const StatusIcon = getStatusIcon(progress?.status);
+  const showPause = Boolean(onPause && canPause && progress?.status === 'active');
+  const showResume = Boolean(onResume && canResume && progress?.status === 'paused');
+  const visibleEvents = [...events].reverse();
   const latestErrorTone =
     progress?.status === 'queued'
       ? 'border-amber-100 bg-amber-50 text-amber-700'
@@ -72,22 +95,48 @@ const PublishProgressPanel = ({ events, label = 'Live publish process', latestEr
               size={18}
               strokeWidth={2.4}
               className={
-                progress?.status === 'active'
+                progress?.status === 'active' || progress?.status === 'pausing'
                   ? 'animate-spin text-sky-600'
                   : progress?.status === 'failed'
                     ? 'text-red-600'
                     : progress?.status === 'queued'
                       ? 'text-amber-600'
-                      : 'text-emerald-600'
+                      : progress?.status === 'paused' || progress?.status === 'pausing'
+                        ? 'text-orange-600'
+                        : 'text-emerald-600'
               }
             />
             <p className="text-sm font-black text-slate-950">{progress?.message || latestResult?.message || latestError || 'No active publish'}</p>
           </div>
         </div>
-        <span className="inline-flex items-center gap-2 rounded-full bg-sky-50 px-3 py-1 text-xs font-black text-sky-700">
-          <Clock3 size={13} strokeWidth={2.4} />
-          ETA {formatDuration(progressData.etaSeconds)}
-        </span>
+        <div className="flex flex-wrap items-center gap-2">
+          {showPause ? (
+            <button
+              type="button"
+              onClick={onPause}
+              disabled={pauseBusy}
+              className="inline-flex h-9 items-center gap-2 rounded-lg border border-orange-100 bg-orange-50 px-3 text-xs font-black uppercase tracking-[0.12em] text-orange-700 transition hover:bg-orange-100 disabled:opacity-60"
+            >
+              {pauseBusy ? <LoaderCircle size={14} className="animate-spin" /> : <PauseCircle size={14} />}
+              Pause after current
+            </button>
+          ) : null}
+          {showResume ? (
+            <button
+              type="button"
+              onClick={onResume}
+              disabled={resumeBusy}
+              className="inline-flex h-9 items-center gap-2 rounded-lg bg-sky-600 px-3 text-xs font-black uppercase tracking-[0.12em] text-white transition hover:bg-sky-700 disabled:opacity-60"
+            >
+              {resumeBusy ? <LoaderCircle size={14} className="animate-spin" /> : <Play size={14} />}
+              Continue
+            </button>
+          ) : null}
+          <span className="inline-flex items-center gap-2 rounded-full bg-sky-50 px-3 py-1 text-xs font-black text-sky-700">
+            <Clock3 size={13} strokeWidth={2.4} />
+            ETA {formatDuration(progressData.etaSeconds)}
+          </span>
+        </div>
       </div>
 
       <div className="mt-4">
@@ -125,9 +174,9 @@ const PublishProgressPanel = ({ events, label = 'Live publish process', latestEr
         </div>
       ) : null}
 
-      {events.length ? (
+      {visibleEvents.length ? (
         <div className="mt-4 max-h-96 space-y-2 overflow-y-auto pr-1">
-          {events.map((event, index) => (
+          {visibleEvents.map((event, index) => (
             <div key={`${event.timestamp}-${event.step}-${index}`} className="flex items-start gap-3 rounded-xl bg-slate-50 px-3 py-3">
               <span className={`mt-0.5 rounded-full px-2 py-0.5 text-[10px] font-black uppercase ${getProgressTone(event.status)}`}>
                 {event.status || 'active'}

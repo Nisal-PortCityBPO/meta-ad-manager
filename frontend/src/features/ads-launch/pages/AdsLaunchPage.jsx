@@ -156,8 +156,12 @@ const staticDefaultOptions = {
   ],
   bidStrategy: [
     { value: 'LOWEST_COST_WITHOUT_CAP', label: 'Lowest cost' },
+    { value: 'LOWEST_COST_WITH_BID_CAP', label: 'Bid cap' },
+    { value: 'COST_CAP', label: 'Cost cap' },
   ],
 };
+
+const cappedBidStrategies = new Set(['LOWEST_COST_WITH_BID_CAP', 'COST_CAP']);
 
 const defaultStaticDefaults = {
   buyingType: 'AUCTION',
@@ -171,6 +175,7 @@ const defaultStaticDefaults = {
   genderTargeting: 'ALL',
   billingEvent: 'IMPRESSIONS',
   bidStrategy: 'LOWEST_COST_WITHOUT_CAP',
+  bidAmount: '',
 };
 
 const emptyForm = {
@@ -493,7 +498,7 @@ const getScheduleValidationError = (form) => {
   return '';
 };
 
-const getLaunchMissingFields = ({ activeMediaAsset, activeThumbnailAsset, form, isVideoAsset, loadingAssets, loadingPixels, pixelRequired }) => {
+const getLaunchMissingFields = ({ activeMediaAsset, activeThumbnailAsset, bidAmountRequired, form, isVideoAsset, loadingAssets, loadingPixels, pixelRequired }) => {
   const missing = [];
 
   if (!form.countries?.length) missing.push('countries');
@@ -508,6 +513,7 @@ const getLaunchMissingFields = ({ activeMediaAsset, activeThumbnailAsset, form, 
   if (!form.primaryText.trim()) missing.push('primary text');
   if (!form.headline.trim()) missing.push('headline');
   if (!form.websiteUrl.trim()) missing.push('destination URL');
+  if (bidAmountRequired && (!form.staticDefaults.bidAmount || Number(form.staticDefaults.bidAmount) <= 0)) missing.push('bid/cost cap amount');
   if (!activeMediaAsset) missing.push('creative file');
   if (isVideoAsset && !activeThumbnailAsset) missing.push('video thumbnail');
 
@@ -824,6 +830,7 @@ const AdsLaunchPage = () => {
   );
   const currentObjective = normalizeObjective(form.objective);
   const pixelRequired = currentObjective === 'OUTCOME_LEADS' || currentObjective === 'OUTCOME_SALES';
+  const bidAmountRequired = cappedBidStrategies.has(form.staticDefaults.bidStrategy);
   const scheduleValidationError = getScheduleValidationError(form);
   const canGenerate = Boolean(
     form.brandId &&
@@ -838,6 +845,7 @@ const AdsLaunchPage = () => {
       form.headline.trim() &&
       form.primaryText.trim() &&
       form.websiteUrl.trim() &&
+      (!bidAmountRequired || Number(form.staticDefaults.bidAmount) > 0) &&
       !scheduleValidationError
   );
   const canPublish = Boolean(canGenerate && activeMediaAsset && (!isVideoAsset || activeThumbnailAsset));
@@ -1837,6 +1845,7 @@ const AdsLaunchPage = () => {
       const missingFields = getLaunchMissingFields({
         activeMediaAsset,
         activeThumbnailAsset,
+        bidAmountRequired,
         form,
         isVideoAsset,
         loadingAssets,
@@ -1850,15 +1859,20 @@ const AdsLaunchPage = () => {
     setPublishing(true);
     setLatestPublish(null);
     setCreativeUploadProgress(null);
-    beginPublish({
-      title: form.launchLabel ? `Ads Launch: ${form.launchLabel}` : 'Ads Launch publish',
-      source: 'Ads Launch',
+    const publishTitle = form.launchLabel ? `Ads Launch: ${form.launchLabel}` : 'Ads Launch publish';
+    const publishSource = 'Ads Launch';
+    const publishSessionId = beginPublish({
+      title: publishTitle,
+      source: publishSource,
     });
 
     try {
       const payload = {
         ...(await buildPublishPayload()),
         tokenType: publishTokenType,
+        publishSessionId,
+        publishTitle,
+        publishSource,
       };
       const data = await adsLaunchApi.publishLaunchStream(payload, {
         onProgress: pushPublishEvent,
@@ -3000,6 +3014,26 @@ const AdsLaunchPage = () => {
                     ))}
                   </select>
                 </div>
+
+                <div className="space-y-2 md:col-span-2">
+                  <FieldLabel htmlFor="default-bid-amount">Bid/cost cap amount</FieldLabel>
+                  <input
+                    id="default-bid-amount"
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    value={form.staticDefaults.bidAmount || ''}
+                    onChange={(event) => updateStaticDefault('bidAmount', event.target.value)}
+                    disabled={!bidAmountRequired}
+                    placeholder={bidAmountRequired ? 'Example: 5.00' : 'Only for capped strategies'}
+                    className="h-12 w-full rounded-xl border border-sky-100 bg-white px-4 outline-none transition focus:border-sky-400 focus:ring-4 focus:ring-sky-100 disabled:bg-slate-50 disabled:text-slate-400"
+                  />
+                  <p className="text-xs font-semibold text-slate-400">
+                    {bidAmountRequired
+                      ? 'Used as Meta bid_amount in the ad account currency.'
+                      : 'Lowest cost does not need a bid amount.'}
+                  </p>
+                </div>
               </div>
             ) : (
               <div className="space-y-3">
@@ -3063,6 +3097,14 @@ const AdsLaunchPage = () => {
                     {getOptionLabel(staticDefaultOptions.bidStrategy, form.staticDefaults.bidStrategy)}
                   </span>
                 </div>
+                {bidAmountRequired ? (
+                  <div className="flex items-start justify-between gap-3 rounded-xl bg-amber-50 px-4 py-3">
+                    <span className="text-sm font-semibold text-amber-700">Bid/cost cap amount</span>
+                    <span className="text-right text-sm font-black text-amber-900">
+                      {form.staticDefaults.bidAmount || 'Missing'}
+                    </span>
+                  </div>
+                ) : null}
               </div>
             )}
           </DashboardPanel>

@@ -24,6 +24,7 @@ const defaultStaticDefaults = {
   genderTargeting: 'ALL',
   billingEvent: 'IMPRESSIONS',
   bidStrategy: 'LOWEST_COST_WITHOUT_CAP',
+  bidAmount: '',
 };
 
 const defaultWebsiteEventByObjective = {
@@ -163,6 +164,14 @@ const TemplatePreviewModal = ({ template, onClose }) => {
             <TemplateDetail label="Daily budget" value={config.dailyBudget} />
             <TemplateDetail label="Publish status" value={campaignStatus} />
             <TemplateDetail label="Budget level" value={config.staticDefaults?.budgetLevel} />
+            <TemplateDetail
+              label="Bid strategy"
+              value={
+                config.staticDefaults?.bidAmount
+                  ? `${config.staticDefaults?.bidStrategy || 'LOWEST_COST_WITHOUT_CAP'} (${config.staticDefaults.bidAmount})`
+                  : config.staticDefaults?.bidStrategy || 'LOWEST_COST_WITHOUT_CAP'
+              }
+            />
             <TemplateDetail label="Dynamic creative" value={config.staticDefaults?.dynamicCreative} />
             <TemplateDetail label="Audience age" value={`${config.staticDefaults?.audienceAgeMin || '21'} - ${config.staticDefaults?.audienceAgeMax || '65'}`} />
             <TemplateDetail label="Schedule" value={config.scheduleStart && config.scheduleEnd ? `${config.scheduleStart} -> ${config.scheduleEnd}` : 'Not scheduled'} />
@@ -381,6 +390,7 @@ const DynamicAdsLaunchPage = () => {
   const [brandId, setBrandId] = useState('');
   const [tokenId, setTokenId] = useState('');
   const [pageId, setPageId] = useState('');
+  const [sharedPixelId, setSharedPixelId] = useState('');
   const [assignments, setAssignments] = useState({});
   const [mediaAssets, setMediaAssets] = useState([]);
   const [mediaFolders, setMediaFolders] = useState([]);
@@ -429,6 +439,21 @@ const DynamicAdsLaunchPage = () => {
 
     return adAccounts.filter((account) => getAdAccountKeys(account).some((key) => savedBrandAccountKeys.has(key)));
   }, [adAccounts, brandId, savedBrandAccountKeys, tokenId]);
+  const sharedPixelOptions = useMemo(() => {
+    if (!scopedAdAccounts.length) {
+      return [];
+    }
+
+    const pixelCollections = scopedAdAccounts.map((account) => accountPixels[account.id] || []);
+
+    if (pixelCollections.some((collection) => !collection.length)) {
+      return [];
+    }
+
+    return pixelCollections[0]
+      .filter((pixel) => pixel?.id && pixelCollections.every((collection) => collection.some((item) => item.id === pixel.id)))
+      .sort((first, second) => first.name.localeCompare(second.name));
+  }, [accountPixels, scopedAdAccounts]);
   const campaignTemplates = useMemo(
     () =>
       templates.filter(
@@ -715,10 +740,17 @@ const DynamicAdsLaunchPage = () => {
 
   useEffect(() => stopAssignmentAutoScroll, []);
 
+  useEffect(() => {
+    if (sharedPixelId && !sharedPixelOptions.some((pixel) => pixel.id === sharedPixelId)) {
+      setSharedPixelId('');
+    }
+  }, [sharedPixelId, sharedPixelOptions]);
+
   const handleBrandChange = (nextBrandId) => {
     setBrandId(nextBrandId);
     setTokenId('');
     setPageId('');
+    setSharedPixelId('');
     setAssignments({});
     loadAssets('');
   };
@@ -726,6 +758,7 @@ const DynamicAdsLaunchPage = () => {
   const handleTokenChange = async (nextTokenId) => {
     setTokenId(nextTokenId);
     setPageId('');
+    setSharedPixelId('');
     setAssignments({});
     await loadAssets(nextTokenId);
   };
@@ -738,6 +771,31 @@ const DynamicAdsLaunchPage = () => {
         [field]: value,
       },
     }));
+  };
+
+  const applySharedPixel = (nextPixelId) => {
+    setSharedPixelId(nextPixelId);
+    setAssignments((current) => {
+      const nextAssignments = {
+        ...current,
+      };
+
+      scopedAdAccounts.forEach((account) => {
+        nextAssignments[account.id] = {
+          ...(nextAssignments[account.id] || {}),
+          pixelId: nextPixelId,
+        };
+      });
+
+      return nextAssignments;
+    });
+
+    if (nextPixelId) {
+      const pixel = sharedPixelOptions.find((item) => item.id === nextPixelId);
+      toast.success(`Applied ${pixel?.name || nextPixelId} to all pixel boxes`);
+    } else {
+      toast.success('Cleared shared pixel from all rows');
+    }
   };
 
   const selectMediaAssetForAccount = (accountId, mediaAsset) => {
@@ -888,15 +946,20 @@ const DynamicAdsLaunchPage = () => {
 
     setPixelPrompt(null);
     setPublishing(true);
-    beginPublish({
-      title: selectedBrand ? `Dynamic Ads Launch: ${selectedBrand.name}` : 'Dynamic Ads Launch publish',
-      source: 'Dynamic Ads Launch',
+    const publishTitle = selectedBrand ? `Dynamic Ads Launch: ${selectedBrand.name}` : 'Dynamic Ads Launch publish';
+    const publishSource = 'Dynamic Ads Launch';
+    const publishSessionId = beginPublish({
+      title: publishTitle,
+      source: publishSource,
     });
 
     try {
       const payload = {
         ...buildPublishPayload(),
         tokenType: publishTokenType,
+        publishSessionId,
+        publishTitle,
+        publishSource,
       };
       if (ignoredRows > 0) {
         toast.success(`Publishing ${readyAssignments.length} ready row${readyAssignments.length === 1 ? '' : 's'} and ignoring ${ignoredRows} waiting row${ignoredRows === 1 ? '' : 's'}`);
@@ -972,7 +1035,7 @@ const DynamicAdsLaunchPage = () => {
 
       <div className="space-y-4">
         <DashboardPanel title="Launch scope">
-          <div className="grid gap-3 xl:grid-cols-[minmax(180px,1fr)_minmax(180px,1fr)_minmax(220px,1.1fr)_auto_minmax(220px,1.1fr)] xl:items-end">
+          <div className="grid gap-3 xl:grid-cols-[minmax(170px,1fr)_minmax(170px,1fr)_minmax(210px,1fr)_minmax(210px,1fr)_auto_minmax(220px,1.1fr)] xl:items-end">
             <div className="space-y-2">
               <FieldLabel htmlFor="dynamic-brand">Brand</FieldLabel>
               <select id="dynamic-brand" value={brandId} onChange={(event) => handleBrandChange(event.target.value)} disabled={brandsLoading} className="h-12 w-full rounded-xl border border-sky-100 px-4 outline-none focus:border-sky-400 focus:ring-4 focus:ring-sky-100">
@@ -994,11 +1057,34 @@ const DynamicAdsLaunchPage = () => {
                 {pages.map((page) => <option key={page.id} value={page.id}>{page.name}</option>)}
               </select>
             </div>
+            <div className="space-y-2">
+              <FieldLabel htmlFor="dynamic-shared-pixel">Shared pixel</FieldLabel>
+              <select
+                id="dynamic-shared-pixel"
+                value={sharedPixelId}
+                onChange={(event) => applySharedPixel(event.target.value)}
+                disabled={loadingPixels || !sharedPixelOptions.length}
+                className="h-12 w-full rounded-xl border border-sky-100 px-4 outline-none focus:border-sky-400 focus:ring-4 focus:ring-sky-100 disabled:bg-slate-50 disabled:text-slate-400"
+              >
+                <option value="">
+                  {loadingPixels
+                    ? 'Loading pixels...'
+                    : sharedPixelOptions.length
+                      ? 'No shared pixel'
+                      : Object.keys(accountPixels).length
+                        ? 'No common pixel'
+                        : 'Load pixels first'}
+                </option>
+                {sharedPixelOptions.map((pixel) => (
+                  <option key={pixel.id} value={pixel.id}>{pixel.name}</option>
+                ))}
+              </select>
+            </div>
             <button type="button" onClick={loadRowPixels} disabled={!tokenId || !scopedAdAccounts.length} className="h-12 rounded-xl border border-sky-100 bg-white px-4 text-sm font-bold text-slate-700 transition hover:bg-sky-50 disabled:opacity-50">
               {loadingPixels ? 'Loading pixels...' : 'Load account pixels'}
             </button>
             <p className="rounded-xl bg-sky-50 px-3 py-2 text-xs font-semibold leading-5 text-slate-500">
-              Shared page is optional. Each row can override page and pixel before publishing.
+              Shared page is a fallback. Shared pixel writes to every row after pixels load, and each row can still override it.
             </p>
           </div>
         </DashboardPanel>

@@ -34,6 +34,7 @@ const campaignDefaults = {
     genderTargeting: 'ALL',
     billingEvent: 'IMPRESSIONS',
     bidStrategy: 'LOWEST_COST_WITHOUT_CAP',
+    bidAmount: '',
   },
 };
 
@@ -129,8 +130,12 @@ const staticDefaultOptions = {
   ],
   bidStrategy: [
     { value: 'LOWEST_COST_WITHOUT_CAP', label: 'Lowest cost' },
+    { value: 'LOWEST_COST_WITH_BID_CAP', label: 'Bid cap' },
+    { value: 'COST_CAP', label: 'Cost cap' },
   ],
 };
+
+const cappedBidStrategies = new Set(['LOWEST_COST_WITH_BID_CAP', 'COST_CAP']);
 
 const urlParameterMacroOptions = [
   { value: '{{site_source_name}}', label: 'Source platform' },
@@ -474,6 +479,7 @@ const AdsTemplateBuilderPage = () => {
   );
   const mediaUrlParameterEntries = useMemo(() => parseUrlParameterEntries(mediaForm.urlParameters), [mediaForm.urlParameters]);
   const campaignPixelRequired = campaignForm.objective === 'OUTCOME_LEADS' || campaignForm.objective === 'OUTCOME_SALES';
+  const campaignBidAmountRequired = cappedBidStrategies.has(campaignForm.staticDefaults.bidStrategy);
   const campaignScheduleValidationError = getScheduleValidationError(campaignForm);
   const minimumScheduleStartValue = getMinimumScheduleStartValue();
   const mediaEditMode = Boolean(editingMediaTemplateId);
@@ -685,6 +691,11 @@ const AdsTemplateBuilderPage = () => {
 
     if (campaignPixelRequired && !campaignForm.websiteEvent) {
       toast.error('Select the website event for this Lead or Sales campaign template');
+      return;
+    }
+
+    if (campaignBidAmountRequired && (!campaignForm.staticDefaults.bidAmount || Number(campaignForm.staticDefaults.bidAmount) <= 0)) {
+      toast.error('Enter a positive bid amount for Bid cap or Cost cap');
       return;
     }
 
@@ -983,6 +994,20 @@ const AdsTemplateBuilderPage = () => {
                 </select>
               </div>
               <div className="space-y-2">
+                <FieldLabel htmlFor="campaign-bid-amount">Bid/cost cap amount</FieldLabel>
+                <input
+                  id="campaign-bid-amount"
+                  type="number"
+                  min="0"
+                  step="0.01"
+                  value={campaignForm.staticDefaults.bidAmount || ''}
+                  onChange={(event) => updateCampaignDefault('bidAmount', event.target.value)}
+                  disabled={!campaignBidAmountRequired}
+                  placeholder={campaignBidAmountRequired ? 'Example: 5.00' : 'Only for capped strategies'}
+                  className="h-12 w-full rounded-xl border border-sky-100 px-4 outline-none focus:border-sky-400 focus:ring-4 focus:ring-sky-100 disabled:bg-slate-50 disabled:text-slate-400"
+                />
+              </div>
+              <div className="space-y-2">
                 <FieldLabel htmlFor="campaign-schedule-start">Schedule start</FieldLabel>
                 <input id="campaign-schedule-start" type="datetime-local" value={campaignForm.scheduleStart} min={minimumScheduleStartValue} onChange={(event) => updateCampaignField('scheduleStart', event.target.value)} className="h-12 w-full rounded-xl border border-sky-100 px-4 outline-none focus:border-sky-400 focus:ring-4 focus:ring-sky-100" />
               </div>
@@ -994,6 +1019,10 @@ const AdsTemplateBuilderPage = () => {
             {campaignScheduleValidationError ? (
               <p className="mt-4 rounded-xl bg-red-50 px-4 py-3 text-sm font-semibold text-red-700">
                 {campaignScheduleValidationError}
+              </p>
+            ) : campaignBidAmountRequired ? (
+              <p className="mt-4 rounded-xl bg-amber-50 px-4 py-3 text-sm font-semibold text-amber-700">
+                Capped bidding uses this amount in the ad account currency. Meta receives it as the ad set bid amount.
               </p>
             ) : campaignForm.scheduleStart && campaignForm.scheduleEnd ? (
               <p className="mt-4 rounded-xl bg-emerald-50 px-4 py-3 text-sm font-semibold text-emerald-700">

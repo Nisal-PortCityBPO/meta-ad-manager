@@ -104,6 +104,9 @@ router.post('/failed-launches/:campaignId/retry', adsLaunchController.retryFaile
 router.get('/publish-queue', adsLaunchController.getPublishQueue);
 router.post('/publish-queue/run', adsLaunchController.runPublishQueue);
 router.delete('/publish-queue', adsLaunchController.clearPublishQueue);
+router.get('/publish-sessions', adsLaunchController.getPublishSessions);
+router.post('/publish-sessions/:sessionId/pause', adsLaunchController.pausePublishSession);
+router.post('/publish-sessions/:sessionId/resume', adsLaunchController.resumePublishSession);
 router.get('/templates', adsLaunchController.getTemplates);
 router.get('/templates/:id/assets/:assetKind', adsLaunchController.getTemplateAsset);
 router.post('/templates', adsLaunchController.createTemplate);

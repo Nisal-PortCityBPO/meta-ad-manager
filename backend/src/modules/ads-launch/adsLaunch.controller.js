@@ -189,6 +189,40 @@ const clearPublishQueue = asyncHandler(async (req, res) => {
   res.json(result);
 });
 
+const getPublishSessions = asyncHandler(async (req, res) => {
+  const result = await adsLaunchService.listPublishSessions({
+    actor: req.user,
+    limit: req.query.limit,
+  });
+
+  res.json(result);
+});
+
+const pausePublishSession = asyncHandler(async (req, res) => {
+  const session = await adsLaunchService.requestPublishSessionPause({
+    sessionId: req.params.sessionId,
+    actor: req.user,
+  });
+
+  res.json({
+    message: 'Pause requested. The current ad account will finish before publishing stops.',
+    session,
+  });
+});
+
+const resumePublishSession = asyncHandler(async (req, res) => {
+  const session = await adsLaunchService.resumePublishSession({
+    sessionId: req.params.sessionId,
+    actor: req.user,
+    req,
+  });
+
+  res.json({
+    message: 'Paused publish is continuing in the background.',
+    session,
+  });
+});
+
 const updateMediaAssetBrand = asyncHandler(async (req, res) => {
   const mediaAsset = await adsLaunchService.updateMediaAssetBrand({
     mediaId: req.params.id,
@@ -261,15 +295,42 @@ const publishLaunch = asyncHandler(async (req, res) => {
 });
 
 const publishLaunchStream = async (req, res, next) => {
+  let session = null;
+  try {
+    session = await adsLaunchService.startPublishSession({
+      sessionId: req.body?.publishSessionId,
+      title: req.body?.publishTitle,
+      source: req.body?.publishSource,
+      payload: req.body,
+      actor: req.user,
+    });
+  } catch (error) {
+    next(error);
+    return;
+  }
+
+  let clientConnected = true;
   const sendEvent = (event) => {
+    if (!clientConnected || res.destroyed || res.writableEnded) {
+      return;
+    }
+
     res.write(`${JSON.stringify(event)}\n`);
   };
+
+  res.on('close', () => {
+    clientConnected = false;
+  });
 
   res.setHeader('Content-Type', 'application/x-ndjson');
   res.setHeader('Cache-Control', 'no-cache');
   res.setHeader('Connection', 'keep-alive');
   res.setHeader('X-Accel-Buffering', 'no');
   res.flushHeaders?.();
+  sendEvent({
+    type: 'session',
+    session,
+  });
 
   try {
     const result = await adsLaunchService.publishLaunch({
@@ -278,14 +339,22 @@ const publishLaunchStream = async (req, res, next) => {
       req,
       onProgress: sendEvent,
       tokenType: req.body?.tokenType,
+      publishSessionId: session.id,
     });
 
     sendEvent({
       type: 'complete',
       result,
     });
-    res.end();
+    if (clientConnected && !res.writableEnded) {
+      res.end();
+    }
   } catch (error) {
+    await adsLaunchService.failPublishSession({
+      sessionId: session.id,
+      error,
+    });
+
     if (!res.headersSent) {
       next(error);
       return;
@@ -295,7 +364,9 @@ const publishLaunchStream = async (req, res, next) => {
       type: 'error',
       message: error.message || 'Publish failed',
     });
-    res.end();
+    if (clientConnected && !res.writableEnded) {
+      res.end();
+    }
   }
 };
 
@@ -311,11 +382,14 @@ module.exports = {
   getMediaAssets,
   getMediaFolders,
   getPublishQueue,
+  getPublishSessions,
   getTemplates,
   getTemplateAsset,
+  pausePublishSession,
   publishLaunch,
   publishLaunchStream,
   retryFailedLaunch,
+  resumePublishSession,
   runPublishQueue,
   uploadMediaChunk,
   updateMediaAssetBrand,
