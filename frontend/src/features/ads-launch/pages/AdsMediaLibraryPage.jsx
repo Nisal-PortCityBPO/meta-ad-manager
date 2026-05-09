@@ -16,6 +16,7 @@ import {
   UploadCloud,
   Video,
 } from 'lucide-react';
+import { useAuth } from '../../auth/hooks/useAuth';
 import { businessDataApi } from '../../dashboard/api/businessDataApi';
 import DashboardHeader from '../../dashboard/components/DashboardHeader';
 import DashboardPanel from '../../dashboard/components/DashboardPanel';
@@ -23,6 +24,7 @@ import { adsLaunchApi } from '../api/adsLaunchApi';
 import { createVideoThumbnailFile } from '../utils/videoThumbnail';
 
 const ROOT_FOLDER_ID = 'root';
+const MAIN_LIBRARY_STATE_STORAGE_KEY = 'meta-manager.ads-media-library-page-state.v1';
 const MIN_DIMENSION = 600;
 const MIN_ASPECT_RATIO = 0.56;
 const MAX_ASPECT_RATIO = 1.92;
@@ -40,6 +42,44 @@ const MIME_TYPE_BY_EXTENSION = {
 const getFileExtension = (name = '') => {
   const extensionMatch = String(name).toLowerCase().match(/\.[^.]+$/);
   return extensionMatch ? extensionMatch[0] : '';
+};
+
+const getUserStorageKey = (baseKey, user) => `${baseKey}:${user?.id || user?.email || 'guest'}`;
+
+const readStoredLibraryState = (storageKey) => {
+  if (typeof window === 'undefined') {
+    return {
+      filterBrandId: '',
+      selectedFolderId: null,
+    };
+  }
+
+  try {
+    const parsed = JSON.parse(window.localStorage.getItem(storageKey) || '{}');
+    return {
+      filterBrandId: typeof parsed.filterBrandId === 'string' ? parsed.filterBrandId : '',
+      selectedFolderId: typeof parsed.selectedFolderId === 'string' && parsed.selectedFolderId ? parsed.selectedFolderId : null,
+    };
+  } catch {
+    return {
+      filterBrandId: '',
+      selectedFolderId: null,
+    };
+  }
+};
+
+const writeStoredLibraryState = (storageKey, state) => {
+  if (typeof window === 'undefined') {
+    return;
+  }
+
+  window.localStorage.setItem(
+    storageKey,
+    JSON.stringify({
+      filterBrandId: state.filterBrandId || '',
+      selectedFolderId: state.selectedFolderId || '',
+    })
+  );
 };
 
 const getSupportedMimeType = (file) => {
@@ -181,6 +221,18 @@ const buildFolderPath = ({ folderId, foldersById }) => {
   return [{ id: null, name: 'Saved media' }, ...path];
 };
 
+const getFolderAncestorIds = ({ folderId, foldersById }) => {
+  const ancestorIds = [];
+  let current = folderId ? foldersById.get(folderId) : null;
+
+  while (current) {
+    ancestorIds.push(current.id);
+    current = current.parentId ? foldersById.get(current.parentId) : null;
+  }
+
+  return ancestorIds;
+};
+
 const FolderTreeNode = ({
   folder,
   foldersByParent,
@@ -255,21 +307,29 @@ const FolderTile = ({ folder, folderCount, mediaCount, onOpen }) => (
   </button>
 );
 
-const MediaTile = ({ brands, brandsLoading, mediaAsset, onBrandChange, onDelete, updatingBrand }) => {
+const MediaTile = ({ brands, brandsLoading, mediaAsset, onBrandChange, onDelete, onSelectChange, selected, updatingBrand }) => {
   const isVideo = mediaAsset.mediaType === 'VIDEO';
   const media = mediaAsset.media || {};
   const brandLabel = mediaAsset.brandName || 'Unassigned brand';
   const folderLocked = Boolean(mediaAsset.folderId);
 
   return (
-    <div className="group overflow-hidden rounded-2xl border border-sky-100 bg-white shadow-sm shadow-sky-100/70 transition hover:-translate-y-0.5 hover:shadow-md hover:shadow-sky-100">
+    <div className={`group overflow-hidden rounded-2xl border bg-white shadow-sm shadow-sky-100/70 transition hover:-translate-y-0.5 hover:shadow-md hover:shadow-sky-100 ${selected ? 'border-sky-500 ring-4 ring-sky-100' : 'border-sky-100'}`}>
       <div className="relative flex h-40 items-center justify-center bg-slate-950">
         {isVideo ? (
           <video src={media.url} poster={mediaAsset.thumbnail?.url || ''} controls className="h-full w-full object-contain" />
         ) : (
           <img src={media.url} alt={mediaAsset.name} className="h-full w-full object-cover" />
         )}
-        <span className={`absolute left-3 top-3 inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-[11px] font-black ${isVideo ? 'bg-amber-50 text-amber-700' : 'bg-sky-50 text-sky-700'}`}>
+        <label className="absolute left-3 top-3 flex h-8 w-8 cursor-pointer items-center justify-center rounded-xl bg-white/95 shadow-sm transition hover:bg-sky-50" title="Select media">
+          <input
+            type="checkbox"
+            checked={selected}
+            onChange={(event) => onSelectChange(mediaAsset.id, event.target.checked)}
+            className="h-4 w-4 accent-sky-600"
+          />
+        </label>
+        <span className={`absolute left-14 top-3 inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-[11px] font-black ${isVideo ? 'bg-amber-50 text-amber-700' : 'bg-sky-50 text-sky-700'}`}>
           {isVideo ? <Video size={13} /> : <ImageIcon size={13} />}
           {isVideo ? 'Video' : 'Image'}
         </span>
@@ -351,16 +411,19 @@ const MediaTile = ({ brands, brandsLoading, mediaAsset, onBrandChange, onDelete,
 };
 
 const AdsMediaLibraryPage = () => {
+  const { user } = useAuth();
+  const storageKey = getUserStorageKey(MAIN_LIBRARY_STATE_STORAGE_KEY, user);
+  const initialStoredState = useMemo(() => readStoredLibraryState(storageKey), [storageKey]);
   const fileInputRef = useRef(null);
   const [mediaAssets, setMediaAssets] = useState([]);
   const [mediaFolders, setMediaFolders] = useState([]);
   const [loading, setLoading] = useState(true);
   const [brands, setBrands] = useState([]);
   const [brandsLoading, setBrandsLoading] = useState(true);
-  const [filterBrandId, setFilterBrandId] = useState('');
+  const [filterBrandId, setFilterBrandId] = useState(() => initialStoredState.filterBrandId);
   const [searchTerm, setSearchTerm] = useState('');
-  const [folderBrandId, setFolderBrandId] = useState('');
-  const [selectedFolderId, setSelectedFolderId] = useState(null);
+  const [folderBrandId, setFolderBrandId] = useState(() => initialStoredState.filterBrandId);
+  const [selectedFolderId, setSelectedFolderId] = useState(() => initialStoredState.selectedFolderId);
   const [expandedFolderIds, setExpandedFolderIds] = useState(new Set());
   const [newFolderName, setNewFolderName] = useState('');
   const [creatingFolder, setCreatingFolder] = useState(false);
@@ -368,6 +431,8 @@ const AdsMediaLibraryPage = () => {
   const [dragActive, setDragActive] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(null);
   const [updatingBrandAssetId, setUpdatingBrandAssetId] = useState('');
+  const [selectedMediaIds, setSelectedMediaIds] = useState(new Set());
+  const [bulkDeleting, setBulkDeleting] = useState(false);
 
   const filteredMediaFolders = useMemo(
     () => mediaFolders.filter((folder) => !filterBrandId || folder.brandId === filterBrandId),
@@ -392,6 +457,15 @@ const AdsMediaLibraryPage = () => {
     () => mediaAssets.filter((mediaAsset) => (mediaAsset.folderId || null) === (selectedFolderId || null)),
     [mediaAssets, selectedFolderId]
   );
+  const visibleMediaAssetIds = useMemo(
+    () => visibleMediaAssets.map((mediaAsset) => mediaAsset.id),
+    [visibleMediaAssets]
+  );
+  const selectedVisibleMediaIds = useMemo(
+    () => visibleMediaAssetIds.filter((mediaAssetId) => selectedMediaIds.has(mediaAssetId)),
+    [selectedMediaIds, visibleMediaAssetIds]
+  );
+  const allVisibleMediaSelected = Boolean(visibleMediaAssetIds.length && selectedVisibleMediaIds.length === visibleMediaAssetIds.length);
 
   const getFolderMediaCount = (folderId) =>
     mediaAssets.filter((mediaAsset) => (mediaAsset.folderId || null) === folderId).length;
@@ -420,6 +494,44 @@ const AdsMediaLibraryPage = () => {
       setLoading(false);
     }
   }, [filterBrandId, searchTerm]);
+
+  useEffect(() => {
+    const storedState = readStoredLibraryState(storageKey);
+    setFilterBrandId(storedState.filterBrandId);
+    setFolderBrandId(storedState.filterBrandId);
+    setSelectedFolderId(storedState.selectedFolderId);
+  }, [storageKey]);
+
+  useEffect(() => {
+    writeStoredLibraryState(storageKey, {
+      filterBrandId,
+      selectedFolderId,
+    });
+  }, [filterBrandId, selectedFolderId, storageKey]);
+
+  useEffect(() => {
+    setSelectedMediaIds(new Set());
+  }, [selectedFolderId]);
+
+  useEffect(() => {
+    setSelectedMediaIds((current) => {
+      const validIds = new Set(mediaAssets.map((mediaAsset) => mediaAsset.id));
+      const next = new Set([...current].filter((mediaAssetId) => validIds.has(mediaAssetId)));
+      return next.size === current.size ? current : next;
+    });
+  }, [mediaAssets]);
+
+  useEffect(() => {
+    if (!selectedFolderId || !foldersById.has(selectedFolderId)) {
+      return;
+    }
+
+    setExpandedFolderIds((current) => {
+      const next = new Set(current);
+      getFolderAncestorIds({ folderId: selectedFolderId, foldersById }).forEach((folderId) => next.add(folderId));
+      return next;
+    });
+  }, [foldersById, selectedFolderId]);
 
   useEffect(() => {
     const timeoutId = window.setTimeout(() => {
@@ -657,6 +769,74 @@ const AdsMediaLibraryPage = () => {
       await loadLibrary();
     } catch (requestError) {
       toast.error(requestError.message);
+    }
+  };
+
+  const toggleMediaSelected = (mediaAssetId, checked) => {
+    setSelectedMediaIds((current) => {
+      const next = new Set(current);
+      if (checked) {
+        next.add(mediaAssetId);
+      } else {
+        next.delete(mediaAssetId);
+      }
+      return next;
+    });
+  };
+
+  const selectAllVisibleMedia = () => {
+    setSelectedMediaIds((current) => {
+      const next = new Set(current);
+      visibleMediaAssetIds.forEach((mediaAssetId) => next.add(mediaAssetId));
+      return next;
+    });
+  };
+
+  const clearSelectedVisibleMedia = () => {
+    setSelectedMediaIds((current) => {
+      const next = new Set(current);
+      visibleMediaAssetIds.forEach((mediaAssetId) => next.delete(mediaAssetId));
+      return next;
+    });
+  };
+
+  const deleteSelectedMedia = async () => {
+    const selectedAssets = visibleMediaAssets.filter((mediaAsset) => selectedMediaIds.has(mediaAsset.id));
+
+    if (!selectedAssets.length) {
+      toast.error('Select media from this folder first');
+      return;
+    }
+
+    if (!window.confirm(`Delete ${selectedAssets.length} selected media item${selectedAssets.length === 1 ? '' : 's'} from "${selectedFolder?.name || 'Saved media'}"?`)) {
+      return;
+    }
+
+    setBulkDeleting(true);
+    let deletedCount = 0;
+    let failedCount = 0;
+
+    try {
+      for (const mediaAsset of selectedAssets) {
+        try {
+          await adsLaunchApi.deleteMediaAsset(mediaAsset.id);
+          deletedCount += 1;
+        } catch (requestError) {
+          failedCount += 1;
+          toast.error(`${mediaAsset.name}: ${requestError.message}`);
+        }
+      }
+
+      if (deletedCount) {
+        toast.success(`${deletedCount} media item${deletedCount === 1 ? '' : 's'} deleted`);
+      }
+      if (failedCount && !deletedCount) {
+        toast.error('No selected media could be deleted');
+      }
+      clearSelectedVisibleMedia();
+      await loadLibrary();
+    } finally {
+      setBulkDeleting(false);
     }
   };
 
@@ -914,6 +1094,35 @@ const AdsMediaLibraryPage = () => {
               </div>
             ) : null}
 
+            {!loading && visibleMediaAssets.length ? (
+              <div className="mt-4 flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-sky-100 bg-sky-50/70 px-4 py-3">
+                <div>
+                  <p className="text-xs font-black uppercase tracking-[0.16em] text-sky-700">Current folder selection</p>
+                  <p className="mt-1 text-xs font-semibold text-slate-500">
+                    {selectedVisibleMediaIds.length} of {visibleMediaAssets.length} media selected in {selectedFolder?.name || 'Saved media'}.
+                  </p>
+                </div>
+                <div className="flex flex-wrap items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={allVisibleMediaSelected ? clearSelectedVisibleMedia : selectAllVisibleMedia}
+                    className="h-9 rounded-lg border border-sky-100 bg-white px-3 text-xs font-black uppercase tracking-[0.12em] text-sky-700 transition hover:bg-sky-50"
+                  >
+                    {allVisibleMediaSelected ? 'Clear all' : 'Select all'}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={deleteSelectedMedia}
+                    disabled={!selectedVisibleMediaIds.length || bulkDeleting}
+                    className="inline-flex h-9 items-center gap-2 rounded-lg border border-red-100 bg-white px-3 text-xs font-black uppercase tracking-[0.12em] text-red-600 transition hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    {bulkDeleting ? <LoaderCircle size={14} className="animate-spin" /> : <Trash2 size={14} />}
+                    Delete selected
+                  </button>
+                </div>
+              </div>
+            ) : null}
+
             <div className="mt-4">
               {loading ? (
                 <div className="grid gap-4 sm:grid-cols-2 2xl:grid-cols-4">
@@ -940,6 +1149,8 @@ const AdsMediaLibraryPage = () => {
                       mediaAsset={mediaAsset}
                       onBrandChange={updateMediaBrand}
                       onDelete={deleteMediaAsset}
+                      onSelectChange={toggleMediaSelected}
+                      selected={selectedMediaIds.has(mediaAsset.id)}
                       updatingBrand={updatingBrandAssetId === mediaAsset.id}
                     />
                   ))}

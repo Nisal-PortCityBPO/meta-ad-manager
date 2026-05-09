@@ -1,7 +1,32 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { ChevronDown, ChevronRight, Folder, FolderOpen, ImageIcon, RefreshCw, Upload, Video, X } from 'lucide-react';
+import { useAuth } from '../../auth/hooks/useAuth';
 
 const ROOT_FOLDER_ID = 'root';
+const PICKER_FOLDER_STORAGE_KEY = 'meta-manager.ads-media-picker-folder.v1';
+
+const getUserStorageKey = (baseKey, user) => `${baseKey}:${user?.id || user?.email || 'guest'}`;
+
+const readStoredFolderId = (storageKey) => {
+  if (typeof window === 'undefined') {
+    return null;
+  }
+
+  return window.localStorage.getItem(storageKey) || null;
+};
+
+const writeStoredFolderId = (storageKey, folderId) => {
+  if (typeof window === 'undefined') {
+    return;
+  }
+
+  if (folderId) {
+    window.localStorage.setItem(storageKey, folderId);
+    return;
+  }
+
+  window.localStorage.removeItem(storageKey);
+};
 
 const formatFileSize = (bytes = 0) => {
   if (!bytes) {
@@ -38,6 +63,18 @@ const buildFolderPath = ({ folderId, foldersById }) => {
   }
 
   return [{ id: null, name: 'Media library' }, ...path];
+};
+
+const getFolderAncestorIds = ({ folderId, foldersById }) => {
+  const ancestorIds = [];
+  let current = folderId ? foldersById.get(folderId) : null;
+
+  while (current) {
+    ancestorIds.push(current.id);
+    current = current.parentId ? foldersById.get(current.parentId) : null;
+  }
+
+  return ancestorIds;
 };
 
 const FolderTreeNode = ({
@@ -113,7 +150,9 @@ const MediaLibraryFolderPicker = ({
   selectedMediaAssetUrl = '',
   title,
 }) => {
-  const [selectedFolderId, setSelectedFolderId] = useState(null);
+  const { user } = useAuth();
+  const storageKey = getUserStorageKey(PICKER_FOLDER_STORAGE_KEY, user);
+  const [selectedFolderId, setSelectedFolderId] = useState(() => readStoredFolderId(storageKey));
   const [expandedFolderIds, setExpandedFolderIds] = useState(new Set());
   const foldersById = useMemo(
     () => new Map(mediaFolders.map((folder) => [folder.id, folder])),
@@ -130,6 +169,33 @@ const MediaLibraryFolderPicker = ({
     () => mediaAssets.filter((mediaAsset) => (mediaAsset.folderId || null) === (selectedFolderId || null)),
     [mediaAssets, selectedFolderId]
   );
+
+  useEffect(() => {
+    setSelectedFolderId(readStoredFolderId(storageKey));
+  }, [storageKey]);
+
+  useEffect(() => {
+    if (loading) {
+      return;
+    }
+
+    if (selectedFolderId && !foldersById.has(selectedFolderId)) {
+      setSelectedFolderId(null);
+      writeStoredFolderId(storageKey, null);
+    }
+  }, [foldersById, loading, selectedFolderId, storageKey]);
+
+  useEffect(() => {
+    if (!selectedFolderId || !foldersById.has(selectedFolderId)) {
+      return;
+    }
+
+    setExpandedFolderIds((current) => {
+      const next = new Set(current);
+      getFolderAncestorIds({ folderId: selectedFolderId, foldersById }).forEach((folderId) => next.add(folderId));
+      return next;
+    });
+  }, [foldersById, selectedFolderId]);
 
   if (!onClose) {
     return null;
@@ -149,6 +215,7 @@ const MediaLibraryFolderPicker = ({
 
   const selectFolder = (folderId) => {
     setSelectedFolderId(folderId);
+    writeStoredFolderId(storageKey, folderId);
     if (folderId) {
       setExpandedFolderIds((current) => new Set(current).add(folderId));
     }
@@ -199,7 +266,7 @@ const MediaLibraryFolderPicker = ({
             <aside className="min-h-0 rounded-2xl border border-sky-100 bg-slate-50/80 p-3">
               <button
                 type="button"
-                onClick={() => setSelectedFolderId(null)}
+                onClick={() => selectFolder(null)}
                 className={`mb-2 flex h-10 w-full items-center gap-2 rounded-xl px-3 text-left text-sm transition ${
                   !selectedFolderId ? 'bg-sky-100 text-sky-800' : 'text-slate-700 hover:bg-white'
                 }`}
@@ -234,7 +301,7 @@ const MediaLibraryFolderPicker = ({
                     <button
                       key={breadcrumb.id || ROOT_FOLDER_ID}
                       type="button"
-                      onClick={() => setSelectedFolderId(breadcrumb.id)}
+                      onClick={() => selectFolder(breadcrumb.id)}
                       className={`max-w-44 truncate rounded-lg px-2 py-1 transition ${
                         index === breadcrumbs.length - 1 ? 'bg-sky-50 text-sky-700' : 'hover:bg-slate-50'
                       }`}
