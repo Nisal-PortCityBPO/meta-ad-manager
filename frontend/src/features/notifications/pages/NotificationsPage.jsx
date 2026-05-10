@@ -27,6 +27,7 @@ const notifications = [
 
 const NotificationsPage = () => {
   const {
+    applyPublishSessions,
     clearPublishHistory,
     currentPublishId,
     events,
@@ -37,6 +38,7 @@ const NotificationsPage = () => {
     progress,
     publishHistory,
     requestPausePublish,
+    refreshPublishSessions,
     resumeBusy,
     resumePausedPublish,
   } = usePublishProgress();
@@ -147,6 +149,11 @@ const NotificationsPage = () => {
       toast.success(data.message || 'Retry completed');
       if (resumeNotice) {
         toast(resumeNotice);
+      }
+      if (Array.isArray(data.publishSessions) && data.publishSessions.length) {
+        applyPublishSessions(data.publishSessions);
+      } else {
+        await refreshPublishSessions();
       }
     } catch (requestError) {
       toast.error(requestError.message);

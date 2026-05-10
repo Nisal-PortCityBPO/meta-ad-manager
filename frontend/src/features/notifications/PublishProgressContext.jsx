@@ -154,6 +154,10 @@ export const PublishProgressProvider = ({ children }) => {
     setProgress(activeSession.progress || null);
   }, []);
 
+  const applyPublishSessions = useCallback((sessions = []) => {
+    applyServerSessions(sessions);
+  }, [applyServerSessions]);
+
   const beginPublish = ({ title = 'Ads publish', source = 'Meta publish' } = {}) => {
     const initialProgress = createInitialProgress();
     const session = {
@@ -444,6 +448,7 @@ export const PublishProgressProvider = ({ children }) => {
       progress,
       publishHistory,
       publishHistoryUnreadCount,
+      applyPublishSessions,
       pushPublishEvent,
       refreshPublishSessions,
       requestPausePublish,
@@ -462,6 +467,7 @@ export const PublishProgressProvider = ({ children }) => {
       publishHistory,
       publishHistorySeenAt,
       publishHistoryUnreadCount,
+      applyPublishSessions,
       refreshPublishSessions,
       requestPausePublish,
       resumeBusy,

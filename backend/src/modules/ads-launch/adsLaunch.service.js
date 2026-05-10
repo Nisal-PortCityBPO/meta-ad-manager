@@ -12,6 +12,7 @@ const { PUBLISH_SESSION_STATUSES } = require('./adsLaunchPublishSession.model');
 const AdsLaunchMedia = require('./adsLaunchMedia.model');
 const { ADS_MEDIA_TYPES } = require('./adsLaunchMedia.model');
 const AdsLaunchMediaFolder = require('./adsLaunchMediaFolder.model');
+const ManagedCampaign = require('../ads-manage/adsManage.model');
 const adsManageService = require('../ads-manage/adsManage.service');
 const settingsService = require('../settings/settings.service');
 const tokenService = require('../token-management/token.service');
@@ -1230,7 +1231,11 @@ function mediaLibraryAccessFilter(actor) {
 }
 
 function publishSessionAccessFilter(actor) {
-  return isSuperAdmin(actor) ? {} : { createdBy: actor._id };
+  return !actor || isSuperAdmin(actor) ? {} : { createdBy: actor._id };
+}
+
+function managedCampaignAccessFilter(actor) {
+  return !actor || isSuperAdmin(actor) ? {} : { createdBy: actor._id };
 }
 
 function createPublishSessionId() {
@@ -1457,15 +1462,261 @@ async function isPublishSessionPauseRequested(sessionId) {
 
 async function listPublishSessions({ actor, limit = 15 }) {
   const safeLimit = Math.min(Math.max(Number.parseInt(limit, 10) || 15, 1), 30);
-  const sessions = await AdsLaunchPublishSession.find({
+  const query = {
     ...publishSessionAccessFilter(actor),
-  })
-    .sort({ updatedAt: -1 })
-    .limit(safeLimit);
+  };
+  let sessions = await AdsLaunchPublishSession.find(query).sort({ updatedAt: -1 }).limit(safeLimit);
+
+  if (await reconcileRecoveredPublishFailures({ sessions, actor })) {
+    sessions = await AdsLaunchPublishSession.find(query).sort({ updatedAt: -1 }).limit(safeLimit);
+  }
 
   return {
     sessions: sessions.map((session) => session.toSafeObject()),
   };
+}
+
+function clonePublishValue(value, fallback = null) {
+  if (value === undefined || value === null) {
+    return fallback;
+  }
+
+  try {
+    return JSON.parse(JSON.stringify(value));
+  } catch {
+    return value;
+  }
+}
+
+function getPublishAccountKey(item = {}) {
+  return (
+    normalizeText(item.adAccountId) ||
+    normalizeText(item.accountId) ||
+    normalizeText(item.historyRecordId) ||
+    normalizeText(item.campaignId)
+  );
+}
+
+function mergeRecoveredPublishResults(existingResults = [], retryResults = [], recoveredFailures = [], retriedAt = '') {
+  const recoveredAccountIds = new Set(recoveredFailures.map((failure) => normalizeText(failure.adAccountId)).filter(Boolean));
+  const retryAccountIds = new Set(retryResults.map(getPublishAccountKey).filter(Boolean));
+  const recoveredByAccount = new Map(
+    recoveredFailures.map((failure) => [normalizeText(failure.adAccountId), failure]).filter(([accountId]) => Boolean(accountId))
+  );
+
+  const retainedResults = existingResults.filter((result) => {
+    const accountKey = getPublishAccountKey(result);
+    return !accountKey || !recoveredAccountIds.has(accountKey) || !retryAccountIds.has(accountKey);
+  });
+  const decoratedRetryResults = retryResults.map((result) => {
+    const accountKey = getPublishAccountKey(result);
+    const recoveredFailure = recoveredByAccount.get(accountKey) || recoveredFailures[0] || {};
+
+    return {
+      ...result,
+      retried: true,
+      retriedAt,
+      recoveredFailureId: recoveredFailure.historyRecordId || '',
+    };
+  });
+
+  return [...retainedResults, ...decoratedRetryResults];
+}
+
+async function markPublishFailureResolved({ campaignId = '', historyRecordId = '', actor, retryResult = null } = {}) {
+  const normalizedCampaignId = normalizeText(campaignId);
+  const normalizedHistoryRecordId = normalizeText(historyRecordId);
+  const matchConditions = [];
+
+  if (normalizedCampaignId) {
+    matchConditions.push({ 'latestResult.failed.campaignId': normalizedCampaignId });
+  }
+
+  if (normalizedHistoryRecordId) {
+    matchConditions.push({ 'latestResult.failed.historyRecordId': normalizedHistoryRecordId });
+  }
+
+  if (!matchConditions.length) {
+    return { sessions: [] };
+  }
+
+  const sessions = await AdsLaunchPublishSession.find({
+    ...publishSessionAccessFilter(actor),
+    $or: matchConditions,
+  }).sort({ updatedAt: -1 });
+  const updatedSessions = [];
+  const now = new Date();
+  const retriedAt = now.toISOString();
+
+  for (const session of sessions) {
+    const latestResult = clonePublishValue(session.latestResult, {});
+    const failed = Array.isArray(latestResult?.failed) ? latestResult.failed : [];
+    const recoveredFailures = [];
+    const remainingFailed = failed.filter((failure) => {
+      const matches =
+        (normalizedCampaignId && normalizeText(failure.campaignId) === normalizedCampaignId) ||
+        (normalizedHistoryRecordId && normalizeText(failure.historyRecordId) === normalizedHistoryRecordId);
+
+      if (matches) {
+        recoveredFailures.push(failure);
+      }
+
+      return !matches;
+    });
+
+    if (!recoveredFailures.length) {
+      continue;
+    }
+
+    const previousResults = Array.isArray(latestResult.results) ? latestResult.results : [];
+    const retryResults = Array.isArray(retryResult?.results) ? retryResult.results : [];
+    const nextResults = mergeRecoveredPublishResults(previousResults, retryResults, recoveredFailures, retriedAt);
+    const queuedCount = remainingFailed.filter((failure) => failure.queued).length;
+    const hardFailedCount = remainingFailed.length - queuedCount;
+    const requestedCount = Math.max(
+      Number(latestResult.summary?.requested || 0),
+      nextResults.length + remainingFailed.length,
+      previousResults.length + failed.length
+    );
+    const summary = {
+      ...(latestResult.summary || {}),
+      requested: requestedCount,
+      published: nextResults.length,
+      failed: remainingFailed.length,
+      queued: queuedCount,
+      paused: Number(latestResult.summary?.paused || 0),
+    };
+    const recoveredNames = recoveredFailures
+      .map((failure) => normalizeText(failure.adAccountName) || normalizeText(failure.adAccountId))
+      .filter(Boolean)
+      .join(', ');
+    const message = remainingFailed.length
+      ? `Retry completed for ${recoveredNames || 'failed account'}. ${hardFailedCount || queuedCount} failure${(hardFailedCount || queuedCount) === 1 ? '' : 's'} still need attention.`
+      : `Retry completed for ${recoveredNames || 'failed account'}. Publish history is recovered.`;
+    const nextStatus = remainingFailed.length
+      ? hardFailedCount > 0
+        ? PUBLISH_SESSION_STATUSES.FAILED
+        : PUBLISH_SESSION_STATUSES.QUEUED
+      : PUBLISH_SESSION_STATUSES.COMPLETED;
+    const progress = {
+      ...(session.progress || {}),
+      type: 'progress',
+      status: nextStatus.toLowerCase(),
+      step: 'retry',
+      timestamp: retriedAt,
+      message,
+      progress: {
+        ...(session.progress?.progress || latestResult.progress || {}),
+        completed: nextResults.length + remainingFailed.length,
+        total: requestedCount,
+        percent: requestedCount ? Math.min(100, Math.round(((nextResults.length + remainingFailed.length) / requestedCount) * 100)) : 100,
+        etaSeconds: 0,
+      },
+    };
+
+    session.status = nextStatus;
+    session.latestResult = {
+      ...latestResult,
+      message,
+      results: nextResults,
+      failed: remainingFailed,
+      resolvedFailed: [
+        ...(Array.isArray(latestResult.resolvedFailed) ? latestResult.resolvedFailed : []),
+        ...recoveredFailures.map((failure) => ({
+          ...failure,
+          resolved: true,
+          retriedAt,
+        })),
+      ],
+      summary,
+      progress: progress.progress,
+    };
+    session.latestError = hardFailedCount > 0 ? `${hardFailedCount} ad account${hardFailedCount === 1 ? '' : 's'} still failed during publish` : '';
+    session.progress = progress;
+    session.completedAt = now;
+    session.updatedBy = actor?._id || null;
+    session.events = [...(session.events || []), progress].slice(-PUBLISH_SESSION_EVENT_LIMIT);
+    session.markModified('latestResult');
+    session.markModified('progress');
+    session.markModified('events');
+    await session.save();
+    updatedSessions.push(session.toSafeObject());
+  }
+
+  return { sessions: updatedSessions };
+}
+
+function buildRecoveredRetryResultFromCampaign(campaign) {
+  const safeCampaign = campaign?.toObject?.() || campaign || {};
+  const result = {
+    adAccountId: safeCampaign.adAccount?.id || '',
+    adAccountName: safeCampaign.adAccount?.name || safeCampaign.adAccount?.id || '',
+    campaignId: safeCampaign.campaignId || '',
+    adSetId: safeCampaign.adSetId || '',
+    creativeId: safeCampaign.creativeId || '',
+    adId: safeCampaign.adId || '',
+    status: safeCampaign.status || safeCampaign.effectiveStatus || 'PAUSED',
+    historyRecordId: safeCampaign._id?.toString?.() || '',
+    historySaved: true,
+    recoveredFromHistory: true,
+  };
+
+  return {
+    message: 'Retry already completed. Publish history was refreshed.',
+    results: [result],
+    failed: [],
+    summary: {
+      requested: 1,
+      published: 1,
+      failed: 0,
+      queued: 0,
+      paused: 0,
+    },
+  };
+}
+
+async function reconcileRecoveredPublishFailures({ sessions = [], actor } = {}) {
+  const campaignIds = [
+    ...new Set(
+      sessions
+        .flatMap((session) => (Array.isArray(session.latestResult?.failed) ? session.latestResult.failed : []))
+        .map((failure) => normalizeText(failure.campaignId))
+        .filter(Boolean)
+    ),
+  ];
+
+  if (!campaignIds.length) {
+    return false;
+  }
+
+  const campaigns = await ManagedCampaign.find({
+    ...managedCampaignAccessFilter(actor),
+    campaignId: {
+      $in: campaignIds,
+    },
+    status: {
+      $ne: 'FAILED',
+    },
+    adId: {
+      $exists: true,
+      $nin: ['', null],
+    },
+  }).lean();
+
+  if (!campaigns.length) {
+    return false;
+  }
+
+  for (const campaign of campaigns) {
+    await markPublishFailureResolved({
+      campaignId: campaign.campaignId,
+      historyRecordId: campaign._id?.toString?.() || '',
+      actor,
+      retryResult: buildRecoveredRetryResultFromCampaign(campaign),
+    });
+  }
+
+  return true;
 }
 
 async function resumePublishSession({ sessionId, actor, req }) {
@@ -4076,6 +4327,7 @@ module.exports = {
   listMediaAssets,
   listMediaFolders,
   listTemplates,
+  markPublishFailureResolved,
   publishLaunch,
   requestPublishSessionPause,
   resumePublishSession,

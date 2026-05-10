@@ -81,7 +81,9 @@ const PublishHistoryList = ({
         const Icon = getHistoryIcon(item.status);
         const progressData = item.progress?.progress || {};
         const percent = progressData.percent || 0;
-        const failedAccounts = Array.isArray(item.latestResult?.failed) ? item.latestResult.failed : [];
+        const failedAccounts = Array.isArray(item.latestResult?.failed)
+          ? item.latestResult.failed.filter((failure) => !failure.resolved)
+          : [];
         const retryableAccounts = failedAccounts.filter((failure) => failure.canRetry && failure.campaignId && failure.tokenId);
         const canResumePaused = Boolean(onResumePublish && item.status === 'paused' && item.canResume);
         const resuming = resumingSessionId === item.id;
@@ -153,7 +155,7 @@ const PublishHistoryList = ({
                   </div>
                   <div className="mt-3 space-y-2">
                     {failedAccounts.map((failure, index) => {
-                      const retrying = retryingRecordId === failure.historyRecordId;
+                      const retrying = retryingRecordId === (failure.historyRecordId || failure.campaignId);
                       const canRetry = Boolean(onRetryFailed && failure.canRetry && failure.campaignId && failure.tokenId);
 
                       return (

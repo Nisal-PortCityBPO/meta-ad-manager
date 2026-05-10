@@ -1676,10 +1676,18 @@ async function retryFailedLaunch({ tokenId, campaignId, actor, req, tokenType = 
       req,
     });
 
+    const publishSessionUpdate = await adsLaunchService.markPublishFailureResolved?.({
+      campaignId: campaign.campaignId,
+      historyRecordId: campaign._id.toString(),
+      actor,
+      retryResult: result,
+    });
+
     return {
       message: result.message || 'Retry completed',
       campaign: campaign.toSafeObject(),
       result,
+      publishSessions: publishSessionUpdate?.sessions || [],
     };
   } catch (error) {
     if (!fromQueue && isActiveQueueStatus(campaign.publishQueue?.status)) {
