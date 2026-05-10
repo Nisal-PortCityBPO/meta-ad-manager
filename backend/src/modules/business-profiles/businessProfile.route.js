@@ -10,6 +10,7 @@ router.get('/', businessProfileController.getBusinessProfiles);
 router.post('/sync', businessProfileController.syncBusinessProfiles);
 router.post('/:profileId/ad-accounts/:adAccountId/sync', businessProfileController.syncAdAccount);
 router.post('/:profileId/ad-accounts/:adAccountId/campaigns/:campaignId/duplicate', businessProfileController.duplicateCampaign);
+router.patch('/:profileId/ad-accounts/:adAccountId/campaigns/:campaignId/status', businessProfileController.updateCampaignStatus);
 router.put('/:id', businessProfileController.assignBusinessProfile);
 router.delete('/:id', businessProfileController.deleteBusinessProfile);
 

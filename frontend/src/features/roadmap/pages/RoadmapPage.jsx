@@ -10,6 +10,8 @@ import {
   KeyRound,
   Layers3,
   Megaphone,
+  Pause,
+  Play,
   RefreshCw,
   Search,
   Users,
@@ -113,6 +115,25 @@ const getAdAccountIdForSync = (adAccount) => adAccount?.id || adAccount?.account
 const getCampaignIdForAction = (campaign) => campaign?.id || campaign?.campaignId || '';
 const getCampaignDuplicateKey = (profileId, adAccountId, campaignId) =>
   profileId && adAccountId && campaignId ? `${profileId}:${adAccountId}:${campaignId}` : '';
+const getCampaignStatusKey = (profileId, adAccountId, campaignId, status) =>
+  profileId && adAccountId && campaignId && status ? `${profileId}:${adAccountId}:${campaignId}:${status}` : '';
+
+const isPausedDeliveryStatus = (status) =>
+  ['PAUSED', 'CAMPAIGN_PAUSED', 'ADSET_PAUSED'].includes(String(status || '').trim().toUpperCase());
+const isActiveDeliveryStatus = (status) =>
+  ['ACTIVE', 'ENABLED'].includes(String(status || '').trim().toUpperCase());
+const getCampaignActionLabel = (status) => (status === 'ACTIVE' ? 'start' : 'pause');
+
+const formatDateTime = (value) => {
+  if (!value) {
+    return 'Not fetched';
+  }
+
+  return new Intl.DateTimeFormat('en', {
+    dateStyle: 'medium',
+    timeStyle: 'short',
+  }).format(new Date(value));
+};
 
 const getCurrency = (adAccount, fallback = 'USD') => adAccount?.currency || adAccount?.spendCurrency || fallback;
 
@@ -259,6 +280,65 @@ const StatusPill = ({ status }) => {
   );
 };
 
+const CampaignActionButton = ({ children, className = '', disabled, label, onClick }) => (
+  <button
+    type="button"
+    onClick={(event) => {
+      event.stopPropagation();
+      onClick?.();
+    }}
+    disabled={disabled}
+    className={`flex h-9 w-9 items-center justify-center rounded-lg transition disabled:cursor-not-allowed disabled:opacity-45 ${className}`}
+    title={label}
+    aria-label={label}
+  >
+    {children}
+  </button>
+);
+
+const CampaignActionsCard = ({
+  canManageCampaign,
+  campaignStatus,
+  duplicating,
+  onDuplicate,
+  onUpdateStatus,
+  pauseUpdating,
+  publishKeyLabel,
+  startUpdating,
+}) => {
+  const isPaused = isPausedDeliveryStatus(campaignStatus);
+  const isActive = isActiveDeliveryStatus(campaignStatus);
+
+  return (
+    <div className="ml-auto flex w-max items-center gap-1.5 rounded-xl border border-sky-100 bg-white p-1.5 shadow-sm shadow-sky-50">
+      <CampaignActionButton
+        onClick={onDuplicate}
+        disabled={duplicating || !canManageCampaign}
+        className="bg-indigo-50 text-indigo-700 hover:bg-indigo-100"
+        label={canManageCampaign ? `Duplicate with ${publishKeyLabel}` : `No active ${publishKeyLabel} for duplicating`}
+      >
+        <CopyPlus size={15} strokeWidth={2.3} className={duplicating ? 'animate-pulse' : ''} />
+      </CampaignActionButton>
+      <CampaignActionButton
+        onClick={() => onUpdateStatus('PAUSED')}
+        disabled={pauseUpdating || isPaused || !canManageCampaign}
+        className="bg-amber-50 text-amber-700 hover:bg-amber-100"
+        label={isPaused ? 'Campaign is already paused' : `Pause campaign, ad sets, and ads with ${publishKeyLabel}`}
+      >
+        <Pause size={15} strokeWidth={2.4} className={pauseUpdating ? 'animate-pulse' : ''} />
+      </CampaignActionButton>
+      <CampaignActionButton
+        onClick={() => onUpdateStatus('ACTIVE')}
+        disabled={startUpdating || isActive || !canManageCampaign}
+        className="bg-emerald-50 text-emerald-700 hover:bg-emerald-100"
+        label={isActive ? 'Campaign is already active' : `Start campaign, ad sets, and ads with ${publishKeyLabel}`}
+      >
+        <Play size={15} strokeWidth={2.4} className={startUpdating ? 'animate-pulse' : ''} />
+      </CampaignActionButton>
+    </div>
+  );
+};
+
 const getTreeLineLeft = (depth) => `${0.75 + Math.max(depth - 1, 0) * 1.5}rem`;
 
 const TreeGroup = ({ children, className = '', depth }) => (
@@ -401,6 +481,7 @@ const RoadmapPage = () => {
   const [isLoading, setIsLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [duplicatingCampaignKey, setDuplicatingCampaignKey] = useState('');
+  const [updatingCampaignStatusKey, setUpdatingCampaignStatusKey] = useState('');
   const [error, setError] = useState('');
 
   useEffect(() => {
@@ -565,6 +646,52 @@ const RoadmapPage = () => {
       });
     } finally {
       setDuplicatingCampaignKey('');
+    }
+  };
+
+  const updateCampaignStatus = async ({ account, profile, adAccount, campaign, status }) => {
+    const adAccountId = getAdAccountIdForSync(adAccount);
+    const campaignId = getCampaignIdForAction(campaign);
+    const statusKey = getCampaignStatusKey(profile?.id, adAccountId, campaignId, status);
+    const actionLabel = getCampaignActionLabel(status);
+
+    if (!profile?.id || !adAccountId || !campaignId) {
+      toast.error('Campaign status update needs a saved profile, ad account, and campaign id.', {
+        position: 'top-center',
+      });
+      return;
+    }
+
+    setUpdatingCampaignStatusKey(statusKey);
+    const toastId = `campaign-status-${statusKey}`;
+    toast.loading(`${actionLabel === 'start' ? 'Starting' : 'Pausing'} ${campaign.name || 'campaign'} with ${selectedPublishKeyLabel}`, {
+      id: toastId,
+      position: 'top-center',
+    });
+
+    try {
+      const data = await businessDataApi.updateCampaignStatus(profile.id, adAccountId, campaignId, {
+        tokenId: account.sourceTokenId,
+        tokenType: publishTokenType,
+        status,
+      });
+      const statusError = data.summary?.errors?.[0];
+      const toastMessage = statusError?.message
+        ? `${data.message || `Campaign ${actionLabel} requested`}: ${statusError.message}`
+        : data.message || `Campaign ${status === 'ACTIVE' ? 'started' : 'paused'} successfully`;
+
+      toast[statusError || data.summary?.failed ? 'error' : 'success'](toastMessage, {
+        id: toastId,
+        position: 'top-center',
+      });
+      await refreshBrands({ silent: true });
+    } catch (requestError) {
+      toast.error(requestError.message || `Campaign ${actionLabel} failed`, {
+        id: toastId,
+        position: 'top-center',
+      });
+    } finally {
+      setUpdatingCampaignStatusKey('');
     }
   };
 
@@ -773,6 +900,12 @@ const RoadmapPage = () => {
                                                   <MetricBadge label="Disapproved" value={disapprovedAdCount} tone="red" />
                                                 ) : null}
                                                 <MetricBadge label="Campaigns" value={campaigns.length || Number(adAccount.campaignCount) || 0} tone="emerald" />
+                                                <MetricBadge
+                                                  label="Last fetch"
+                                                  value={formatDateTime(adAccount.hierarchySyncedAt || profile.assetMetricsSyncedAt || profile.lastSyncedAt)}
+                                                  tone="slate"
+                                                  fullValue
+                                                />
                                                 <StatusPill status={getStatus(adAccount.connectionStatus, adAccount.status, adAccount.statusLabel)} />
                                                 <button
                                                   type="button"
@@ -808,7 +941,12 @@ const RoadmapPage = () => {
                                                       const adSets = getAdSets(campaign);
                                                       const isCampaignOpen = expandedCampaignId === campaignKey;
                                                       const isDuplicatingCampaign = duplicatingCampaignKey === duplicateKey;
-                                                      const canDuplicateCampaign = canDuplicateAccount && adAccountSyncId && campaignId;
+                                                      const canManageCampaign = canDuplicateAccount && adAccountSyncId && campaignId;
+                                                      const campaignStatus = getStatus(campaign.status, campaign.effectiveStatus);
+                                                      const startKey = getCampaignStatusKey(profile.id, adAccountSyncId, campaignId, 'ACTIVE');
+                                                      const pauseKey = getCampaignStatusKey(profile.id, adAccountSyncId, campaignId, 'PAUSED');
+                                                      const isStartingCampaign = updatingCampaignStatusKey === startKey;
+                                                      const isPausingCampaign = updatingCampaignStatusKey === pauseKey;
                                                       const campaignDisapprovedAdCount = getDisapprovedCampaignCount(campaign);
 
                                                       return (
@@ -826,29 +964,32 @@ const RoadmapPage = () => {
                                                               <MetricBadge label="Disapproved" value={campaignDisapprovedAdCount} tone="red" />
                                                             ) : null}
                                                             <MetricBadge label="Budget" value={getCampaignBudget(campaign, campaignCurrency)} tone="sky" />
-                                                            <StatusPill status={getStatus(campaign.status, campaign.effectiveStatus)} />
-                                                            <button
-                                                              type="button"
-                                                              onClick={(event) => {
-                                                                event.stopPropagation();
-                                                                void duplicateCampaign({
+                                                            <StatusPill status={campaignStatus} />
+                                                            <CampaignActionsCard
+                                                              canManageCampaign={canManageCampaign}
+                                                              campaignStatus={campaignStatus}
+                                                              duplicating={isDuplicatingCampaign}
+                                                              onDuplicate={() =>
+                                                                duplicateCampaign({
                                                                   account,
                                                                   profile,
                                                                   adAccount,
                                                                   campaign,
-                                                                });
-                                                              }}
-                                                              disabled={isDuplicatingCampaign || !canDuplicateCampaign}
-                                                              className="inline-flex h-9 items-center gap-2 rounded-full border border-indigo-100 bg-white px-3 text-xs font-black text-indigo-700 transition hover:bg-indigo-50 disabled:cursor-not-allowed disabled:opacity-50"
-                                                              title={
-                                                                canDuplicateCampaign
-                                                                  ? `Duplicate with ${selectedPublishKeyLabel}`
-                                                                  : `No active ${selectedPublishKeyLabel} for duplicating`
+                                                                })
                                                               }
-                                                            >
-                                                              <CopyPlus size={15} strokeWidth={2.3} className={isDuplicatingCampaign ? 'animate-pulse' : ''} />
-                                                              Duplicate
-                                                            </button>
+                                                              onUpdateStatus={(status) =>
+                                                                updateCampaignStatus({
+                                                                  account,
+                                                                  profile,
+                                                                  adAccount,
+                                                                  campaign,
+                                                                  status,
+                                                                })
+                                                              }
+                                                              pauseUpdating={isPausingCampaign}
+                                                              publishKeyLabel={selectedPublishKeyLabel}
+                                                              startUpdating={isStartingCampaign}
+                                                            />
                                                           </TreeRow>
 
                                                           {isCampaignOpen ? (
