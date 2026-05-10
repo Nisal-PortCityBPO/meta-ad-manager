@@ -1,15 +1,18 @@
 import { useEffect, useRef, useState } from 'react';
+import toast from 'react-hot-toast';
 import {
   ArrowLeft,
   BadgeDollarSign,
   BriefcaseBusiness,
   ChevronDown,
   CircleCheck,
+  CopyPlus,
   DownloadCloud,
   FileText,
   KeyRound,
   Megaphone,
   Radio,
+  Search,
   ShieldAlert,
   Users,
   X,
@@ -17,7 +20,7 @@ import {
 import DashboardHeader from '../../dashboard/components/DashboardHeader';
 import DashboardPanel from '../../dashboard/components/DashboardPanel';
 import { businessDataApi } from '../../dashboard/api/businessDataApi';
-import { useMetaSync } from '../../dashboard/context/MetaSyncContext';
+import { getAdAccountSyncKey, useMetaSync } from '../../dashboard/context/MetaSyncContext';
 import { getMetaKeyTypeLabel, META_KEY_TYPES, useMetaKeySettings } from '../../settings/MetaKeySettingsContext';
 
 const profileStatusStyles = {
@@ -126,6 +129,16 @@ const getBrandStats = (brand) => {
   };
 };
 
+const brandMatchesSearch = (brand, searchValue) => {
+  const searchTerm = String(searchValue || '').trim().toLowerCase();
+
+  if (!searchTerm) {
+    return true;
+  }
+
+  return String(brand?.name || '').toLowerCase().includes(searchTerm);
+};
+
 const getBusinessProfileStats = (profile) => {
   const adAccounts = Array.isArray(profile.adAccounts) ? profile.adAccounts : [];
   const adSetCount = adAccounts.reduce(
@@ -218,6 +231,10 @@ const getBusinessProfileAdAccounts = (profile) => {
 };
 
 const getAdAccountKey = (account) => account.id || account.accountId;
+const getAdAccountIdForSync = (account) => account?.id || account?.accountId || '';
+const getCampaignIdForAction = (campaign) => campaign?.id || campaign?.campaignId || '';
+const getCampaignDuplicateKey = (profileId, adAccountId, campaignId) =>
+  profileId && adAccountId && campaignId ? `${profileId}:${adAccountId}:${campaignId}` : '';
 
 const percentFormatter = new Intl.NumberFormat('en-US', {
   maximumFractionDigits: 2,
@@ -273,6 +290,10 @@ const getStoredAdHierarchy = (adAccount) => {
 
   adAccount.campaigns.forEach((campaign) => {
     const campaignAdSets = Array.isArray(campaign.adSets) ? campaign.adSets : [];
+    const campaignDisapprovedAdCount = campaignAdSets.reduce(
+      (total, adSet) => total + (Array.isArray(adSet.ads) ? adSet.ads.filter(isDisapprovedAd).length : 0),
+      0
+    );
 
     campaigns.push({
       id: campaign.id,
@@ -283,10 +304,12 @@ const getStoredAdHierarchy = (adAccount) => {
       leads: normalizeStoredMetric(campaign.leads ?? campaign.insights?.leads),
       cpr: normalizeStoredMetric(campaign.cpr ?? campaign.insights?.cpr ?? campaign.insights?.cpl),
       adSetCount: normalizeStoredMetric(campaign.adSetCount || campaignAdSets.length),
+      disapprovedAdCount: campaignDisapprovedAdCount,
     });
 
     campaignAdSets.forEach((adSet) => {
       const adSetAds = Array.isArray(adSet.ads) ? adSet.ads : [];
+      const adSetDisapprovedAdCount = adSetAds.filter(isDisapprovedAd).length;
 
       adSets.push({
         id: adSet.id,
@@ -299,6 +322,7 @@ const getStoredAdHierarchy = (adAccount) => {
         leads: normalizeStoredMetric(adSet.leads ?? adSet.insights?.leads),
         cpr: normalizeStoredMetric(adSet.cpr ?? adSet.insights?.cpr ?? adSet.insights?.cpl),
         adCount: normalizeStoredMetric(adSet.adCount || adSetAds.length),
+        disapprovedAdCount: adSetDisapprovedAdCount,
       });
 
       adSetAds.forEach((ad) => {
@@ -369,6 +393,22 @@ const buildAdAccountHierarchy = (adAccount) => {
   };
 };
 
+const isDisapprovedAd = (ad) => {
+  const statuses = [
+    ad?.status,
+    ad?.effectiveStatus,
+    ad?.configuredStatus,
+    ad?.reviewStatus,
+    ad?.adReviewFeedback?.global?.status,
+  ]
+    .filter(Boolean)
+    .map((status) => String(status).toUpperCase());
+
+  return statuses.some((status) => status.includes('DISAPPROVED') || status.includes('REJECTED'));
+};
+
+const getDisapprovedAdCount = (adAccount) => buildAdAccountHierarchy(adAccount).ads.filter(isDisapprovedAd).length;
+
 const SocialAccountAvatar = ({ account, size = 'md' }) => {
   const [imageFailed, setImageFailed] = useState(false);
   const showImage = account?.profileImageUrl && !imageFailed;
@@ -393,6 +433,23 @@ const SocialAccountAvatar = ({ account, size = 'md' }) => {
     </span>
   );
 };
+
+const BrandSearchBox = ({ value, onChange, placeholder = 'Search brands' }) => (
+  <label className="relative block w-full sm:w-72">
+    <Search
+      size={16}
+      strokeWidth={2.3}
+      className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-sky-600"
+    />
+    <input
+      type="search"
+      value={value}
+      onChange={(event) => onChange(event.target.value)}
+      placeholder={placeholder}
+      className="h-10 w-full rounded-xl border border-sky-100 bg-white pl-9 pr-3 text-sm font-semibold text-slate-700 outline-none transition placeholder:text-slate-400 focus:border-sky-300 focus:ring-4 focus:ring-sky-100"
+    />
+  </label>
+);
 
 const BrandCard = ({ brand, onSelect }) => {
   const stats = getBrandStats(brand);
@@ -505,6 +562,9 @@ const BrandSocialAccountTree = ({ brand, onSelectAccount, selectedAccountId }) =
 );
 
 const BrandTreeSidebar = ({ brands, onBack, onSelectAccount, onSelectBrand, selectedAccountId, selectedBrandId }) => {
+  const [brandSearch, setBrandSearch] = useState('');
+  const filteredBrands = brands.filter((brand) => brandMatchesSearch(brand, brandSearch));
+
   return (
     <aside className="flex h-full min-h-0 flex-col overflow-hidden rounded-2xl border border-sky-100 bg-white p-3 shadow-sm shadow-sky-50">
       <button
@@ -516,44 +576,54 @@ const BrandTreeSidebar = ({ brands, onBack, onSelectAccount, onSelectBrand, sele
         All brands
       </button>
 
+      <div className="mb-3 shrink-0">
+        <BrandSearchBox value={brandSearch} onChange={setBrandSearch} placeholder="Search brand" />
+      </div>
+
       <div className="min-h-0 flex-1 space-y-3 overflow-y-auto pr-1">
-        {brands.map((brand) => {
-          const stats = getBrandStats(brand);
-          const isSelected = brand.id === selectedBrandId;
+        {filteredBrands.length ? (
+          filteredBrands.map((brand) => {
+            const stats = getBrandStats(brand);
+            const isSelected = brand.id === selectedBrandId;
 
-          return (
-            <div key={brand.id}>
-              <button
-                type="button"
-                onClick={() => onSelectBrand(brand.id)}
-                className={`w-full rounded-xl border p-3 text-left transition focus:outline-none focus:ring-4 focus:ring-sky-100 ${
-                  isSelected
-                    ? 'border-sky-300 bg-sky-50 shadow-sm shadow-sky-100'
-                    : 'border-sky-100 bg-white hover:border-sky-200 hover:bg-sky-50/60'
-                }`}
-              >
-                <div className="flex items-start gap-2">
-                  <span className="mt-1 h-3 w-3 shrink-0 rounded-full" style={{ backgroundColor: brand.color }} />
-                  <div className="min-w-0 flex-1">
-                    <p className="truncate text-sm font-black text-slate-950">{brand.name}</p>
-                    <p className="mt-1 text-xs font-bold text-slate-500">
-                      {socialAccountLabel(brand.socialAccountCount || 0)}
-                    </p>
+            return (
+              <div key={brand.id}>
+                <button
+                  type="button"
+                  onClick={() => onSelectBrand(brand.id)}
+                  className={`w-full rounded-xl border p-3 text-left transition focus:outline-none focus:ring-4 focus:ring-sky-100 ${
+                    isSelected
+                      ? 'border-sky-300 bg-sky-50 shadow-sm shadow-sky-100'
+                      : 'border-sky-100 bg-white hover:border-sky-200 hover:bg-sky-50/60'
+                  }`}
+                >
+                  <div className="flex items-start gap-2">
+                    <span className="mt-1 h-3 w-3 shrink-0 rounded-full" style={{ backgroundColor: brand.color }} />
+                    <div className="min-w-0 flex-1">
+                      <p className="truncate text-sm font-black text-slate-950">{brand.name}</p>
+                      <p className="mt-1 text-xs font-bold text-slate-500">
+                        {socialAccountLabel(brand.socialAccountCount || 0)}
+                      </p>
+                    </div>
+                    <p className="max-w-28 shrink-0 break-words text-right text-xs font-black leading-tight text-sky-700">{stats.adSpend}</p>
                   </div>
-                  <p className="max-w-28 shrink-0 break-words text-right text-xs font-black leading-tight text-sky-700">{stats.adSpend}</p>
-                </div>
-              </button>
+                </button>
 
-              {isSelected ? (
-                <BrandSocialAccountTree
-                  brand={brand}
-                  onSelectAccount={onSelectAccount}
-                  selectedAccountId={selectedAccountId}
-                />
-              ) : null}
-            </div>
-          );
-        })}
+                {isSelected ? (
+                  <BrandSocialAccountTree
+                    brand={brand}
+                    onSelectAccount={onSelectAccount}
+                    selectedAccountId={selectedAccountId}
+                  />
+                ) : null}
+              </div>
+            );
+          })
+        ) : (
+          <p className="rounded-xl border border-dashed border-sky-100 bg-sky-50/60 px-4 py-6 text-center text-sm font-semibold text-slate-500">
+            No brands match this search.
+          </p>
+        )}
       </div>
     </aside>
   );
@@ -734,8 +804,23 @@ const BusinessProfileCard = ({ index, onSelect, profile }) => {
   );
 };
 
-const BusinessProfileDetailView = ({ onSelectAdAccount, selectedProfile, selectedProfileIndex }) => {
+const BusinessProfileDetailView = ({
+  onSelectAdAccount,
+  onSyncAdAccount,
+  selectedAccount,
+  selectedProfile,
+  selectedProfileIndex,
+  syncingAdAccountKey,
+}) => {
+  const { fetchTokenType } = useMetaKeySettings();
+  const selectedFetchKeyLabel = getMetaKeyTypeLabel(fetchTokenType);
   const adAccounts = getBusinessProfileAdAccounts(selectedProfile, selectedProfileIndex);
+  const canFetch =
+    selectedAccount?.sourceTokenId &&
+    selectedAccount.sourceTokenStatus !== 'DEACTIVE' &&
+    (fetchTokenType === META_KEY_TYPES.SYSTEM_USER
+      ? selectedAccount.systemUserAccessTokenStatus !== 'DEACTIVE'
+      : selectedAccount.profileAccessTokenStatus !== 'DEACTIVE');
 
   if (!adAccounts.length) {
     return (
@@ -751,7 +836,7 @@ const BusinessProfileDetailView = ({ onSelectAdAccount, selectedProfile, selecte
         <table className="min-w-full divide-y divide-sky-50">
           <thead className="bg-sky-50/70">
             <tr>
-              {['Ad account', 'Status', 'Spending', 'Campaigns'].map((heading) => (
+              {['Ad account', 'Status', 'Disapproved', 'Spending', 'Campaigns', 'Fetch'].map((heading) => (
                 <th
                   key={heading}
                   className="px-5 py-4 text-left text-xs font-black uppercase tracking-[0.16em] text-sky-700"
@@ -765,6 +850,11 @@ const BusinessProfileDetailView = ({ onSelectAdAccount, selectedProfile, selecte
             {adAccounts.map((account) => {
               const status = account.connectionStatus || 'UNKNOWN';
               const StatusIcon = status === 'ACTIVE' ? CircleCheck : ShieldAlert;
+              const adAccountId = getAdAccountIdForSync(account);
+              const isAdAccountSyncing =
+                syncingAdAccountKey === getAdAccountSyncKey(selectedProfile.id, adAccountId);
+              const canFetchAdAccount = canFetch && adAccountId;
+              const disapprovedAdCount = getDisapprovedAdCount(account);
 
               return (
                 <tr
@@ -785,10 +875,42 @@ const BusinessProfileDetailView = ({ onSelectAdAccount, selectedProfile, selecte
                     </span>
                   </td>
                   <td className="px-5 py-4 text-sm font-black text-slate-800">
+                    {disapprovedAdCount > 0 ? (
+                      <span className="inline-flex rounded-full bg-red-50 px-3 py-1 text-xs font-black text-red-700">
+                        {disapprovedAdCount}
+                      </span>
+                    ) : (
+                      <span className="text-slate-400">0</span>
+                    )}
+                  </td>
+                  <td className="px-5 py-4 text-sm font-black text-slate-800">
                     {formatCurrencyAmount(account.totalSpend, account.currency || 'USD')}
                   </td>
                   <td className="px-5 py-4 text-sm font-black text-slate-800">
                     {account.campaignCount || 0}
+                  </td>
+                  <td className="px-5 py-4">
+                    <button
+                      type="button"
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        onSyncAdAccount?.({
+                          account: selectedAccount,
+                          profile: selectedProfile,
+                          adAccount: account,
+                        });
+                      }}
+                      disabled={isAdAccountSyncing || !canFetchAdAccount}
+                      className="inline-flex h-10 items-center gap-2 rounded-xl bg-sky-600 px-3 text-sm font-bold text-white transition hover:bg-sky-700 disabled:cursor-not-allowed disabled:opacity-60"
+                      title={
+                        canFetchAdAccount
+                          ? `Fetch ${account.name || 'ad account'} using ${selectedFetchKeyLabel}`
+                          : `No active ${selectedFetchKeyLabel} for this ad account`
+                      }
+                    >
+                      <DownloadCloud size={16} strokeWidth={2.2} className={isAdAccountSyncing ? 'animate-pulse' : ''} />
+                      {isAdAccountSyncing ? 'Fetching' : 'Fetch'}
+                    </button>
                   </td>
                 </tr>
               );
@@ -837,6 +959,18 @@ const MetricText = ({ children }) => (
   <span className="text-sm font-black text-slate-800">{children}</span>
 );
 
+const DisapprovedCount = ({ value }) => {
+  const count = Number(value) || 0;
+
+  return count > 0 ? (
+    <span className="inline-flex rounded-full bg-red-50 px-3 py-1 text-xs font-black text-red-700">
+      {count}
+    </span>
+  ) : (
+    <span className="text-sm font-black text-slate-400">0</span>
+  );
+};
+
 const EmptyAdHierarchyState = ({ selectedAdAccount }) => (
   <div className="flex min-h-0 flex-1 items-center justify-center px-5 py-10 text-center">
     <div className="max-w-md">
@@ -849,12 +983,21 @@ const EmptyAdHierarchyState = ({ selectedAdAccount }) => (
   </div>
 );
 
-const CampaignsTable = ({ campaigns, onSelectCampaign }) => (
+const CampaignsTable = ({
+  canDuplicateCampaign,
+  duplicatingCampaignKey,
+  onDuplicateCampaign,
+  onSelectCampaign,
+  publishKeyLabel,
+  selectedAdAccount,
+  selectedProfile,
+  campaigns,
+}) => (
   <div className="min-h-0 flex-1 overflow-auto">
     <table className="min-w-full divide-y divide-sky-50">
       <thead className="sticky top-0 z-10 bg-sky-50/95 backdrop-blur">
         <tr>
-          {['Campaign', 'Status', 'Spending', 'Clicks', 'Leads', 'CPR', 'Ad Sets'].map((heading) => (
+          {['Campaign', 'Status', 'Disapproved', 'Spending', 'Clicks', 'Leads', 'CPR', 'Ad Sets', 'Duplicate'].map((heading) => (
             <th key={heading} className="px-5 py-4 text-left text-xs font-black uppercase tracking-[0.16em] text-sky-700">
               {heading}
             </th>
@@ -862,21 +1005,45 @@ const CampaignsTable = ({ campaigns, onSelectCampaign }) => (
         </tr>
       </thead>
       <tbody className="divide-y divide-sky-50">
-        {campaigns.map((campaign) => (
-          <tr
-            key={campaign.id}
-            onClick={() => onSelectCampaign(campaign)}
-            className="cursor-pointer align-middle transition hover:bg-sky-50/70"
-          >
-            <td className="px-5 py-4 font-black text-slate-950">{campaign.name}</td>
-            <td className="px-5 py-4"><StatusPill status={campaign.status} /></td>
-            <td className="px-5 py-4"><MetricText>{formatCurrencyAmount(campaign.spend)}</MetricText></td>
-            <td className="px-5 py-4"><MetricText>{numberFormatter.format(campaign.clicks)}</MetricText></td>
-            <td className="px-5 py-4"><MetricText>{numberFormatter.format(campaign.leads)}</MetricText></td>
-            <td className="px-5 py-4"><MetricText>{formatCurrencyAmount(campaign.cpr || getRatio(campaign.spend, campaign.leads))}</MetricText></td>
-            <td className="px-5 py-4"><MetricText>{campaign.adSetCount}</MetricText></td>
-          </tr>
-        ))}
+        {campaigns.map((campaign) => {
+          const campaignId = getCampaignIdForAction(campaign);
+          const adAccountId = getAdAccountIdForSync(selectedAdAccount);
+          const duplicateKey = getCampaignDuplicateKey(selectedProfile?.id, adAccountId, campaignId);
+          const isDuplicatingCampaign = duplicatingCampaignKey === duplicateKey;
+          const canDuplicate = canDuplicateCampaign && campaignId;
+
+          return (
+            <tr
+              key={campaign.id}
+              onClick={() => onSelectCampaign(campaign)}
+              className="cursor-pointer align-middle transition hover:bg-sky-50/70"
+            >
+              <td className="px-5 py-4 font-black text-slate-950">{campaign.name}</td>
+              <td className="px-5 py-4"><StatusPill status={campaign.status} /></td>
+              <td className="px-5 py-4"><DisapprovedCount value={campaign.disapprovedAdCount} /></td>
+              <td className="px-5 py-4"><MetricText>{formatCurrencyAmount(campaign.spend)}</MetricText></td>
+              <td className="px-5 py-4"><MetricText>{numberFormatter.format(campaign.clicks)}</MetricText></td>
+              <td className="px-5 py-4"><MetricText>{numberFormatter.format(campaign.leads)}</MetricText></td>
+              <td className="px-5 py-4"><MetricText>{formatCurrencyAmount(campaign.cpr || getRatio(campaign.spend, campaign.leads))}</MetricText></td>
+              <td className="px-5 py-4"><MetricText>{campaign.adSetCount}</MetricText></td>
+              <td className="px-5 py-4">
+                <button
+                  type="button"
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    onDuplicateCampaign?.(campaign);
+                  }}
+                  disabled={isDuplicatingCampaign || !canDuplicate}
+                  className="inline-flex h-10 items-center gap-2 rounded-xl bg-indigo-600 px-3 text-sm font-bold text-white transition hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-60"
+                  title={canDuplicate ? `Duplicate with ${publishKeyLabel}` : `No active ${publishKeyLabel} for duplicating`}
+                >
+                  <CopyPlus size={16} strokeWidth={2.2} className={isDuplicatingCampaign ? 'animate-pulse' : ''} />
+                  {isDuplicatingCampaign ? 'Duplicating' : 'Duplicate'}
+                </button>
+              </td>
+            </tr>
+          );
+        })}
       </tbody>
     </table>
   </div>
@@ -887,7 +1054,7 @@ const AdSetsTable = ({ adSets, onSelectAdSet }) => (
     <table className="min-w-full divide-y divide-sky-50">
       <thead className="sticky top-0 z-10 bg-sky-50/95 backdrop-blur">
         <tr>
-          {['Ad Set', 'Status', 'Spending', 'Clicks', 'Leads', 'CPR', 'Ads'].map((heading) => (
+          {['Ad Set', 'Status', 'Disapproved', 'Spending', 'Clicks', 'Leads', 'CPR', 'Ads'].map((heading) => (
             <th key={heading} className="px-5 py-4 text-left text-xs font-black uppercase tracking-[0.16em] text-sky-700">
               {heading}
             </th>
@@ -906,6 +1073,7 @@ const AdSetsTable = ({ adSets, onSelectAdSet }) => (
               <p className="mt-1 text-xs font-semibold text-slate-400">{adSet.campaignName}</p>
             </td>
             <td className="px-5 py-4"><StatusPill status={adSet.status} /></td>
+            <td className="px-5 py-4"><DisapprovedCount value={adSet.disapprovedAdCount} /></td>
             <td className="px-5 py-4"><MetricText>{formatCurrencyAmount(adSet.spend)}</MetricText></td>
             <td className="px-5 py-4"><MetricText>{numberFormatter.format(adSet.clicks)}</MetricText></td>
             <td className="px-5 py-4"><MetricText>{numberFormatter.format(adSet.leads)}</MetricText></td>
@@ -1059,7 +1227,14 @@ const AdDetailsModal = ({ ad, context, onClose }) => {
   );
 };
 
-const AdAccountDetailView = ({ selectedAccount, selectedAdAccount, selectedProfile }) => {
+const AdAccountDetailView = ({
+  duplicatingCampaignKey,
+  onDuplicateCampaign,
+  selectedAccount,
+  selectedAdAccount,
+  selectedProfile,
+}) => {
+  const { publishTokenType } = useMetaKeySettings();
   const [activeTab, setActiveTab] = useState('campaigns');
   const [selectedAd, setSelectedAd] = useState(null);
   const [selectedCampaignId, setSelectedCampaignId] = useState(null);
@@ -1075,6 +1250,14 @@ const AdAccountDetailView = ({ selectedAccount, selectedAdAccount, selectedProfi
     : selectedCampaignId
       ? hierarchy.ads.filter((ad) => ad.campaignId === selectedCampaignId)
       : hierarchy.ads;
+  const publishKeyLabel = getMetaKeyTypeLabel(publishTokenType);
+  const canDuplicateCampaign =
+    selectedAccount?.sourceTokenId &&
+    selectedAccount.sourceTokenStatus !== 'DEACTIVE' &&
+    (publishTokenType === META_KEY_TYPES.SYSTEM_USER
+      ? selectedAccount.systemUserAccessTokenStatus !== 'DEACTIVE'
+      : selectedAccount.profileAccessTokenStatus !== 'DEACTIVE') &&
+    getAdAccountIdForSync(selectedAdAccount);
   const handleTabChange = (tabId) => {
     setActiveTab(tabId);
 
@@ -1120,7 +1303,23 @@ const AdAccountDetailView = ({ selectedAccount, selectedAdAccount, selectedProfi
 
         {activeTab === 'campaigns' ? (
           hierarchy.campaigns.length ? (
-            <CampaignsTable campaigns={hierarchy.campaigns} onSelectCampaign={selectCampaign} />
+            <CampaignsTable
+              campaigns={hierarchy.campaigns}
+              canDuplicateCampaign={canDuplicateCampaign}
+              duplicatingCampaignKey={duplicatingCampaignKey}
+              onDuplicateCampaign={(campaign) =>
+                onDuplicateCampaign?.({
+                  account: selectedAccount,
+                  profile: selectedProfile,
+                  adAccount: selectedAdAccount,
+                  campaign,
+                })
+              }
+              onSelectCampaign={selectCampaign}
+              publishKeyLabel={publishKeyLabel}
+              selectedAdAccount={selectedAdAccount}
+              selectedProfile={selectedProfile}
+            />
           ) : (
             <EmptyAdHierarchyState selectedAdAccount={selectedAdAccount} />
           )
@@ -1157,16 +1356,20 @@ const AdAccountDetailView = ({ selectedAccount, selectedAdAccount, selectedProfi
 const SelectedBrandView = ({
   brand,
   brands,
+  duplicatingCampaignKey,
   onBack,
+  onDuplicateCampaign,
   onSelectAccount,
   onSelectAdAccount,
   onSelectBrand,
   onSelectProfile,
+  onSyncAdAccount,
   onSyncAccount,
   selectedAccountId,
   selectedAdAccountId,
   selectedBrandId,
   selectedProfileId,
+  syncingAdAccountKey,
   syncingAccountId,
 }) => {
   const stats = getBrandStats(brand);
@@ -1332,7 +1535,9 @@ const SelectedBrandView = ({
           {selectedAccount ? (
             selectedAdAccount ? (
               <AdAccountDetailView
+                duplicatingCampaignKey={duplicatingCampaignKey}
                 key={getAdAccountKey(selectedAdAccount)}
+                onDuplicateCampaign={onDuplicateCampaign}
                 selectedAccount={selectedAccount}
                 selectedAdAccount={selectedAdAccount}
                 selectedProfile={selectedProfile}
@@ -1340,8 +1545,11 @@ const SelectedBrandView = ({
             ) : selectedProfile ? (
               <BusinessProfileDetailView
                 onSelectAdAccount={onSelectAdAccount}
+                onSyncAdAccount={onSyncAdAccount}
+                selectedAccount={selectedAccount}
                 selectedProfile={selectedProfile}
                 selectedProfileIndex={selectedProfileIndex}
+                syncingAdAccountKey={syncingAdAccountKey}
               />
             ) : selectedProfiles.length ? (
               <div className="grid gap-4 lg:grid-cols-2">
@@ -1384,10 +1592,14 @@ const OverviewPage = () => {
   const [selectedAdAccountId, setSelectedAdAccountId] = useState(null);
   const [selectedProfileId, setSelectedProfileId] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [duplicatingCampaignKey, setDuplicatingCampaignKey] = useState('');
   const [error, setError] = useState('');
+  const [brandSearch, setBrandSearch] = useState('');
   const loadOverviewRef = useRef(null);
-  const { startSocialAccountSync, syncingAccountId } = useMetaSync();
+  const { startAdAccountSync, startSocialAccountSync, syncingAdAccountKey, syncingAccountId } = useMetaSync();
+  const { publishTokenType } = useMetaKeySettings();
   const selectedBrand = brands.find((brand) => brand.id === selectedBrandId);
+  const filteredBrands = brands.filter((brand) => brandMatchesSearch(brand, brandSearch));
 
   const loadOverview = async () => {
     setLoading(true);
@@ -1431,6 +1643,57 @@ const OverviewPage = () => {
   const selectProfile = (profileId) => {
     setSelectedProfileId(profileId);
     setSelectedAdAccountId(null);
+  };
+
+  const duplicateCampaign = async ({ account, profile, adAccount, campaign }) => {
+    const adAccountId = getAdAccountIdForSync(adAccount);
+    const campaignId = getCampaignIdForAction(campaign);
+    const duplicateKey = getCampaignDuplicateKey(profile?.id, adAccountId, campaignId);
+
+    if (!profile?.id || !adAccountId || !campaignId) {
+      toast.error('Campaign duplicate needs a saved profile, ad account, and campaign id.', {
+        position: 'top-center',
+      });
+      return;
+    }
+
+    setDuplicatingCampaignKey(duplicateKey);
+    const toastId = `duplicate-campaign-${duplicateKey}`;
+    const duplicateName = `${campaign.name || 'Campaign'} Copy`;
+    const publishKeyLabel = getMetaKeyTypeLabel(publishTokenType);
+
+    toast.loading(`Duplicating and fetching ${campaign.name || 'campaign'} with ${publishKeyLabel}`, {
+      id: toastId,
+      position: 'top-center',
+    });
+
+    try {
+      const data = await businessDataApi.duplicateCampaign(profile.id, adAccountId, campaignId, {
+        tokenId: account.sourceTokenId,
+        tokenType: publishTokenType,
+        name: duplicateName,
+        status: 'PAUSED',
+        deepCopy: true,
+      });
+
+      const adCopyError = data.summary?.manualAdCopyErrors?.[0];
+      const toastMessage = adCopyError?.message
+        ? `${data.message || 'Campaign duplicated, but an ad copy failed'}: ${adCopyError.message}`
+        : data.message || 'Campaign duplicated successfully';
+
+      toast[adCopyError ? 'error' : 'success'](toastMessage, {
+        id: toastId,
+        position: 'top-center',
+      });
+      await loadOverviewRef.current?.();
+    } catch (requestError) {
+      toast.error(requestError.message || 'Campaign duplicate failed', {
+        id: toastId,
+        position: 'top-center',
+      });
+    } finally {
+      setDuplicatingCampaignKey('');
+    }
   };
 
   useEffect(() => {
@@ -1495,32 +1758,45 @@ const OverviewPage = () => {
           <SelectedBrandView
             brand={selectedBrand}
             brands={brands}
+            duplicatingCampaignKey={duplicatingCampaignKey}
             onBack={() => {
               setSelectedBrandId(null);
               setSelectedAccountId(null);
               setSelectedAdAccountId(null);
               setSelectedProfileId(null);
             }}
+            onDuplicateCampaign={duplicateCampaign}
             onSelectAccount={selectAccount}
             onSelectAdAccount={setSelectedAdAccountId}
             onSelectBrand={selectBrand}
             onSelectProfile={selectProfile}
+            onSyncAdAccount={startAdAccountSync}
             onSyncAccount={startSocialAccountSync}
             selectedAccountId={selectedAccountId}
             selectedAdAccountId={selectedAdAccountId}
             selectedBrandId={selectedBrandId}
             selectedProfileId={selectedProfileId}
+            syncingAdAccountKey={syncingAdAccountKey}
             syncingAccountId={syncingAccountId}
           />
         </div>
       ) : brands.length ? (
         <div className="min-h-0 flex-1 overflow-y-auto">
-          <DashboardPanel title="Brands">
-            <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-              {brands.map((brand) => (
-                <BrandCard key={brand.id} brand={brand} onSelect={selectBrand} />
-              ))}
-            </div>
+          <DashboardPanel
+            title="Brands"
+            headerAction={<BrandSearchBox value={brandSearch} onChange={setBrandSearch} placeholder="Search brand" />}
+          >
+            {filteredBrands.length ? (
+              <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+                {filteredBrands.map((brand) => (
+                  <BrandCard key={brand.id} brand={brand} onSelect={selectBrand} />
+                ))}
+              </div>
+            ) : (
+              <p className="rounded-xl border border-dashed border-sky-100 bg-sky-50/60 px-5 py-8 text-center text-sm font-semibold text-slate-500">
+                No brands match this search.
+              </p>
+            )}
           </DashboardPanel>
         </div>
       ) : (

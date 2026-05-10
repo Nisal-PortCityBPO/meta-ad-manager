@@ -46,9 +46,44 @@ const deleteBusinessProfile = asyncHandler(async (req, res) => {
   res.json({ message: 'Business profile deleted successfully' });
 });
 
+const syncAdAccount = asyncHandler(async (req, res) => {
+  const result = await businessProfileService.syncAdAccount({
+    profileId: req.params.profileId,
+    adAccountId: req.params.adAccountId,
+    actor: req.user,
+    req,
+    tokenId: req.body?.tokenId,
+    tokenType: req.body?.tokenType,
+  });
+
+  res.json({
+    message: 'Ad account sync completed',
+    ...result,
+  });
+});
+
+const duplicateCampaign = asyncHandler(async (req, res) => {
+  const result = await businessProfileService.duplicateCampaign({
+    profileId: req.params.profileId,
+    adAccountId: req.params.adAccountId,
+    campaignId: req.params.campaignId,
+    actor: req.user,
+    req,
+    tokenId: req.body?.tokenId,
+    tokenType: req.body?.tokenType,
+    name: req.body?.name,
+    status: req.body?.status,
+    deepCopy: req.body?.deepCopy,
+  });
+
+  res.status(201).json(result);
+});
+
 module.exports = {
   assignBusinessProfile,
   deleteBusinessProfile,
+  duplicateCampaign,
   getBusinessProfiles,
   syncBusinessProfiles,
+  syncAdAccount,
 };

@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import toast from 'react-hot-toast';
 import {
   BriefcaseBusiness,
   ChevronDown,
   ChevronRight,
+  CopyPlus,
   DownloadCloud,
   FileText,
   KeyRound,
@@ -15,7 +17,7 @@ import {
 import DashboardHeader from '../../dashboard/components/DashboardHeader';
 import DashboardPanel from '../../dashboard/components/DashboardPanel';
 import { businessDataApi } from '../../dashboard/api/businessDataApi';
-import { useMetaSync } from '../../dashboard/context/MetaSyncContext';
+import { getAdAccountSyncKey, useMetaSync } from '../../dashboard/context/MetaSyncContext';
 import { getMetaKeyTypeLabel, META_KEY_TYPES, useMetaKeySettings } from '../../settings/MetaKeySettingsContext';
 
 const currencyFormatter = new Intl.NumberFormat('en-US', {
@@ -107,6 +109,10 @@ const getDisplayId = (entity) =>
 const getCampaigns = (adAccount) => (Array.isArray(adAccount?.campaigns) ? adAccount.campaigns : []);
 const getAdSets = (campaign) => (Array.isArray(campaign?.adSets) ? campaign.adSets : []);
 const getAds = (adSet) => (Array.isArray(adSet?.ads) ? adSet.ads : []);
+const getAdAccountIdForSync = (adAccount) => adAccount?.id || adAccount?.accountId || '';
+const getCampaignIdForAction = (campaign) => campaign?.id || campaign?.campaignId || '';
+const getCampaignDuplicateKey = (profileId, adAccountId, campaignId) =>
+  profileId && adAccountId && campaignId ? `${profileId}:${adAccountId}:${campaignId}` : '';
 
 const getCurrency = (adAccount, fallback = 'USD') => adAccount?.currency || adAccount?.spendCurrency || fallback;
 
@@ -176,16 +182,13 @@ const isDisapprovedAd = (ad) => {
   return statuses.some((status) => status.includes('DISAPPROVED') || status.includes('REJECTED'));
 };
 
+const getDisapprovedAdSetCount = (adSet) => getAds(adSet).filter(isDisapprovedAd).length;
+
+const getDisapprovedCampaignCount = (campaign) =>
+  getAdSets(campaign).reduce((total, adSet) => total + getDisapprovedAdSetCount(adSet), 0);
+
 const getDisapprovedAdCount = (adAccount) =>
-  getCampaigns(adAccount).reduce(
-    (campaignTotal, campaign) =>
-      campaignTotal +
-      getAdSets(campaign).reduce(
-        (adSetTotal, adSet) => adSetTotal + getAds(adSet).filter(isDisapprovedAd).length,
-        0
-      ),
-    0
-  );
+  getCampaigns(adAccount).reduce((total, campaign) => total + getDisapprovedCampaignCount(campaign), 0);
 
 const socialAccountMatchesSearch = (account, searchTerm) => {
   if (!searchTerm) {
@@ -384,8 +387,8 @@ const EmptyState = ({ children }) => (
 );
 
 const RoadmapPage = () => {
-  const { startSocialAccountSync, syncingAccountId } = useMetaSync();
-  const { fetchTokenType } = useMetaKeySettings();
+  const { startAdAccountSync, startSocialAccountSync, syncingAccountId, syncingAdAccountKey } = useMetaSync();
+  const { fetchTokenType, publishTokenType } = useMetaKeySettings();
   const [brands, setBrands] = useState([]);
   const [selectedBrandId, setSelectedBrandId] = useState('');
   const [brandSearch, setBrandSearch] = useState('');
@@ -397,6 +400,7 @@ const RoadmapPage = () => {
   const [expandedAdSetId, setExpandedAdSetId] = useState(null);
   const [isLoading, setIsLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
+  const [duplicatingCampaignKey, setDuplicatingCampaignKey] = useState('');
   const [error, setError] = useState('');
 
   useEffect(() => {
@@ -467,6 +471,7 @@ const RoadmapPage = () => {
     socialAccountMatchesSearch(account, normalizeSearch(accountSearch))
   );
   const selectedFetchKeyLabel = getMetaKeyTypeLabel(fetchTokenType);
+  const selectedPublishKeyLabel = getMetaKeyTypeLabel(publishTokenType);
   const filteredBrands = brands.filter((brand) => brandMatchesSearch(brand, normalizeSearch(brandSearch)));
 
   const resetExpandedTree = () => {
@@ -511,6 +516,56 @@ const RoadmapPage = () => {
 
   const toggleAdSet = (adSetId) => {
     setExpandedAdSetId((current) => (current === adSetId ? null : adSetId));
+  };
+
+  const duplicateCampaign = async ({ account, profile, adAccount, campaign }) => {
+    const adAccountId = getAdAccountIdForSync(adAccount);
+    const campaignId = getCampaignIdForAction(campaign);
+    const duplicateKey = getCampaignDuplicateKey(profile?.id, adAccountId, campaignId);
+
+    if (!profile?.id || !adAccountId || !campaignId) {
+      toast.error('Campaign duplicate needs a saved profile, ad account, and campaign id.', {
+        position: 'top-center',
+      });
+      return;
+    }
+
+    setDuplicatingCampaignKey(duplicateKey);
+    const toastId = `duplicate-campaign-${duplicateKey}`;
+    const duplicateName = `${campaign.name || 'Campaign'} Copy`;
+
+    toast.loading(`Duplicating and fetching ${campaign.name || 'campaign'} with ${selectedPublishKeyLabel}`, {
+      id: toastId,
+      position: 'top-center',
+    });
+
+    try {
+      const data = await businessDataApi.duplicateCampaign(profile.id, adAccountId, campaignId, {
+        tokenId: account.sourceTokenId,
+        tokenType: publishTokenType,
+        name: duplicateName,
+        status: 'PAUSED',
+        deepCopy: true,
+      });
+
+      const adCopyError = data.summary?.manualAdCopyErrors?.[0];
+      const toastMessage = adCopyError?.message
+        ? `${data.message || 'Campaign duplicated, but an ad copy failed'}: ${adCopyError.message}`
+        : data.message || 'Campaign duplicated successfully';
+
+      toast[adCopyError ? 'error' : 'success'](toastMessage, {
+        id: toastId,
+        position: 'top-center',
+      });
+      await refreshBrands({ silent: true });
+    } catch (requestError) {
+      toast.error(requestError.message || 'Campaign duplicate failed', {
+        id: toastId,
+        position: 'top-center',
+      });
+    } finally {
+      setDuplicatingCampaignKey('');
+    }
   };
 
   return (
@@ -622,6 +677,12 @@ const RoadmapPage = () => {
                     (fetchTokenType === META_KEY_TYPES.SYSTEM_USER
                       ? account.systemUserAccessTokenStatus !== 'DEACTIVE'
                       : account.profileAccessTokenStatus !== 'DEACTIVE');
+                  const canDuplicateAccount =
+                    account.sourceTokenId &&
+                    account.sourceTokenStatus !== 'DEACTIVE' &&
+                    (publishTokenType === META_KEY_TYPES.SYSTEM_USER
+                      ? account.systemUserAccessTokenStatus !== 'DEACTIVE'
+                      : account.profileAccessTokenStatus !== 'DEACTIVE');
 
                   return (
                     <div
@@ -689,8 +750,12 @@ const RoadmapPage = () => {
                                       <TreeGroup depth={2}>
                                         {adAccounts.map((adAccount, adAccountIndex) => {
                                           const adAccountKey = getEntityKey(adAccount, adAccountIndex, 'ad-account');
+                                          const adAccountSyncId = getAdAccountIdForSync(adAccount);
                                           const campaigns = getCampaigns(adAccount);
                                           const isAdAccountOpen = expandedAdAccountId === adAccountKey;
+                                          const isAdAccountSyncing =
+                                            syncingAdAccountKey === getAdAccountSyncKey(profile.id, adAccountSyncId);
+                                          const canFetchAdAccount = canFetchAccount && adAccountSyncId;
                                           const disapprovedAdCount = getDisapprovedAdCount(adAccount);
 
                                           return (
@@ -704,21 +769,47 @@ const RoadmapPage = () => {
                                                 subtitle="Ad account"
                                                 title={adAccount.name || 'Unnamed ad account'}
                                               >
-                                                <MetricBadge label="Campaigns" value={campaigns.length || Number(adAccount.campaignCount) || 0} tone="emerald" />
                                                 {disapprovedAdCount > 0 ? (
                                                   <MetricBadge label="Disapproved" value={disapprovedAdCount} tone="red" />
                                                 ) : null}
+                                                <MetricBadge label="Campaigns" value={campaigns.length || Number(adAccount.campaignCount) || 0} tone="emerald" />
                                                 <StatusPill status={getStatus(adAccount.connectionStatus, adAccount.status, adAccount.statusLabel)} />
-                                                  </TreeRow>
+                                                <button
+                                                  type="button"
+                                                  onClick={(event) => {
+                                                    event.stopPropagation();
+                                                    void startAdAccountSync({
+                                                      account,
+                                                      profile,
+                                                      adAccount,
+                                                    });
+                                                  }}
+                                                  disabled={isAdAccountSyncing || !canFetchAdAccount}
+                                                  className="flex h-9 w-9 items-center justify-center rounded-full border border-sky-100 bg-white text-sky-700 transition hover:bg-sky-50 disabled:cursor-not-allowed disabled:opacity-50"
+                                                  title={
+                                                    canFetchAdAccount
+                                                      ? `Fetch ${adAccount.name || 'ad account'} with ${selectedFetchKeyLabel}`
+                                                      : `No active ${selectedFetchKeyLabel} for this ad account`
+                                                  }
+                                                  aria-label={`Fetch ${adAccount.name || 'ad account'}`}
+                                                >
+                                                  <DownloadCloud size={16} strokeWidth={2.3} className={isAdAccountSyncing ? 'animate-pulse' : ''} />
+                                                </button>
+                                              </TreeRow>
 
                                               {isAdAccountOpen ? (
                                                 campaigns.length ? (
                                                   <TreeGroup depth={3}>
                                                     {campaigns.map((campaign, campaignIndex) => {
                                                       const campaignKey = getEntityKey(campaign, campaignIndex, 'campaign');
+                                                      const campaignId = getCampaignIdForAction(campaign);
+                                                      const duplicateKey = getCampaignDuplicateKey(profile.id, adAccountSyncId, campaignId);
                                                       const campaignCurrency = getCurrency(adAccount);
                                                       const adSets = getAdSets(campaign);
                                                       const isCampaignOpen = expandedCampaignId === campaignKey;
+                                                      const isDuplicatingCampaign = duplicatingCampaignKey === duplicateKey;
+                                                      const canDuplicateCampaign = canDuplicateAccount && adAccountSyncId && campaignId;
+                                                      const campaignDisapprovedAdCount = getDisapprovedCampaignCount(campaign);
 
                                                       return (
                                                         <div key={campaignKey} className="space-y-3">
@@ -731,8 +822,33 @@ const RoadmapPage = () => {
                                                             subtitle="Campaign"
                                                             title={campaign.name || 'Unnamed campaign'}
                                                           >
+                                                            {campaignDisapprovedAdCount > 0 ? (
+                                                              <MetricBadge label="Disapproved" value={campaignDisapprovedAdCount} tone="red" />
+                                                            ) : null}
                                                             <MetricBadge label="Budget" value={getCampaignBudget(campaign, campaignCurrency)} tone="sky" />
                                                             <StatusPill status={getStatus(campaign.status, campaign.effectiveStatus)} />
+                                                            <button
+                                                              type="button"
+                                                              onClick={(event) => {
+                                                                event.stopPropagation();
+                                                                void duplicateCampaign({
+                                                                  account,
+                                                                  profile,
+                                                                  adAccount,
+                                                                  campaign,
+                                                                });
+                                                              }}
+                                                              disabled={isDuplicatingCampaign || !canDuplicateCampaign}
+                                                              className="inline-flex h-9 items-center gap-2 rounded-full border border-indigo-100 bg-white px-3 text-xs font-black text-indigo-700 transition hover:bg-indigo-50 disabled:cursor-not-allowed disabled:opacity-50"
+                                                              title={
+                                                                canDuplicateCampaign
+                                                                  ? `Duplicate with ${selectedPublishKeyLabel}`
+                                                                  : `No active ${selectedPublishKeyLabel} for duplicating`
+                                                              }
+                                                            >
+                                                              <CopyPlus size={15} strokeWidth={2.3} className={isDuplicatingCampaign ? 'animate-pulse' : ''} />
+                                                              Duplicate
+                                                            </button>
                                                           </TreeRow>
 
                                                           {isCampaignOpen ? (
@@ -742,6 +858,7 @@ const RoadmapPage = () => {
                                                                   const adSetKey = getEntityKey(adSet, adSetIndex, 'ad-set');
                                                                   const ads = getAds(adSet);
                                                                   const isAdSetOpen = expandedAdSetId === adSetKey;
+                                                                  const adSetDisapprovedAdCount = getDisapprovedAdSetCount(adSet);
 
                                                                   return (
                                                                     <div key={adSetKey} className="space-y-3">
@@ -754,6 +871,9 @@ const RoadmapPage = () => {
                                                                         subtitle="Ad set"
                                                                         title={adSet.name || 'Unnamed ad set'}
                                                                       >
+                                                                        {adSetDisapprovedAdCount > 0 ? (
+                                                                          <MetricBadge label="Disapproved" value={adSetDisapprovedAdCount} tone="red" />
+                                                                        ) : null}
                                                                         <MetricBadge
                                                                           label="Budget"
                                                                           value={getAdSetBudget(adSet, campaign, campaignCurrency)}

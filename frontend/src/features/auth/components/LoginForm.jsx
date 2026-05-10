@@ -42,13 +42,13 @@ const LoginForm = ({ onSubmit, onForgotPassword, loading }) => {
           <label htmlFor="password" className="text-sm font-semibold text-slate-700">
             Password
           </label>
-          <button
+          {/* <button
             type="button"
             onClick={onForgotPassword}
             className="text-sm font-semibold text-sky-700 transition hover:text-sky-900"
           >
             Forgot password?
-          </button>
+          </button> */}
         </div>
         <div className="relative">
           <input
