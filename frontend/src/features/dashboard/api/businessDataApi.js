@@ -77,6 +77,14 @@ export const businessDataApi = {
         body: payload,
       }
     ),
+  updateCampaignStatus: (profileId, adAccountId, campaignId, payload) =>
+    apiRequest(
+      `/business-profiles/${profileId}/ad-accounts/${encodeURIComponent(adAccountId)}/campaigns/${encodeURIComponent(campaignId)}/status`,
+      {
+        method: 'PATCH',
+        body: payload,
+      }
+    ),
   updateBusinessProfile: (id, payload) =>
     apiRequest(`/business-profiles/${id}`, {
       method: 'PUT',

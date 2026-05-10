@@ -1780,6 +1780,195 @@ async function duplicateCampaign({ profileId, adAccountId, campaignId, name, sta
   }
 }
 
+function getCampaignStatusActionLabel(status) {
+  return status === 'ACTIVE' ? 'started' : 'paused';
+}
+
+function getCampaignStatusObjectActions(campaign, campaignId, status) {
+  const adSetActions = [];
+  const adActions = [];
+
+  getCampaignAdSets(campaign).forEach((adSet) => {
+    const adSetId = getAdSetIdForAction(adSet);
+
+    if (adSetId) {
+      adSetActions.push({
+        id: adSetId,
+        type: 'AdSet',
+        name: adSet.name || `Ad set ${adSetId}`,
+        status,
+      });
+    }
+
+    (Array.isArray(adSet?.ads) ? adSet.ads : []).forEach((ad) => {
+      const adId = getAdIdForAction(ad);
+
+      if (adId) {
+        adActions.push({
+          id: adId,
+          type: 'Ad',
+          name: ad.name || ad.title || `Ad ${adId}`,
+          status,
+        });
+      }
+    });
+  });
+
+  const campaignAction = {
+    id: campaignId,
+    type: 'Campaign',
+    name: campaign?.name || `Campaign ${campaignId}`,
+    status,
+  };
+
+  return status === 'ACTIVE'
+    ? [...adActions, ...adSetActions, campaignAction]
+    : [campaignAction, ...adSetActions, ...adActions];
+}
+
+async function applyCampaignStatusActions({ actions, token, summary }) {
+  for (const action of actions) {
+    try {
+      await postMetaApi(action.id, token, { status: action.status });
+      summary.apiCalls += 1;
+      summary.updated += 1;
+    } catch (error) {
+      summary.failed += 1;
+      summary.errors.push({
+        id: action.id,
+        type: action.type,
+        name: action.name,
+        message: error.message,
+      });
+    }
+  }
+}
+
+async function updateCampaignStatus({ profileId, adAccountId, campaignId, status, actor, req, tokenId = null, tokenType = null }) {
+  if (!mongoose.Types.ObjectId.isValid(profileId)) {
+    throw new HttpError(400, 'Invalid business profile');
+  }
+
+  if (!adAccountId) {
+    throw new HttpError(400, 'Ad account is required');
+  }
+
+  if (!campaignId) {
+    throw new HttpError(400, 'Campaign is required');
+  }
+
+  if (tokenId && !mongoose.Types.ObjectId.isValid(tokenId)) {
+    throw new HttpError(400, 'Invalid Meta API token');
+  }
+
+  const normalizedStatus = String(status || '').trim().toUpperCase();
+  if (!DUPLICATE_CAMPAIGN_STATUSES.has(normalizedStatus)) {
+    throw new HttpError(400, 'Campaign status must be ACTIVE or PAUSED');
+  }
+
+  const profile = await BusinessProfile.findById(profileId);
+  if (!profile) {
+    throw new HttpError(404, 'Business profile not found');
+  }
+
+  const storedAccounts = Array.isArray(profile.adAccounts) ? profile.adAccounts.map(toPlainAdAccount) : [];
+  const targetAccountIndex = storedAccounts.findIndex((account) => adAccountMatches(account, adAccountId));
+
+  if (targetAccountIndex === -1) {
+    throw new HttpError(404, 'Ad account not found under this business profile');
+  }
+
+  const targetAccount = storedAccounts[targetAccountIndex];
+  const campaigns = Array.isArray(targetAccount.campaigns) ? targetAccount.campaigns : [];
+  const sourceCampaign = campaigns.find((campaign) => campaignMatches(campaign, campaignId));
+
+  if (!sourceCampaign) {
+    throw new HttpError(404, 'Campaign not found under this ad account');
+  }
+
+  const sourceCampaignId = getCampaignIdForAction(sourceCampaign);
+  const resolvedTokenId = tokenId || profile.sourceToken?.toString();
+  if (!resolvedTokenId) {
+    throw new HttpError(400, 'This business profile does not have a saved Meta API token');
+  }
+
+  const token = await tokenService.getActiveTokenWithSecret(resolvedTokenId, tokenType);
+  const summary = {
+    apiCalls: 0,
+    updated: 0,
+    failed: 0,
+    errors: [],
+    status: normalizedStatus,
+  };
+
+  let campaignForAction = sourceCampaign;
+  if (getCampaignLoadedAdCount(campaignForAction) < getCampaignExpectedAdCount(campaignForAction)) {
+    try {
+      campaignForAction = await fetchCampaignHierarchyForToken(token, sourceCampaignId, {
+        currency: targetAccount.currency,
+        pagesById: getPagesById(profile.rawMetaData || {}),
+        summary,
+      });
+    } catch (error) {
+      summary.errors.push({
+        campaignId: sourceCampaignId,
+        message: `Campaign children could not be refreshed before status update: ${error.message}`,
+      });
+    }
+  }
+
+  const actions = getCampaignStatusObjectActions(campaignForAction, sourceCampaignId, normalizedStatus);
+  await applyCampaignStatusActions({ actions, token, summary });
+
+  let refreshedCampaign = null;
+  try {
+    const refreshedAccount = await refreshStoredAdAccountHierarchy({
+      profile,
+      storedAccounts,
+      targetIndex: targetAccountIndex,
+      adAccountId,
+      token,
+      summary,
+    });
+    refreshedCampaign = (Array.isArray(refreshedAccount.campaigns) ? refreshedAccount.campaigns : []).find((campaign) =>
+      campaignMatches(campaign, sourceCampaignId)
+    ) || null;
+  } catch (error) {
+    summary.errors.push({
+      campaignId: sourceCampaignId,
+      message: `Campaign status updated, but refresh failed: ${error.message}`,
+    });
+  }
+
+  await writeActivityLog({
+    user: actor,
+    action: 'SAVED_CAMPAIGN_STATUS_UPDATED',
+    entity: 'BusinessProfile',
+    entityId: profile._id.toString(),
+    metadata: {
+      adAccountId,
+      campaignId: sourceCampaignId,
+      status: normalizedStatus,
+      tokenId: resolvedTokenId,
+      tokenType,
+      ...summary,
+    },
+    req,
+  });
+
+  const actionLabel = getCampaignStatusActionLabel(normalizedStatus);
+
+  return {
+    message: summary.failed
+      ? `Campaign ${actionLabel}, but ${summary.failed} child status update${summary.failed === 1 ? '' : 's'} failed`
+      : `Campaign ${actionLabel} successfully`,
+    campaign: refreshedCampaign,
+    campaignId: sourceCampaignId,
+    status: normalizedStatus,
+    summary,
+  };
+}
+
 async function syncAdAccount({ profileId, adAccountId, actor, req, tokenId = null, tokenType = null }) {
   if (!mongoose.Types.ObjectId.isValid(profileId)) {
     throw new HttpError(400, 'Invalid business profile');
@@ -2021,4 +2210,5 @@ module.exports = {
   listBusinessProfiles,
   syncAdAccount,
   syncBusinessProfiles,
+  updateCampaignStatus,
 };

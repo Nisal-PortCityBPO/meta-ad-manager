@@ -79,6 +79,21 @@ const duplicateCampaign = asyncHandler(async (req, res) => {
   res.status(201).json(result);
 });
 
+const updateCampaignStatus = asyncHandler(async (req, res) => {
+  const result = await businessProfileService.updateCampaignStatus({
+    profileId: req.params.profileId,
+    adAccountId: req.params.adAccountId,
+    campaignId: req.params.campaignId,
+    actor: req.user,
+    req,
+    tokenId: req.body?.tokenId,
+    tokenType: req.body?.tokenType,
+    status: req.body?.status,
+  });
+
+  res.json(result);
+});
+
 module.exports = {
   assignBusinessProfile,
   deleteBusinessProfile,
@@ -86,4 +101,5 @@ module.exports = {
   getBusinessProfiles,
   syncBusinessProfiles,
   syncAdAccount,
+  updateCampaignStatus,
 };
