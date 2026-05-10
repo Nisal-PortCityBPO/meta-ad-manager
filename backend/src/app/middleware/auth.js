@@ -2,6 +2,8 @@ const jwt = require('jsonwebtoken');
 const { User } = require('../../modules/users/user.model');
 
 const COOKIE_NAME = 'meat_dashboard_session';
+const SESSION_MAX_AGE_MS = 24 * 60 * 60 * 1000;
+const JWT_EXPIRES_IN = '24h';
 
 function getJwtSecret() {
   return process.env.JWT_SECRET || 'development-only-secret';
@@ -14,7 +16,7 @@ function getCookieOptions() {
     httpOnly: true,
     sameSite: 'lax',
     secure: process.env.COOKIE_SECURE === 'true' || isProduction,
-    maxAge: 7 * 24 * 60 * 60 * 1000,
+    maxAge: SESSION_MAX_AGE_MS,
   };
 }
 
@@ -27,9 +29,17 @@ function createAuthToken(user) {
     },
     getJwtSecret(),
     {
-      expiresIn: process.env.JWT_EXPIRES_IN || '7d',
+      expiresIn: process.env.JWT_EXPIRES_IN || JWT_EXPIRES_IN,
     }
   );
+}
+
+function isSessionOlderThanLimit(payload) {
+  if (!payload?.iat) {
+    return true;
+  }
+
+  return Date.now() - payload.iat * 1000 > SESSION_MAX_AGE_MS;
 }
 
 function setAuthCookie(res, token) {
@@ -55,6 +65,10 @@ async function authenticate(req, res, next) {
     }
 
     const payload = jwt.verify(token, getJwtSecret());
+    if (isSessionOlderThanLimit(payload)) {
+      return res.status(401).json({ message: 'Session expired, please login again' });
+    }
+
     const user = await User.findById(payload.sub);
 
     if (!user || user.status !== 'ACTIVE') {

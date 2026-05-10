@@ -202,6 +202,42 @@ async function requestMetaApi(path, token, { fields, limit } = {}) {
   return payload;
 }
 
+async function postMetaApi(path, token, params = {}) {
+  const url = new URL(`https://graph.facebook.com/${META_GRAPH_VERSION}/${path}`);
+  const body = new URLSearchParams();
+
+  Object.entries({
+    access_token: token.accessToken,
+    ...params,
+  }).forEach(([key, value]) => {
+    if (value !== undefined && value !== null && value !== '') {
+      body.set(key, typeof value === 'object' ? JSON.stringify(value) : String(value));
+    }
+  });
+
+  await waitForMetaApiPacing();
+
+  const response = await fetch(url, {
+    method: 'POST',
+    body,
+  });
+  await tokenService.recordTokenApiCall(token.id, token.tokenType);
+  const payload = await response.json().catch(() => ({}));
+
+  if (!response.ok || payload.error) {
+    await tokenService.markTokenBlockedFromMetaError({
+      tokenId: token.id,
+      payload,
+      tokenType: token.tokenType,
+    });
+    throw new HttpError(400, getMetaErrorMessage(payload, `Meta API request failed for ${token.label}`));
+  }
+
+  await tokenService.markTokenConnected({ tokenId: token.id, tokenType: token.tokenType });
+
+  return payload;
+}
+
 async function fetchSocialAccountAndBusinessesForToken(token) {
   const payload = await requestMetaApi('me', token, {
     fields: META_SOCIAL_ACCOUNT_WITH_BUSINESSES_FIELDS,
@@ -1133,6 +1169,740 @@ async function resolveSyncScope({ tokenId = null, socialAccountId = null, tokenT
   };
 }
 
+function normalizeAdAccountId(value) {
+  return String(value || '').replace(/^act_/, '');
+}
+
+function getAdAccountNodeId(account, fallbackId = '') {
+  if (account?.id) {
+    const id = String(account.id);
+    return id.startsWith('act_') ? id : `act_${normalizeAdAccountId(id)}`;
+  }
+
+  if (account?.accountId) {
+    return `act_${account.accountId}`;
+  }
+
+  const fallbackValue = String(fallbackId || '');
+  return fallbackValue.startsWith('act_') ? fallbackValue : `act_${normalizeAdAccountId(fallbackValue)}`;
+}
+
+function adAccountMatches(account, requestedId) {
+  const requestedValue = String(requestedId || '');
+  const requestedNormalized = normalizeAdAccountId(requestedValue);
+
+  return [account?.id, account?.accountId]
+    .filter(Boolean)
+    .some((value) => String(value) === requestedValue || normalizeAdAccountId(value) === requestedNormalized);
+}
+
+function toPlainAdAccount(account) {
+  if (!account) {
+    return {};
+  }
+
+  return account.toObject ? account.toObject() : { ...account };
+}
+
+function applyStoredAdAccountMetrics(profile, syncedAt) {
+  const adAccounts = Array.isArray(profile.adAccounts) ? profile.adAccounts : [];
+  const currencies = new Set(adAccounts.map((account) => account.currency).filter(Boolean));
+
+  profile.adAccountCount = adAccounts.length;
+  profile.campaignCount = adAccounts.reduce((total, account) => total + (Number(account.campaignCount) || 0), 0);
+  profile.totalSpend = adAccounts.reduce((total, account) => total + (Number(account.totalSpend) || 0), 0);
+  profile.spendCurrency = currencies.size === 1 ? Array.from(currencies)[0] : currencies.size > 1 ? 'MIXED' : null;
+  profile.assetMetricsStatus = BUSINESS_PROFILE_ASSET_METRIC_STATUSES.SYNCED;
+  profile.assetMetricsSyncedAt = syncedAt;
+  profile.lastSyncedAt = syncedAt;
+}
+
+function getCopiedCampaignId(payload) {
+  return (
+    payload?.copied_campaign_id ||
+    payload?.campaign_id ||
+    payload?.id ||
+    payload?.data?.copied_campaign_id ||
+    payload?.data?.id ||
+    null
+  );
+}
+
+function normalizeCopiedObjectType(value) {
+  return String(value || '').trim().toLowerCase().replace(/-/g, '_');
+}
+
+function getCopiedObjectItems(payload) {
+  if (Array.isArray(payload?.ad_object_ids)) {
+    return payload.ad_object_ids;
+  }
+
+  if (Array.isArray(payload?.data?.ad_object_ids)) {
+    return payload.data.ad_object_ids;
+  }
+
+  return [];
+}
+
+function getCopiedObjectMap(payload, objectType) {
+  const normalizedType = normalizeCopiedObjectType(objectType);
+  const copiedObjects = new Map();
+
+  getCopiedObjectItems(payload).forEach((item) => {
+    if (normalizeCopiedObjectType(item?.ad_object_type) !== normalizedType) {
+      return;
+    }
+
+    if (item?.source_id && item?.copied_id) {
+      copiedObjects.set(String(item.source_id), String(item.copied_id));
+    }
+  });
+
+  return copiedObjects;
+}
+
+function getCampaignIdForAction(campaign) {
+  return campaign?.id || campaign?.campaignId || '';
+}
+
+function getAdSetIdForAction(adSet) {
+  return adSet?.id || adSet?.adSetId || '';
+}
+
+function getAdIdForAction(ad) {
+  return ad?.id || ad?.adId || '';
+}
+
+function campaignMatches(campaign, requestedId) {
+  const requestedValue = String(requestedId || '');
+  return [campaign?.id, campaign?.campaignId].filter(Boolean).some((value) => String(value) === requestedValue);
+}
+
+function getDuplicateCampaignName(campaign, requestedName) {
+  const name = String(requestedName || '').trim();
+
+  if (name) {
+    return name;
+  }
+
+  return `${campaign?.name || 'Campaign'} Copy`;
+}
+
+const DUPLICATE_CAMPAIGN_STATUSES = new Set(['ACTIVE', 'PAUSED']);
+const DUPLICATE_REFRESH_ATTEMPTS = 8;
+const DUPLICATE_REFRESH_DELAY_MS = 3000;
+
+function delay(ms) {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
+}
+
+function buildAdAccountHierarchyRequest(targetAccount, adAccountId) {
+  return {
+    id: getAdAccountNodeId(targetAccount, adAccountId),
+    account_id: targetAccount.accountId || normalizeAdAccountId(adAccountId),
+    name: targetAccount.name,
+    currency: targetAccount.currency,
+    account_status: targetAccount.statusCode,
+  };
+}
+
+async function refreshStoredAdAccountHierarchy({ profile, storedAccounts, targetIndex, adAccountId, token, summary, syncedAt = new Date() }) {
+  const targetAccount = storedAccounts[targetIndex];
+  const requestAccount = buildAdAccountHierarchyRequest(targetAccount, adAccountId);
+  const detail = await fetchAdAccountHierarchyForToken(token, requestAccount, summary);
+  const pagesById = getPagesById(profile.rawMetaData || {});
+  const updatedAccount = normalizeAdAccountAsset(
+    {
+      ...requestAccount,
+      ...detail,
+      id: detail.id || requestAccount.id,
+      account_id: detail.account_id || requestAccount.account_id,
+      name: detail.name || requestAccount.name,
+      currency: detail.currency || requestAccount.currency,
+      account_status: detail.account_status ?? requestAccount.account_status,
+    },
+    pagesById,
+    syncedAt
+  );
+  const updatedAccounts = [...storedAccounts];
+  updatedAccounts[targetIndex] = updatedAccount;
+
+  profile.adAccounts = updatedAccounts;
+  applyStoredAdAccountMetrics(profile, syncedAt);
+  profile.markModified('adAccounts');
+  await profile.save();
+
+  return updatedAccount;
+}
+
+async function fetchCampaignHierarchyForToken(token, campaignId, { currency, pagesById, summary }) {
+  const requestedFields = getMetaCampaignFields(getMetaAdSetFields(META_AD_FIELDS));
+  const safeFields = getMetaCampaignFields(getMetaAdSetFields(META_AD_SAFE_FIELDS));
+  let detail;
+
+  try {
+    summary.apiCalls += 1;
+    detail = await requestMetaApi(campaignId, token, { fields: requestedFields });
+  } catch (error) {
+    const message = error.message?.toLowerCase() || '';
+
+    if (!message.includes('creative') && !message.includes('asset_feed_spec') && !message.includes('object_story_spec')) {
+      throw error;
+    }
+
+    summary.apiCalls += 1;
+    detail = await requestMetaApi(campaignId, token, { fields: safeFields });
+  }
+
+  return normalizeCampaignAsset(detail, {
+    currency,
+    pagesById,
+  });
+}
+
+function getCampaignAdSets(campaign) {
+  return Array.isArray(campaign?.adSets) ? campaign.adSets : [];
+}
+
+function getCampaignAdSetCount(campaign) {
+  const adSets = getCampaignAdSets(campaign);
+  return Math.max(Number(campaign?.adSetCount) || 0, adSets.length);
+}
+
+function getAdSetExpectedAdCount(adSet) {
+  const ads = Array.isArray(adSet?.ads) ? adSet.ads : [];
+
+  return Math.max(Number(adSet?.adCount) || 0, ads.length);
+}
+
+function getAdSetLoadedAdCount(adSet) {
+  return Array.isArray(adSet?.ads) ? adSet.ads.length : 0;
+}
+
+function getCampaignExpectedAdCount(campaign) {
+  return getCampaignAdSets(campaign).reduce((total, adSet) => {
+    return total + getAdSetExpectedAdCount(adSet);
+  }, 0);
+}
+
+function getCampaignLoadedAdCount(campaign) {
+  return getCampaignAdSets(campaign).reduce((total, adSet) => total + getAdSetLoadedAdCount(adSet), 0);
+}
+
+function isCopiedCampaignHierarchyReady(copiedCampaign, sourceCampaign) {
+  if (!copiedCampaign) {
+    return false;
+  }
+
+  return (
+    getCampaignAdSetCount(copiedCampaign) >= getCampaignAdSetCount(sourceCampaign) &&
+    getCampaignLoadedAdCount(copiedCampaign) >= getCampaignExpectedAdCount(sourceCampaign)
+  );
+}
+
+function normalizeCopyComparableName(value) {
+  return String(value || '')
+    .trim()
+    .replace(/\s+copy(?:\s+\d+)?$/i, '')
+    .toLowerCase();
+}
+
+function findCopiedAdSetForSource({ sourceAdSet, sourceIndex, copiedCampaign, copiedAdSetMap }) {
+  const copiedAdSets = getCampaignAdSets(copiedCampaign);
+  const mappedAdSetId = copiedAdSetMap.get(String(getAdSetIdForAction(sourceAdSet)));
+
+  if (mappedAdSetId) {
+    const mappedAdSet = copiedAdSets.find((adSet) => String(getAdSetIdForAction(adSet)) === mappedAdSetId);
+
+    if (mappedAdSet) {
+      return mappedAdSet;
+    }
+  }
+
+  const sourceName = normalizeCopyComparableName(sourceAdSet?.name);
+  const nameMatch = copiedAdSets.find((adSet) => normalizeCopyComparableName(adSet?.name) === sourceName);
+
+  if (nameMatch) {
+    return nameMatch;
+  }
+
+  return copiedAdSets[sourceIndex] || null;
+}
+
+async function copyMissingAdsIntoCopiedAdSets({ sourceCampaign, copiedCampaign, copyPayload, token, status, summary }) {
+  const expectedAdCount = getCampaignExpectedAdCount(sourceCampaign);
+  const loadedAdCount = getCampaignLoadedAdCount(copiedCampaign);
+
+  if (!copiedCampaign || expectedAdCount === 0 || loadedAdCount >= expectedAdCount) {
+    return {
+      copied: 0,
+      failed: 0,
+      errors: [],
+    };
+  }
+
+  const copiedAdSetMap = getCopiedObjectMap(copyPayload, 'ad_set');
+  const copiedAdMap = getCopiedObjectMap(copyPayload, 'ad');
+  const errors = [];
+  let copied = 0;
+
+  const sourceAdSets = getCampaignAdSets(sourceCampaign);
+  for (let sourceIndex = 0; sourceIndex < sourceAdSets.length; sourceIndex += 1) {
+    const sourceAdSet = sourceAdSets[sourceIndex];
+    const sourceAds = Array.isArray(sourceAdSet?.ads) ? sourceAdSet.ads : [];
+
+    if (!sourceAds.length) {
+      continue;
+    }
+
+    const copiedAdSet = findCopiedAdSetForSource({
+      sourceAdSet,
+      sourceIndex,
+      copiedCampaign,
+      copiedAdSetMap,
+    });
+
+    if (!copiedAdSet) {
+      errors.push({
+        adSetId: getAdSetIdForAction(sourceAdSet),
+        message: 'Copied ad set was not returned by Meta, so ads could not be attached to it',
+      });
+      continue;
+    }
+
+    const copiedAdSetId = getAdSetIdForAction(copiedAdSet);
+    if (!copiedAdSetId) {
+      errors.push({
+        adSetName: sourceAdSet?.name,
+        message: 'Copied ad set id is missing, so ads could not be attached to it',
+      });
+      continue;
+    }
+
+    const loadedInTarget = getAdSetLoadedAdCount(copiedAdSet);
+    const adsToCopy = sourceAds.filter((ad, adIndex) => {
+      const sourceAdId = getAdIdForAction(ad);
+
+      if (!sourceAdId || copiedAdMap.has(String(sourceAdId))) {
+        return false;
+      }
+
+      return adIndex >= loadedInTarget;
+    });
+
+    for (const sourceAd of adsToCopy) {
+      const sourceAdId = getAdIdForAction(sourceAd);
+
+      try {
+        await postMetaApi(`${sourceAdId}/copies`, token, {
+          adset_id: copiedAdSetId,
+          status_option: status,
+        });
+        summary.apiCalls += 1;
+        copied += 1;
+      } catch (error) {
+        errors.push({
+          adId: sourceAdId,
+          adName: sourceAd?.name || sourceAd?.title || null,
+          adSetId: getAdSetIdForAction(sourceAdSet),
+          message: error.message,
+        });
+      }
+    }
+  }
+
+  return {
+    copied,
+    failed: errors.length,
+    errors,
+  };
+}
+
+async function refreshUntilCopiedCampaignReady({
+  profile,
+  storedAccounts,
+  targetIndex,
+  adAccountId,
+  token,
+  summary,
+  copiedCampaignId,
+  sourceCampaign,
+}) {
+  let copiedCampaign = null;
+  let refreshedAccount = null;
+
+  for (let attempt = 1; attempt <= DUPLICATE_REFRESH_ATTEMPTS; attempt += 1) {
+    if (attempt > 1) {
+      await delay(DUPLICATE_REFRESH_DELAY_MS);
+    }
+
+    refreshedAccount = await refreshStoredAdAccountHierarchy({
+      profile,
+      storedAccounts,
+      targetIndex,
+      adAccountId,
+      token,
+      summary,
+    });
+    summary.refreshAttempts = attempt;
+
+    copiedCampaign = (Array.isArray(refreshedAccount.campaigns) ? refreshedAccount.campaigns : []).find((campaign) =>
+      campaignMatches(campaign, copiedCampaignId)
+    ) || null;
+
+    if (isCopiedCampaignHierarchyReady(copiedCampaign, sourceCampaign)) {
+      return {
+        copiedCampaign,
+        hierarchyReady: true,
+        refreshedAccount,
+      };
+    }
+  }
+
+  return {
+    copiedCampaign,
+    hierarchyReady: false,
+    refreshedAccount,
+  };
+}
+
+async function duplicateCampaign({ profileId, adAccountId, campaignId, name, status = 'PAUSED', deepCopy = true, actor, req, tokenId = null, tokenType = null }) {
+  if (!mongoose.Types.ObjectId.isValid(profileId)) {
+    throw new HttpError(400, 'Invalid business profile');
+  }
+
+  if (!adAccountId) {
+    throw new HttpError(400, 'Ad account is required');
+  }
+
+  if (!campaignId) {
+    throw new HttpError(400, 'Campaign is required');
+  }
+
+  if (tokenId && !mongoose.Types.ObjectId.isValid(tokenId)) {
+    throw new HttpError(400, 'Invalid Meta API token');
+  }
+
+  const normalizedStatus = String(status || 'PAUSED').trim().toUpperCase();
+  if (!DUPLICATE_CAMPAIGN_STATUSES.has(normalizedStatus)) {
+    throw new HttpError(400, 'Duplicate campaign status must be ACTIVE or PAUSED');
+  }
+
+  const profile = await BusinessProfile.findById(profileId);
+  if (!profile) {
+    throw new HttpError(404, 'Business profile not found');
+  }
+
+  const storedAccounts = Array.isArray(profile.adAccounts) ? profile.adAccounts.map(toPlainAdAccount) : [];
+  const targetAccountIndex = storedAccounts.findIndex((account) => adAccountMatches(account, adAccountId));
+
+  if (targetAccountIndex === -1) {
+    throw new HttpError(404, 'Ad account not found under this business profile');
+  }
+
+  const targetAccount = storedAccounts[targetAccountIndex];
+  const campaigns = Array.isArray(targetAccount.campaigns) ? targetAccount.campaigns : [];
+  const sourceCampaign = campaigns.find((campaign) => campaignMatches(campaign, campaignId));
+
+  if (!sourceCampaign) {
+    throw new HttpError(404, 'Campaign not found under this ad account');
+  }
+
+  const sourceCampaignId = getCampaignIdForAction(sourceCampaign);
+  const resolvedTokenId = tokenId || profile.sourceToken?.toString();
+  if (!resolvedTokenId) {
+    throw new HttpError(400, 'This business profile does not have a saved Meta API token');
+  }
+
+  const token = await tokenService.getActiveTokenWithSecret(resolvedTokenId, tokenType);
+  const duplicateName = getDuplicateCampaignName(sourceCampaign, name);
+  const summary = {
+    apiCalls: 0,
+    created: 0,
+    updated: 0,
+    skipped: 0,
+    failed: 0,
+    errors: [],
+  };
+
+  try {
+    let sourceCampaignForCopy = sourceCampaign;
+    if (getCampaignLoadedAdCount(sourceCampaignForCopy) < getCampaignExpectedAdCount(sourceCampaignForCopy)) {
+      try {
+        sourceCampaignForCopy = await fetchCampaignHierarchyForToken(token, sourceCampaignId, {
+          currency: targetAccount.currency,
+          pagesById: getPagesById(profile.rawMetaData || {}),
+          summary,
+        });
+      } catch (error) {
+        summary.errors.push({
+          campaignId: sourceCampaignId,
+          message: `Source campaign ads could not be refreshed before duplicate: ${error.message}`,
+        });
+      }
+    }
+
+    const copyPayload = await postMetaApi(`${sourceCampaignId}/copies`, token, {
+      deep_copy: Boolean(deepCopy) ? 'true' : 'false',
+      status_option: normalizedStatus,
+    });
+    summary.apiCalls += 1;
+
+    const copiedCampaignId = getCopiedCampaignId(copyPayload);
+    let copiedCampaign = null;
+
+    if (copiedCampaignId) {
+      await postMetaApi(copiedCampaignId, token, {
+        name: duplicateName,
+        status: normalizedStatus,
+      });
+      summary.apiCalls += 1;
+
+      let refreshResult = await refreshUntilCopiedCampaignReady({
+        profile,
+        storedAccounts,
+        targetIndex: targetAccountIndex,
+        adAccountId,
+        token,
+        summary,
+        copiedCampaignId,
+        sourceCampaign: sourceCampaignForCopy,
+      });
+      copiedCampaign = refreshResult.copiedCampaign;
+
+      const manualAdCopyResult = await copyMissingAdsIntoCopiedAdSets({
+        sourceCampaign: sourceCampaignForCopy,
+        copiedCampaign,
+        copyPayload,
+        token,
+        status: normalizedStatus,
+        summary,
+      });
+
+      if (manualAdCopyResult.copied > 0) {
+        summary.manualAdCopies = manualAdCopyResult.copied;
+        refreshResult = await refreshUntilCopiedCampaignReady({
+          profile,
+          storedAccounts,
+          targetIndex: targetAccountIndex,
+          adAccountId,
+          token,
+          summary,
+          copiedCampaignId,
+          sourceCampaign: sourceCampaignForCopy,
+        });
+        copiedCampaign = refreshResult.copiedCampaign || copiedCampaign;
+      }
+
+      if (manualAdCopyResult.errors.length) {
+        summary.manualAdCopyErrors = manualAdCopyResult.errors;
+        manualAdCopyResult.errors.forEach((error) => {
+          summary.errors.push(error);
+        });
+      }
+
+      summary.hierarchyReady = refreshResult.hierarchyReady;
+      if (!refreshResult.hierarchyReady) {
+        summary.errors.push({
+          campaignId: copiedCampaignId,
+          expectedAds: getCampaignExpectedAdCount(sourceCampaignForCopy),
+          loadedAds: getCampaignLoadedAdCount(copiedCampaign),
+          message: 'Meta created the copied campaign, but some copied ads are still not visible in the fetched hierarchy.',
+        });
+      }
+      summary.created = 1;
+      summary.updated = 1;
+    } else {
+      summary.skipped = 1;
+    }
+
+    await writeActivityLog({
+      user: actor,
+      action: 'SAVED_CAMPAIGN_DUPLICATED',
+      entity: 'BusinessProfile',
+      entityId: profile._id.toString(),
+      metadata: {
+        adAccountId,
+        campaignId: sourceCampaignId,
+        copiedCampaignId,
+        name: duplicateName,
+        status: normalizedStatus,
+        deepCopy: Boolean(deepCopy),
+        tokenId: resolvedTokenId,
+        tokenType,
+      },
+      req,
+    });
+
+    return {
+      message: summary.manualAdCopyErrors?.length
+        ? 'Campaign duplicated, but Meta rejected some ad copies'
+        : copiedCampaignId && copiedCampaign && summary.hierarchyReady
+          ? 'Campaign duplicated successfully'
+          : copiedCampaignId && copiedCampaign
+            ? 'Campaign duplicated in Meta, but some copied ads are still being prepared'
+            : copiedCampaignId
+              ? 'Campaign duplicated in Meta, but the copied hierarchy is still being prepared'
+              : 'Campaign duplication requested, but Meta did not return the copied campaign id',
+      campaign: copiedCampaign,
+      campaignId: sourceCampaignId,
+      copiedCampaignId,
+      name: duplicateName,
+      status: normalizedStatus,
+      summary,
+      meta: copyPayload,
+    };
+  } catch (error) {
+    summary.failed = 1;
+    summary.errors.push({
+      campaignId: sourceCampaignId,
+      message: error.message,
+    });
+
+    await writeActivityLog({
+      user: actor,
+      action: 'SAVED_CAMPAIGN_DUPLICATE_FAILED',
+      entity: 'BusinessProfile',
+      entityId: profile._id.toString(),
+      metadata: {
+        adAccountId,
+        campaignId: sourceCampaignId,
+        message: error.message,
+        tokenId: resolvedTokenId,
+        tokenType,
+      },
+      req,
+    });
+
+    throw error;
+  }
+}
+
+async function syncAdAccount({ profileId, adAccountId, actor, req, tokenId = null, tokenType = null }) {
+  if (!mongoose.Types.ObjectId.isValid(profileId)) {
+    throw new HttpError(400, 'Invalid business profile');
+  }
+
+  if (!adAccountId) {
+    throw new HttpError(400, 'Ad account is required');
+  }
+
+  if (tokenId && !mongoose.Types.ObjectId.isValid(tokenId)) {
+    throw new HttpError(400, 'Invalid Meta API token');
+  }
+
+  const profile = await BusinessProfile.findById(profileId);
+  if (!profile) {
+    throw new HttpError(404, 'Business profile not found');
+  }
+
+  const storedAccounts = Array.isArray(profile.adAccounts) ? profile.adAccounts.map(toPlainAdAccount) : [];
+  const targetIndex = storedAccounts.findIndex((account) => adAccountMatches(account, adAccountId));
+
+  if (targetIndex === -1) {
+    throw new HttpError(404, 'Ad account not found under this business profile');
+  }
+
+  const resolvedTokenId = tokenId || profile.sourceToken?.toString();
+  if (!resolvedTokenId) {
+    throw new HttpError(400, 'This business profile does not have a saved Meta API token');
+  }
+
+  const token = await tokenService.getActiveTokenWithSecret(resolvedTokenId, tokenType);
+  const syncedAt = new Date();
+  const targetAccount = storedAccounts[targetIndex];
+  const requestAccount = {
+    id: getAdAccountNodeId(targetAccount, adAccountId),
+    account_id: targetAccount.accountId || normalizeAdAccountId(adAccountId),
+    name: targetAccount.name,
+    currency: targetAccount.currency,
+    account_status: targetAccount.statusCode,
+  };
+  const summary = {
+    tokensChecked: 1,
+    apiCalls: 0,
+    created: 0,
+    updated: 0,
+    skipped: 0,
+    failed: 0,
+    hierarchyFetchFailed: 0,
+    errors: [],
+  };
+
+  try {
+    const detail = await fetchAdAccountHierarchyForToken(token, requestAccount, summary);
+    const pagesById = getPagesById(profile.rawMetaData || {});
+    const updatedAccount = normalizeAdAccountAsset(
+      {
+        ...requestAccount,
+        ...detail,
+        id: detail.id || requestAccount.id,
+        account_id: detail.account_id || requestAccount.account_id,
+        name: detail.name || requestAccount.name,
+        currency: detail.currency || requestAccount.currency,
+        account_status: detail.account_status ?? requestAccount.account_status,
+      },
+      pagesById,
+      syncedAt
+    );
+    const updatedAccounts = [...storedAccounts];
+    updatedAccounts[targetIndex] = updatedAccount;
+
+    profile.adAccounts = updatedAccounts;
+    applyStoredAdAccountMetrics(profile, syncedAt);
+    await profile.save();
+    summary.updated = 1;
+
+    await writeActivityLog({
+      user: actor,
+      action: 'AD_ACCOUNT_SYNCED',
+      entity: 'BusinessProfile',
+      entityId: profile._id.toString(),
+      metadata: {
+        adAccountId,
+        adAccountName: updatedAccount.name,
+        summary,
+        tokenId: resolvedTokenId,
+        tokenType,
+      },
+      req,
+    });
+
+    return {
+      adAccount: updatedAccount,
+      profile: profile.toSafeObject(),
+      summary,
+    };
+  } catch (error) {
+    summary.failed = 1;
+    summary.hierarchyFetchFailed = 1;
+    summary.errors.push({
+      adAccountId,
+      adAccountName: targetAccount.name,
+      message: error.message,
+    });
+
+    await writeActivityLog({
+      user: actor,
+      action: 'AD_ACCOUNT_SYNC_FAILED',
+      entity: 'BusinessProfile',
+      entityId: profile._id.toString(),
+      metadata: {
+        adAccountId,
+        adAccountName: targetAccount.name,
+        summary,
+        tokenId: resolvedTokenId,
+        tokenType,
+      },
+      req,
+    });
+
+    throw error;
+  }
+}
+
 async function syncBusinessProfiles({ actor, req, tokenId = null, socialAccountId = null, tokenType = null }) {
   const {
     activeTokens,
@@ -1247,6 +2017,8 @@ module.exports = {
   assignBusinessProfile,
   countBusinessProfiles,
   deleteBusinessProfile,
+  duplicateCampaign,
   listBusinessProfiles,
+  syncAdAccount,
   syncBusinessProfiles,
 };

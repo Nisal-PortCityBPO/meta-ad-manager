@@ -61,6 +61,22 @@ export const businessDataApi = {
       method: 'POST',
       body: tokenType ? { tokenType } : {},
     }),
+  syncAdAccount: (profileId, adAccountId, tokenType, tokenId) =>
+    apiRequest(`/business-profiles/${profileId}/ad-accounts/${encodeURIComponent(adAccountId)}/sync`, {
+      method: 'POST',
+      body: {
+        ...(tokenType ? { tokenType } : {}),
+        ...(tokenId ? { tokenId } : {}),
+      },
+    }),
+  duplicateCampaign: (profileId, adAccountId, campaignId, payload) =>
+    apiRequest(
+      `/business-profiles/${profileId}/ad-accounts/${encodeURIComponent(adAccountId)}/campaigns/${encodeURIComponent(campaignId)}/duplicate`,
+      {
+        method: 'POST',
+        body: payload,
+      }
+    ),
   updateBusinessProfile: (id, payload) =>
     apiRequest(`/business-profiles/${id}`, {
       method: 'PUT',
