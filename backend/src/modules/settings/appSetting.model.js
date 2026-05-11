@@ -1,5 +1,9 @@
 const mongoose = require('mongoose');
 
+const PUBLISH_INTERVAL_MIN_MINUTES = 10 / 60;
+const PUBLISH_INTERVAL_DEFAULT_MIN_MINUTES = 0.167;
+const PUBLISH_INTERVAL_MAX_MINUTES = 10;
+
 const telegramSettingsSchema = new mongoose.Schema(
   {
     enabled: {
@@ -35,15 +39,15 @@ const publishIntervalSettingsSchema = new mongoose.Schema(
     },
     minMinutes: {
       type: Number,
-      default: 0.3,
-      min: 0.3,
-      max: 10,
+      default: PUBLISH_INTERVAL_DEFAULT_MIN_MINUTES,
+      min: PUBLISH_INTERVAL_MIN_MINUTES,
+      max: PUBLISH_INTERVAL_MAX_MINUTES,
     },
     maxMinutes: {
       type: Number,
-      default: 10,
-      min: 0.3,
-      max: 10,
+      default: PUBLISH_INTERVAL_MAX_MINUTES,
+      min: PUBLISH_INTERVAL_MIN_MINUTES,
+      max: PUBLISH_INTERVAL_MAX_MINUTES,
     },
     updatedBy: {
       type: mongoose.Schema.Types.ObjectId,

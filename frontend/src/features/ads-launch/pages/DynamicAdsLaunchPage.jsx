@@ -380,7 +380,7 @@ const DynamicAdsLaunchPage = () => {
   const { loading: tokensLoading, tokens } = useTokens();
   const { accountPixels, adAccounts, loadAccountPixels, loadAssets, loadingAssets, loadingPixels, pages } = useTokenMetaAssets();
   const { error: templatesError, loading: templatesLoading, templates } = useLaunchTemplates();
-  const { beginPublish, completePublish, failPublish, isPublishing, pushPublishEvent } = usePublishProgress();
+  const { applyPublishSessions, isPublishing, refreshPublishSessions } = usePublishProgress();
   const assignmentScrollRef = useRef(null);
   const scrollAnimationRef = useRef(null);
   const scrollDirectionRef = useRef(0);
@@ -927,8 +927,8 @@ const DynamicAdsLaunchPage = () => {
   };
 
   const publishDynamicLaunch = async () => {
-    if (isPublishing || publishing) {
-      toast.error('A publish is already processing');
+    if (publishing) {
+      toast.error('This publish request is already being queued');
       return;
     }
 
@@ -948,29 +948,24 @@ const DynamicAdsLaunchPage = () => {
     setPublishing(true);
     const publishTitle = selectedBrand ? `Dynamic Ads Launch: ${selectedBrand.name}` : 'Dynamic Ads Launch publish';
     const publishSource = 'Dynamic Ads Launch';
-    const publishSessionId = beginPublish({
-      title: publishTitle,
-      source: publishSource,
-    });
 
     try {
       const payload = {
         ...buildPublishPayload(),
         tokenType: publishTokenType,
-        publishSessionId,
         publishTitle,
         publishSource,
       };
       if (ignoredRows > 0) {
         toast.success(`Publishing ${readyAssignments.length} ready row${readyAssignments.length === 1 ? '' : 's'} and ignoring ${ignoredRows} waiting row${ignoredRows === 1 ? '' : 's'}`);
       }
-      const data = await adsLaunchApi.publishLaunchStream(payload, {
-        onProgress: pushPublishEvent,
-      });
-      completePublish(data);
+      const data = await adsLaunchApi.publishLaunch(payload);
+      if (data.session) {
+        applyPublishSessions([data.session]);
+      }
+      await refreshPublishSessions();
       toast.success(data.message);
     } catch (requestError) {
-      failPublish(requestError.message);
       toast.error(requestError.message);
     } finally {
       setPublishing(false);
@@ -988,11 +983,11 @@ const DynamicAdsLaunchPage = () => {
           <button
             type="button"
             onClick={() => publishDynamicLaunch()}
-            disabled={publishing || isPublishing}
+            disabled={publishing}
             className="flex h-11 items-center gap-2 rounded-xl bg-slate-950 px-5 text-sm font-bold text-white transition hover:bg-slate-800 disabled:opacity-70"
           >
-            {publishing || isPublishing ? <LoaderCircle size={17} className="animate-spin" /> : <Rocket size={17} />}
-            Publish ready accounts
+            {publishing ? <LoaderCircle size={17} className="animate-spin" /> : <Rocket size={17} />}
+            {publishing ? 'Queuing...' : isPublishing ? 'Add ready accounts to queue' : 'Publish ready accounts'}
           </button>
         }
       />

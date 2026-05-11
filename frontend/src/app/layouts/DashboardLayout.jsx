@@ -349,7 +349,7 @@ const MetaKeySettingsControl = () => {
   });
   const [publishIntervalForm, setPublishIntervalForm] = useState({
     enabled: true,
-    minMinutes: '0.3',
+    minMinutes: '0.167',
     maxMinutes: '10',
   });
   const controlRef = useRef(null);
@@ -391,7 +391,7 @@ const MetaKeySettingsControl = () => {
         });
         setPublishIntervalForm({
           enabled: intervalData.publishInterval?.enabled !== false,
-          minMinutes: String(intervalData.publishInterval?.minMinutes ?? 0.3),
+          minMinutes: String(intervalData.publishInterval?.minMinutes ?? 0.167),
           maxMinutes: String(intervalData.publishInterval?.maxMinutes ?? 10),
         });
       })
@@ -471,7 +471,7 @@ const MetaKeySettingsControl = () => {
       });
       setPublishIntervalForm({
         enabled: data.publishInterval?.enabled !== false,
-        minMinutes: String(data.publishInterval?.minMinutes ?? 0.3),
+        minMinutes: String(data.publishInterval?.minMinutes ?? 0.167),
         maxMinutes: String(data.publishInterval?.maxMinutes ?? 10),
       });
       toast.success(data.message);
@@ -540,9 +540,9 @@ const MetaKeySettingsControl = () => {
                     value={publishIntervalForm.minMinutes}
                     onChange={(event) => updatePublishIntervalForm('minMinutes', event.target.value)}
                     className="h-11 w-full rounded-xl border border-sky-100 px-3 text-sm font-semibold outline-none focus:border-sky-400 focus:ring-4 focus:ring-sky-100"
-                    min="0.3"
+                    min="0.167"
                     max="10"
-                    step="0.1"
+                    step="0.001"
                     type="number"
                   />
                 </div>
@@ -555,15 +555,15 @@ const MetaKeySettingsControl = () => {
                     value={publishIntervalForm.maxMinutes}
                     onChange={(event) => updatePublishIntervalForm('maxMinutes', event.target.value)}
                     className="h-11 w-full rounded-xl border border-sky-100 px-3 text-sm font-semibold outline-none focus:border-sky-400 focus:ring-4 focus:ring-sky-100"
-                    min="0.3"
+                    min="0.167"
                     max="10"
-                    step="0.1"
+                    step="0.001"
                     type="number"
                   />
                 </div>
               </div>
               <p className="mt-2 text-xs font-semibold leading-5 text-slate-500">
-                Allowed range is 0.3 to 10 minutes. Example: 0.7 minutes waits about 42 seconds.
+                Allowed range is 10 seconds (0.167 min) to 10 minutes. Example: 0.667 minutes waits about 40 seconds.
               </p>
               <button
                 type="button"

@@ -7,10 +7,23 @@ const PUBLISH_SESSION_STATUSES = Object.freeze({
   COMPLETED: 'COMPLETED',
   FAILED: 'FAILED',
   QUEUED: 'QUEUED',
+  PENDING: 'PENDING',
+});
+
+const PUBLISH_SESSION_QUEUE_STATUSES = Object.freeze({
+  NONE: 'NONE',
+  PENDING: 'PENDING',
+  RUNNING: 'RUNNING',
+  COMPLETED: 'COMPLETED',
+  FAILED: 'FAILED',
 });
 
 const toClientStatus = (status) => {
   const normalizedStatus = String(status || '').toUpperCase();
+
+  if (normalizedStatus === PUBLISH_SESSION_STATUSES.PENDING) {
+    return 'queued';
+  }
 
   if (normalizedStatus === PUBLISH_SESSION_STATUSES.PAUSE_REQUESTED) {
     return 'pausing';
@@ -79,6 +92,38 @@ const adsLaunchPublishSessionSchema = new mongoose.Schema(
       type: Date,
       default: null,
     },
+    queue: {
+      status: {
+        type: String,
+        enum: Object.values(PUBLISH_SESSION_QUEUE_STATUSES),
+        default: PUBLISH_SESSION_QUEUE_STATUSES.NONE,
+        trim: true,
+        index: true,
+      },
+      queuedAt: {
+        type: Date,
+        default: null,
+        index: true,
+      },
+      startedAt: {
+        type: Date,
+        default: null,
+      },
+      completedAt: {
+        type: Date,
+        default: null,
+      },
+      attemptCount: {
+        type: Number,
+        default: 0,
+        min: 0,
+      },
+      lastError: {
+        type: String,
+        default: '',
+        trim: true,
+      },
+    },
     pausedAt: {
       type: Date,
       default: null,
@@ -107,6 +152,7 @@ const adsLaunchPublishSessionSchema = new mongoose.Schema(
 
 adsLaunchPublishSessionSchema.index({ createdBy: 1, updatedAt: -1 });
 adsLaunchPublishSessionSchema.index({ status: 1, updatedAt: -1 });
+adsLaunchPublishSessionSchema.index({ 'queue.status': 1, 'queue.queuedAt': 1 });
 
 adsLaunchPublishSessionSchema.methods.toSafeObject = function toSafeObject({ eventLimit = 120 } = {}) {
   const status = toClientStatus(this.status);
@@ -133,6 +179,18 @@ adsLaunchPublishSessionSchema.methods.toSafeObject = function toSafeObject({ eve
     canPause: status === 'active',
     canResume: status === 'paused' && resumeCount > 0,
     resumeCount,
+    queue: this.queue
+      ? {
+          status: this.queue.status || PUBLISH_SESSION_QUEUE_STATUSES.NONE,
+          queuedAt: this.queue.queuedAt || null,
+          startedAt: this.queue.startedAt || null,
+          completedAt: this.queue.completedAt || null,
+          attemptCount: this.queue.attemptCount || 0,
+          lastError: this.queue.lastError || '',
+        }
+      : {
+          status: PUBLISH_SESSION_QUEUE_STATUSES.NONE,
+        },
     updatedAt: this.updatedAt,
   };
 };
@@ -143,3 +201,4 @@ const AdsLaunchPublishSession =
 
 module.exports = AdsLaunchPublishSession;
 module.exports.PUBLISH_SESSION_STATUSES = PUBLISH_SESSION_STATUSES;
+module.exports.PUBLISH_SESSION_QUEUE_STATUSES = PUBLISH_SESSION_QUEUE_STATUSES;

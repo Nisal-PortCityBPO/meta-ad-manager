@@ -3,6 +3,9 @@ const { writeActivityLog } = require('../activity-logs/activityLog.service');
 const AppSetting = require('./appSetting.model');
 
 const SETTINGS_KEY = 'global';
+const PUBLISH_INTERVAL_MIN_MINUTES = 10 / 60;
+const PUBLISH_INTERVAL_DEFAULT_MIN_MINUTES = 0.167;
+const PUBLISH_INTERVAL_MAX_MINUTES = 10;
 
 function normalizeText(value) {
   return typeof value === 'string' ? value.trim() : '';
@@ -27,7 +30,7 @@ function normalizeIntervalMinutes(value, fallback) {
     return fallback;
   }
 
-  return Math.round(numericValue * 10) / 10;
+  return Math.round(numericValue * 1000) / 1000;
 }
 
 async function getGlobalSettingsDoc() {
@@ -40,8 +43,8 @@ async function getGlobalSettingsDoc() {
 
 function toPublishIntervalSafeObject(settings) {
   const publishInterval = settings?.publishInterval || {};
-  const minMinutes = normalizeIntervalMinutes(publishInterval.minMinutes, 0.3);
-  const maxMinutes = normalizeIntervalMinutes(publishInterval.maxMinutes, 10);
+  const minMinutes = normalizeIntervalMinutes(publishInterval.minMinutes, PUBLISH_INTERVAL_DEFAULT_MIN_MINUTES);
+  const maxMinutes = normalizeIntervalMinutes(publishInterval.maxMinutes, PUBLISH_INTERVAL_MAX_MINUTES);
 
   return {
     enabled: publishInterval.enabled !== false,
@@ -57,10 +60,21 @@ async function upgradeLegacyPublishIntervalDefault(settings) {
     return settings;
   }
 
+  const legacyDefaultMin = normalizeIntervalMinutes(publishInterval.minMinutes, PUBLISH_INTERVAL_DEFAULT_MIN_MINUTES);
   const legacyDefaultMax = normalizeIntervalMinutes(publishInterval.maxMinutes, 10);
+  let changed = false;
+
+  if (!publishInterval.updatedBy && legacyDefaultMin === 0.3) {
+    publishInterval.minMinutes = PUBLISH_INTERVAL_DEFAULT_MIN_MINUTES;
+    changed = true;
+  }
 
   if (!publishInterval.updatedBy && legacyDefaultMax === 2) {
-    publishInterval.maxMinutes = 10;
+    publishInterval.maxMinutes = PUBLISH_INTERVAL_MAX_MINUTES;
+    changed = true;
+  }
+
+  if (changed) {
     await settings.save();
   }
 
@@ -128,15 +142,15 @@ async function getPublishIntervalSettings() {
 
 async function updatePublishIntervalSettings({ enabled, minMinutes, maxMinutes, actor, req }) {
   const settings = await getGlobalSettingsDoc();
-  const nextMinMinutes = normalizeIntervalMinutes(minMinutes, 0.3);
-  const nextMaxMinutes = normalizeIntervalMinutes(maxMinutes, 10);
+  const nextMinMinutes = normalizeIntervalMinutes(minMinutes, PUBLISH_INTERVAL_DEFAULT_MIN_MINUTES);
+  const nextMaxMinutes = normalizeIntervalMinutes(maxMinutes, PUBLISH_INTERVAL_MAX_MINUTES);
 
-  if (nextMinMinutes < 0.3 || nextMinMinutes > 10) {
-    throw new HttpError(400, 'Minimum ad account interval must be between 0.3 and 10 minutes');
+  if (nextMinMinutes < PUBLISH_INTERVAL_MIN_MINUTES || nextMinMinutes > PUBLISH_INTERVAL_MAX_MINUTES) {
+    throw new HttpError(400, 'Minimum ad account interval must be between 10 seconds and 10 minutes');
   }
 
-  if (nextMaxMinutes < 0.3 || nextMaxMinutes > 10) {
-    throw new HttpError(400, 'Maximum ad account interval must be between 0.3 and 10 minutes');
+  if (nextMaxMinutes < PUBLISH_INTERVAL_MIN_MINUTES || nextMaxMinutes > PUBLISH_INTERVAL_MAX_MINUTES) {
+    throw new HttpError(400, 'Maximum ad account interval must be between 10 seconds and 10 minutes');
   }
 
   if (nextMaxMinutes < nextMinMinutes) {
