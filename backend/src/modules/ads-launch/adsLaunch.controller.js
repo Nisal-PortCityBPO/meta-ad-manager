@@ -211,6 +211,15 @@ const getPublishSessions = asyncHandler(async (req, res) => {
   res.json(result);
 });
 
+const clearPublishSessionHistory = asyncHandler(async (req, res) => {
+  const result = await adsLaunchService.clearPublishSessionHistory({
+    actor: req.user,
+    req,
+  });
+
+  res.json(result);
+});
+
 const pausePublishSession = asyncHandler(async (req, res) => {
   const session = await adsLaunchService.requestPublishSessionPause({
     sessionId: req.params.sessionId,
@@ -297,31 +306,15 @@ const deleteTemplate = asyncHandler(async (req, res) => {
 });
 
 const publishLaunch = asyncHandler(async (req, res) => {
-  const result = await adsLaunchService.publishLaunch({
+  const result = await adsLaunchService.enqueuePublishLaunch({
     payload: req.body,
     actor: req.user,
-    req,
-    tokenType: req.body?.tokenType,
   });
 
-  res.json(result);
+  res.status(202).json(result);
 });
 
 const publishLaunchStream = async (req, res, next) => {
-  let session = null;
-  try {
-    session = await adsLaunchService.startPublishSession({
-      sessionId: req.body?.publishSessionId,
-      title: req.body?.publishTitle,
-      source: req.body?.publishSource,
-      payload: req.body,
-      actor: req.user,
-    });
-  } catch (error) {
-    next(error);
-    return;
-  }
-
   let clientConnected = true;
   const sendEvent = (event) => {
     if (!clientConnected || res.destroyed || res.writableEnded) {
@@ -340,21 +333,17 @@ const publishLaunchStream = async (req, res, next) => {
   res.setHeader('Connection', 'keep-alive');
   res.setHeader('X-Accel-Buffering', 'no');
   res.flushHeaders?.();
-  sendEvent({
-    type: 'session',
-    session,
-  });
 
   try {
-    const result = await adsLaunchService.publishLaunch({
+    const result = await adsLaunchService.enqueuePublishLaunch({
       payload: req.body,
       actor: req.user,
-      req,
-      onProgress: sendEvent,
-      tokenType: req.body?.tokenType,
-      publishSessionId: session.id,
     });
 
+    sendEvent({
+      type: 'session',
+      session: result.session,
+    });
     sendEvent({
       type: 'complete',
       result,
@@ -363,11 +352,6 @@ const publishLaunchStream = async (req, res, next) => {
       res.end();
     }
   } catch (error) {
-    await adsLaunchService.failPublishSession({
-      sessionId: session.id,
-      error,
-    });
-
     if (!res.headersSent) {
       next(error);
       return;
@@ -385,6 +369,7 @@ const publishLaunchStream = async (req, res, next) => {
 
 module.exports = {
   clearPublishQueue,
+  clearPublishSessionHistory,
   completeChunkedMediaAsset,
   createMediaAsset,
   createMediaFolder,

@@ -106,6 +106,7 @@ router.get('/publish-queue', adsLaunchController.getPublishQueue);
 router.post('/publish-queue/run', adsLaunchController.runPublishQueue);
 router.delete('/publish-queue', adsLaunchController.clearPublishQueue);
 router.get('/publish-sessions', adsLaunchController.getPublishSessions);
+router.delete('/publish-sessions/history', adsLaunchController.clearPublishSessionHistory);
 router.post('/publish-sessions/:sessionId/pause', adsLaunchController.pausePublishSession);
 router.post('/publish-sessions/:sessionId/resume', adsLaunchController.resumePublishSession);
 router.get('/templates', adsLaunchController.getTemplates);

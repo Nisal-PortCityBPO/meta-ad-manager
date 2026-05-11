@@ -4,11 +4,12 @@ const path = require('path');
 const HttpError = require('../../app/utils/httpError');
 const { waitForMetaApiPacing } = require('../../app/utils/metaApiPacing');
 const { writeActivityLog } = require('../activity-logs/activityLog.service');
-const { USER_ROLES } = require('../users/user.model');
+const { User, USER_ROLES } = require('../users/user.model');
 const LaunchTemplate = require('./adsLaunch.model');
 const { LAUNCH_TEMPLATE_TYPES } = require('./adsLaunch.model');
 const AdsLaunchPublishSession = require('./adsLaunchPublishSession.model');
 const { PUBLISH_SESSION_STATUSES } = require('./adsLaunchPublishSession.model');
+const { PUBLISH_SESSION_QUEUE_STATUSES } = require('./adsLaunchPublishSession.model');
 const AdsLaunchMedia = require('./adsLaunchMedia.model');
 const { ADS_MEDIA_TYPES } = require('./adsLaunchMedia.model');
 const AdsLaunchMediaFolder = require('./adsLaunchMediaFolder.model');
@@ -40,6 +41,11 @@ const META_QUEUEABLE_HTTP_STATUSES = new Set([429, 500, 502, 503, 504]);
 const DEFAULT_QUEUE_RETRY_AFTER_SECONDS = 300;
 const MAX_QUEUE_RETRY_AFTER_SECONDS = 3600;
 const PUBLISH_SESSION_EVENT_LIMIT = 120;
+
+let publishSessionQueueTimer = null;
+let publishSessionQueueTimerDueAt = null;
+let publishSessionQueueRunning = false;
+let publishExecutionChain = Promise.resolve();
 
 const SUPPORTED_WEBSITE_EVENTS = new Set([
   'LEAD',
@@ -146,6 +152,18 @@ function sleep(ms) {
   return new Promise((resolve) => {
     setTimeout(resolve, ms);
   });
+}
+
+function formatDelayDuration(ms) {
+  const seconds = Math.max(Math.round(ms / 1000), 0);
+
+  if (seconds < 60) {
+    return `${seconds}s`;
+  }
+
+  const minutes = Math.floor(seconds / 60);
+  const remainingSeconds = seconds % 60;
+  return remainingSeconds ? `${minutes}m ${remainingSeconds}s` : `${minutes}m`;
 }
 
 function normalizeTemplateType(value) {
@@ -1322,6 +1340,105 @@ async function startPublishSession({ sessionId = '', title = '', source = '', pa
   return session.toSafeObject();
 }
 
+async function countQueuedPublishSessionsBefore(session) {
+  const queuedAt = session?.queue?.queuedAt || session?.createdAt || new Date();
+  const createdAt = session?.createdAt || queuedAt;
+
+  return AdsLaunchPublishSession.countDocuments({
+    'queue.status': PUBLISH_SESSION_QUEUE_STATUSES.PENDING,
+    $or: [
+      { 'queue.queuedAt': { $lt: queuedAt } },
+      {
+        'queue.queuedAt': queuedAt,
+        createdAt: { $lt: createdAt },
+      },
+    ],
+  });
+}
+
+async function enqueuePublishLaunch({ payload, actor }) {
+  const normalizedSessionId = normalizePublishSessionId(payload?.publishSessionId) || createPublishSessionId();
+  const now = new Date();
+  const queuedEvent = {
+    sessionId: normalizedSessionId,
+    type: 'progress',
+    status: 'queued',
+    step: 'queued',
+    timestamp: now.toISOString(),
+    message: 'Publish added to the background queue. It will start when the current publish finishes.',
+    progress: {
+      completed: 0,
+      total: Array.isArray(payload?.selectedAdAccountIds) ? payload.selectedAdAccountIds.length : 0,
+      percent: 0,
+      etaSeconds: null,
+      elapsedSeconds: 0,
+    },
+  };
+  const queuedPayload = {
+    ...(payload || {}),
+    publishSessionId: normalizedSessionId,
+  };
+  const session = await AdsLaunchPublishSession.findOneAndUpdate(
+    {
+      sessionId: normalizedSessionId,
+      ...publishSessionAccessFilter(actor),
+    },
+    {
+      $set: {
+        title: normalizeText(payload?.publishTitle) || getPublishTitleFromPayload(payload),
+        source: normalizeText(payload?.publishSource) || 'Meta publish',
+        status: PUBLISH_SESSION_STATUSES.PENDING,
+        payload: queuedPayload,
+        resumePayload: null,
+        progress: queuedEvent,
+        latestResult: null,
+        latestError: '',
+        pauseRequested: false,
+        pauseRequestedAt: null,
+        pausedAt: null,
+        completedAt: null,
+        queue: {
+          status: PUBLISH_SESSION_QUEUE_STATUSES.PENDING,
+          queuedAt: now,
+          startedAt: null,
+          completedAt: null,
+          attemptCount: 0,
+          lastError: '',
+        },
+        updatedBy: actor?._id || null,
+      },
+      $setOnInsert: {
+        sessionId: normalizedSessionId,
+        createdBy: actor?._id || null,
+      },
+      $push: {
+        events: {
+          $each: [queuedEvent],
+          $slice: -PUBLISH_SESSION_EVENT_LIMIT,
+        },
+      },
+    },
+    {
+      new: true,
+      setDefaultsOnInsert: true,
+      upsert: true,
+    }
+  );
+  const queuedBefore = await countQueuedPublishSessionsBefore(session);
+
+  schedulePublishSessionQueueRun(0);
+
+  return {
+    message:
+      queuedBefore > 0
+        ? `Publish added to queue at position ${queuedBefore + 1}`
+        : 'Publish queued and will start shortly',
+    queued: true,
+    queuePosition: queuedBefore + 1,
+    session: session.toSafeObject(),
+  };
+}
+
 async function appendPublishSessionEvent({ sessionId, event }) {
   const normalizedSessionId = normalizePublishSessionId(sessionId);
 
@@ -1334,21 +1451,94 @@ async function appendPublishSessionEvent({ sessionId, event }) {
     timestamp: new Date().toISOString(),
     ...event,
   };
+  const update = {
+    $set: {
+      progress: nextEvent,
+    },
+  };
 
-  await AdsLaunchPublishSession.updateOne(
-    { sessionId: normalizedSessionId },
-    {
-      $set: {
-        progress: nextEvent,
+  if (!nextEvent.transient) {
+    update.$push = {
+      events: {
+        $each: [nextEvent],
+        $slice: -PUBLISH_SESSION_EVENT_LIMIT,
       },
-      $push: {
-        events: {
-          $each: [nextEvent],
-          $slice: -PUBLISH_SESSION_EVENT_LIMIT,
-        },
-      },
-    }
-  );
+    };
+  }
+
+  await AdsLaunchPublishSession.updateOne({ sessionId: normalizedSessionId }, update);
+}
+
+function buildTerminalPublishProgress({ status, result }) {
+  const baseProgress =
+    result?.progress && typeof result.progress === 'object' && !Array.isArray(result.progress)
+      ? { ...result.progress }
+      : {};
+  const summary = result?.summary || {};
+  const publishedCount = Number(summary.published) || 0;
+  const failedCount = Number(summary.failed) || 0;
+  const queuedCount = Number(summary.queued) || 0;
+  const pausedCount = Number(summary.paused) || 0;
+  const requestedCount = Number(summary.requested) || 0;
+  const summaryTotal = Math.max(requestedCount, publishedCount + failedCount + queuedCount + pausedCount);
+  const currentCompleted = Number(baseProgress.completed) || 0;
+  const currentTotal = Number(baseProgress.total) || 0;
+  const total = Math.max(currentTotal, currentCompleted, summaryTotal);
+
+  if (status === PUBLISH_SESSION_STATUSES.PAUSED || result?.paused) {
+    return {
+      completed: currentCompleted || publishedCount + failedCount + queuedCount,
+      total: total || summaryTotal,
+      ...baseProgress,
+      etaSeconds: null,
+    };
+  }
+
+  return {
+    ...baseProgress,
+    completed: total,
+    total,
+    percent: 100,
+    etaSeconds: 0,
+  };
+}
+
+function normalizeTerminalPublishSessionSafeObject(session) {
+  const terminalStatuses = new Set([
+    PUBLISH_SESSION_STATUSES.COMPLETED,
+    PUBLISH_SESSION_STATUSES.FAILED,
+    PUBLISH_SESSION_STATUSES.QUEUED,
+  ]);
+
+  if (!terminalStatuses.has(session.rawStatus)) {
+    return session;
+  }
+
+  const finalProgress = buildTerminalPublishProgress({
+    status: session.rawStatus,
+    result: {
+      ...(session.latestResult || {}),
+      progress: session.progress?.progress || session.latestResult?.progress,
+      summary: session.latestResult?.summary,
+    },
+  });
+  const progress = session.progress
+    ? {
+        ...session.progress,
+        progress: finalProgress,
+      }
+    : null;
+
+  return {
+    ...session,
+    progress,
+    latestResult: session.latestResult
+      ? {
+          ...session.latestResult,
+          progress: finalProgress,
+        }
+      : session.latestResult,
+  };
 }
 
 async function markPublishSessionFinished({ sessionId, status, result = null, error = '', resumePayload = null }) {
@@ -1359,6 +1549,13 @@ async function markPublishSessionFinished({ sessionId, status, result = null, er
   }
 
   const now = new Date();
+  const finalProgress = buildTerminalPublishProgress({ status, result });
+  const finalResult = result
+    ? {
+        ...result,
+        progress: finalProgress,
+      }
+    : null;
   const progress = {
     type: 'progress',
     status: status === PUBLISH_SESSION_STATUSES.PAUSED ? 'paused' : status.toLowerCase(),
@@ -1368,12 +1565,7 @@ async function markPublishSessionFinished({ sessionId, status, result = null, er
       status === PUBLISH_SESSION_STATUSES.PAUSED
         ? `Publish paused. ${resumePayload?.selectedAdAccountIds?.length || 0} ad account${resumePayload?.selectedAdAccountIds?.length === 1 ? '' : 's'} left to continue.`
         : result?.message || error || 'Publish finished',
-    progress: result?.progress || {
-      completed: result?.summary?.published || 0,
-      total: result?.summary?.requested || 0,
-      percent: status === PUBLISH_SESSION_STATUSES.PAUSED ? undefined : 100,
-      etaSeconds: status === PUBLISH_SESSION_STATUSES.PAUSED ? null : 0,
-    },
+    progress: finalProgress,
   };
 
   await AdsLaunchPublishSession.updateOne(
@@ -1382,7 +1574,7 @@ async function markPublishSessionFinished({ sessionId, status, result = null, er
       $set: {
         status,
         resumePayload,
-        latestResult: result,
+        latestResult: finalResult,
         latestError: error,
         progress,
         pauseRequested: false,
@@ -1460,6 +1652,110 @@ async function isPublishSessionPauseRequested(sessionId) {
   );
 }
 
+async function clearPublishSessionHistory({ actor, req }) {
+  const clearableStatuses = [
+    PUBLISH_SESSION_STATUSES.COMPLETED,
+    PUBLISH_SESSION_STATUSES.FAILED,
+    PUBLISH_SESSION_STATUSES.QUEUED,
+  ];
+  const result = await AdsLaunchPublishSession.deleteMany({
+    ...publishSessionAccessFilter(actor),
+    status: { $in: clearableStatuses },
+  });
+  const deletedCount = result.deletedCount || 0;
+
+  await writeActivityLog({
+    user: actor,
+    action: 'ADS_PUBLISH_HISTORY_CLEARED',
+    entity: 'AdsLaunchPublishSession',
+    metadata: {
+      deletedCount,
+    },
+    req,
+  });
+
+  return {
+    message: deletedCount
+      ? `Cleared ${deletedCount} publish history item${deletedCount === 1 ? '' : 's'}`
+      : 'No completed publish history to clear',
+    deletedCount,
+  };
+}
+
+function getRandomPublishIntervalMs(settings = {}) {
+  if (!settings.enabled) {
+    return 0;
+  }
+
+  const minMinutes = Number(settings.minMinutes);
+  const maxMinutes = Number(settings.maxMinutes);
+
+  if (!Number.isFinite(minMinutes) || !Number.isFinite(maxMinutes) || minMinutes <= 0 || maxMinutes <= 0) {
+    return 0;
+  }
+
+  const minMs = Math.round(Math.min(minMinutes, maxMinutes) * 60 * 1000);
+  const maxMs = Math.round(Math.max(minMinutes, maxMinutes) * 60 * 1000);
+
+  if (maxMs <= minMs) {
+    return minMs;
+  }
+
+  return Math.round(minMs + Math.random() * (maxMs - minMs));
+}
+
+async function waitBetweenPublishAccounts({ sessionId, settings, progress, progressContext, nextAccountName }) {
+  const delayMs = getRandomPublishIntervalMs(settings);
+
+  if (!delayMs) {
+    return { paused: false, delayMs: 0 };
+  }
+
+  const startedAt = Date.now();
+  const totalSeconds = Math.max(Math.ceil(delayMs / 1000), 1);
+  let lastRemainingSeconds = null;
+  const emitCountdown = () => {
+    const elapsedMs = Date.now() - startedAt;
+    const remainingMs = Math.max(delayMs - elapsedMs, 0);
+    const remainingSeconds = Math.ceil(remainingMs / 1000);
+
+    if (remainingSeconds === lastRemainingSeconds) {
+      return;
+    }
+
+    lastRemainingSeconds = remainingSeconds;
+    progress.info({
+      ...progressContext,
+      step: 'account-interval',
+      status: 'waiting',
+      transient: true,
+      message: `Waiting ${formatDelayDuration(remainingMs)} before ${nextAccountName || 'next ad account'} to avoid rapid Meta API calls`,
+      delayMs,
+      remainingMs,
+      intervalTotalSeconds: totalSeconds,
+      intervalRemainingSeconds: remainingSeconds,
+      nextAccountName,
+      progress: {
+        ...progress.getProgress(),
+        etaSeconds: remainingSeconds,
+      },
+    });
+  };
+
+  emitCountdown();
+
+  while (Date.now() - startedAt < delayMs) {
+    if (await isPublishSessionPauseRequested(sessionId)) {
+      return { paused: true, delayMs: Date.now() - startedAt };
+    }
+
+    await sleep(Math.min(1000, delayMs - (Date.now() - startedAt)));
+    emitCountdown();
+  }
+
+  return { paused: false, delayMs };
+}
+
 async function listPublishSessions({ actor, limit = 15 }) {
   const safeLimit = Math.min(Math.max(Number.parseInt(limit, 10) || 15, 1), 30);
   const query = {
@@ -1472,8 +1768,196 @@ async function listPublishSessions({ actor, limit = 15 }) {
   }
 
   return {
-    sessions: sessions.map((session) => session.toSafeObject()),
+    sessions: sessions.map((session) => normalizeTerminalPublishSessionSafeObject(session.toSafeObject())),
   };
+}
+
+async function resolvePublishSessionActor(session) {
+  if (session?.createdBy) {
+    const user = await User.findById(session.createdBy);
+
+    if (user) {
+      return user;
+    }
+  }
+
+  if (session?.updatedBy) {
+    const user = await User.findById(session.updatedBy);
+
+    if (user) {
+      return user;
+    }
+  }
+
+  throw new HttpError(400, 'Queued publish cannot start because the original user was not found');
+}
+
+async function claimNextQueuedPublishSession() {
+  const now = new Date();
+  const queuedSession = await AdsLaunchPublishSession.findOne({
+    status: PUBLISH_SESSION_STATUSES.PENDING,
+    'queue.status': PUBLISH_SESSION_QUEUE_STATUSES.PENDING,
+  }).sort({
+    'queue.queuedAt': 1,
+    createdAt: 1,
+  });
+
+  if (!queuedSession) {
+    return null;
+  }
+
+  const startEvent = {
+    sessionId: queuedSession.sessionId,
+    type: 'progress',
+    status: 'active',
+    step: 'queue-start',
+    timestamp: now.toISOString(),
+    message: 'Queued publish started in the background',
+    progress: queuedSession.progress?.progress || null,
+  };
+
+  return AdsLaunchPublishSession.findOneAndUpdate(
+    {
+      _id: queuedSession._id,
+      status: PUBLISH_SESSION_STATUSES.PENDING,
+      'queue.status': PUBLISH_SESSION_QUEUE_STATUSES.PENDING,
+    },
+    {
+      $set: {
+        status: PUBLISH_SESSION_STATUSES.ACTIVE,
+        progress: startEvent,
+        'queue.status': PUBLISH_SESSION_QUEUE_STATUSES.RUNNING,
+        'queue.startedAt': now,
+        'queue.completedAt': null,
+        'queue.lastError': '',
+      },
+      $inc: {
+        'queue.attemptCount': 1,
+      },
+      $push: {
+        events: {
+          $each: [startEvent],
+          $slice: -PUBLISH_SESSION_EVENT_LIMIT,
+        },
+      },
+    },
+    {
+      new: true,
+    }
+  );
+}
+
+async function markQueuedPublishSessionComplete({ sessionId, error = '' }) {
+  const normalizedSessionId = normalizePublishSessionId(sessionId);
+
+  if (!normalizedSessionId) {
+    return;
+  }
+
+  await AdsLaunchPublishSession.updateOne(
+    {
+      sessionId: normalizedSessionId,
+      'queue.status': PUBLISH_SESSION_QUEUE_STATUSES.RUNNING,
+    },
+    {
+      $set: {
+        'queue.status': error ? PUBLISH_SESSION_QUEUE_STATUSES.FAILED : PUBLISH_SESSION_QUEUE_STATUSES.COMPLETED,
+        'queue.completedAt': new Date(),
+        'queue.lastError': normalizeText(error),
+      },
+    }
+  );
+}
+
+function schedulePublishSessionQueueRun(delayMs = 0) {
+  const safeDelayMs = Math.max(Number(delayMs) || 0, 0);
+  const dueAt = Date.now() + safeDelayMs;
+
+  if (publishSessionQueueTimer && publishSessionQueueTimerDueAt && publishSessionQueueTimerDueAt <= dueAt) {
+    return;
+  }
+
+  if (publishSessionQueueTimer) {
+    clearTimeout(publishSessionQueueTimer);
+  }
+
+  publishSessionQueueTimerDueAt = dueAt;
+  publishSessionQueueTimer = setTimeout(() => {
+    publishSessionQueueTimer = null;
+    publishSessionQueueTimerDueAt = null;
+    runPublishSessionQueue({ source: 'auto' }).catch(() => undefined);
+  }, safeDelayMs);
+}
+
+async function runPublishSessionQueue({ source = 'manual' } = {}) {
+  if (publishSessionQueueRunning) {
+    return {
+      message: 'Publish session queue is already running',
+      processed: 0,
+      running: true,
+    };
+  }
+
+  publishSessionQueueRunning = true;
+  let processed = 0;
+
+  try {
+    while (true) {
+      const session = await claimNextQueuedPublishSession();
+
+      if (!session) {
+        break;
+      }
+
+      processed += 1;
+
+      try {
+        const actor = await resolvePublishSessionActor(session);
+        const payload = {
+          ...(session.payload || {}),
+          publishSessionId: session.sessionId,
+        };
+
+        await publishLaunch({
+          payload,
+          actor,
+          req: null,
+          tokenType: payload.tokenType,
+          publishSessionId: session.sessionId,
+        });
+        await markQueuedPublishSessionComplete({
+          sessionId: session.sessionId,
+        });
+      } catch (error) {
+        await failPublishSession({
+          sessionId: session.sessionId,
+          error,
+        });
+        await markQueuedPublishSessionComplete({
+          sessionId: session.sessionId,
+          error: error.message || 'Queued publish failed',
+        });
+      }
+    }
+
+    return {
+      message: processed ? `Publish session queue processed ${processed} item${processed === 1 ? '' : 's'}` : 'No queued publish sessions were ready',
+      processed,
+      running: false,
+      source,
+    };
+  } finally {
+    publishSessionQueueRunning = false;
+
+    const hasMoreQueued = await AdsLaunchPublishSession.exists({
+      status: PUBLISH_SESSION_STATUSES.PENDING,
+      'queue.status': PUBLISH_SESSION_QUEUE_STATUSES.PENDING,
+    });
+
+    if (hasMoreQueued) {
+      schedulePublishSessionQueueRun(0);
+    }
+  }
 }
 
 function clonePublishValue(value, fallback = null) {
@@ -1735,48 +2219,47 @@ async function resumePublishSession({ sessionId, actor, req }) {
     throw new HttpError(400, 'This paused publish does not have remaining ad accounts to continue');
   }
 
-  await startPublishSession({
+  const now = new Date();
+  const queuedPayload = {
+    ...resumePayload,
+    publishSessionId: session.sessionId,
+  };
+  const event = {
+    type: 'progress',
     sessionId: session.sessionId,
-    title: session.title,
-    source: session.source,
-    payload: {
-      ...resumePayload,
-      publishSessionId: session.sessionId,
-    },
-    actor,
-  });
-  await appendPublishSessionEvent({
-    sessionId: session.sessionId,
-    event: {
-      type: 'progress',
-      status: 'active',
-      step: 'resume',
-      message: `Continuing paused publish with ${remainingCount} remaining ad account${remainingCount === 1 ? '' : 's'}`,
-      progress: session.progress?.progress || null,
-    },
-  });
+    status: 'queued',
+    step: 'resume-queued',
+    timestamp: now.toISOString(),
+    message: `Paused publish queued with ${remainingCount} remaining ad account${remainingCount === 1 ? '' : 's'}`,
+    progress: session.progress?.progress || null,
+  };
 
-  setImmediate(() => {
-    publishLaunch({
-      payload: {
-        ...resumePayload,
-        publishSessionId: session.sessionId,
-      },
-      actor,
-      req: null,
-      tokenType: resumePayload.tokenType,
-      publishSessionId: session.sessionId,
-    }).catch((error) => {
-      markPublishSessionFinished({
-        sessionId: session.sessionId,
-        status: PUBLISH_SESSION_STATUSES.FAILED,
-        error: error.message || 'Paused publish resume failed',
-      }).catch(() => undefined);
-    });
-  });
+  session.status = PUBLISH_SESSION_STATUSES.PENDING;
+  session.payload = queuedPayload;
+  session.resumePayload = null;
+  session.latestResult = null;
+  session.latestError = '';
+  session.pauseRequested = false;
+  session.pauseRequestedAt = null;
+  session.pausedAt = null;
+  session.completedAt = null;
+  session.progress = event;
+  session.queue = {
+    status: PUBLISH_SESSION_QUEUE_STATUSES.PENDING,
+    queuedAt: now,
+    startedAt: null,
+    completedAt: null,
+    attemptCount: 0,
+    lastError: '',
+  };
+  session.updatedBy = actor?._id || null;
+  session.events.push(event);
+  session.events = session.events.slice(-PUBLISH_SESSION_EVENT_LIMIT);
+  await session.save();
 
-  const nextSession = await getPublishSessionDocForActor(session.sessionId, actor);
-  return nextSession.toSafeObject();
+  schedulePublishSessionQueueRun(0);
+
+  return session.toSafeObject();
 }
 
 function normalizeMediaFolderId(folderId) {
@@ -3837,7 +4320,27 @@ async function resolveAccountLaunchFromTemplates({ baseLaunch, accountLaunch, se
   };
 }
 
-async function publishLaunch({ payload, actor, req, onProgress = null, tokenType = null, publishSessionId = '' }) {
+async function withPublishExecutionLock(operation) {
+  const previousExecution = publishExecutionChain.catch(() => undefined);
+  let releaseCurrentExecution = () => undefined;
+
+  publishExecutionChain = previousExecution.then(
+    () =>
+      new Promise((resolve) => {
+        releaseCurrentExecution = resolve;
+      })
+  );
+
+  await previousExecution;
+
+  try {
+    return await operation();
+  } finally {
+    releaseCurrentExecution();
+  }
+}
+
+async function publishLaunchUnlocked({ payload, actor, req, onProgress = null, tokenType = null, publishSessionId = '' }) {
   const sessionId = normalizePublishSessionId(publishSessionId || payload?.publishSessionId);
   let sessionEventChain = Promise.resolve();
   const emitProgress = (event) => {
@@ -3882,6 +4385,7 @@ async function publishLaunch({ payload, actor, req, onProgress = null, tokenType
   }
 
   const token = await tokenService.getActiveTokenWithSecret(launch.tokenId, tokenType);
+  const publishIntervalSettings = await settingsService.getPublishIntervalSettings();
   const accountMap = new Map(launch.selectedAdAccounts.map((account) => [account.id, account]));
   const results = [];
   const failed = [];
@@ -4231,6 +4735,32 @@ async function publishLaunch({ payload, actor, req, onProgress = null, tokenType
       });
       break;
     }
+
+    if (remainingAdAccountIds.length) {
+      const nextAccount = accountMap.get(remainingAdAccountIds[0]);
+      const intervalResult = await waitBetweenPublishAccounts({
+        sessionId,
+        settings: publishIntervalSettings,
+        progress,
+        progressContext,
+        nextAccountName: nextAccount?.name || remainingAdAccountIds[0],
+      });
+
+      if (intervalResult.paused) {
+        paused = true;
+        pauseResumePayload = buildRemainingPublishPayload({
+          payload,
+          remainingAdAccountIds,
+        });
+        progress.info({
+          ...progressContext,
+          step: 'paused',
+          status: 'paused',
+          message: `Publish paused during account interval. ${remainingAdAccountIds.length} ad account${remainingAdAccountIds.length === 1 ? '' : 's'} left to continue.`,
+        });
+        break;
+      }
+    }
   }
 
   if (results.length) {
@@ -4261,6 +4791,13 @@ async function publishLaunch({ payload, actor, req, onProgress = null, tokenType
   const queuedCount = failed.filter((item) => item.queued).length;
   const hardFailedCount = failed.length - queuedCount;
   const pausedCount = pauseResumePayload?.selectedAdAccountIds?.length || 0;
+  const finalSessionStatus = paused
+    ? PUBLISH_SESSION_STATUSES.PAUSED
+    : hardFailedCount > 0
+      ? PUBLISH_SESSION_STATUSES.FAILED
+      : queuedCount > 0
+        ? PUBLISH_SESSION_STATUSES.QUEUED
+        : PUBLISH_SESSION_STATUSES.COMPLETED;
   const publishResult = {
     message:
       paused
@@ -4286,6 +4823,10 @@ async function publishLaunch({ payload, actor, req, onProgress = null, tokenType
     resumeCount: pausedCount,
     progress: progress.getProgress(),
   };
+  publishResult.progress = buildTerminalPublishProgress({
+    status: finalSessionStatus,
+    result: publishResult,
+  });
 
   publishResult.telegram = await settingsService.notifyPublishSummary({
     launch,
@@ -4296,13 +4837,7 @@ async function publishLaunch({ payload, actor, req, onProgress = null, tokenType
   if (sessionId) {
     await markPublishSessionFinished({
       sessionId,
-      status: paused
-        ? PUBLISH_SESSION_STATUSES.PAUSED
-        : hardFailedCount > 0
-          ? PUBLISH_SESSION_STATUSES.FAILED
-          : queuedCount > 0
-            ? PUBLISH_SESSION_STATUSES.QUEUED
-            : PUBLISH_SESSION_STATUSES.COMPLETED,
+      status: finalSessionStatus,
       result: publishResult,
       error: hardFailedCount > 0 ? `${hardFailedCount} ad account${hardFailedCount === 1 ? '' : 's'} failed during publish` : '',
       resumePayload: pauseResumePayload,
@@ -4312,7 +4847,12 @@ async function publishLaunch({ payload, actor, req, onProgress = null, tokenType
   return publishResult;
 }
 
+async function publishLaunch(options) {
+  return withPublishExecutionLock(() => publishLaunchUnlocked(options));
+}
+
 module.exports = {
+  clearPublishSessionHistory,
   completeChunkedMediaAsset,
   createMediaAsset,
   createMediaFolder,
@@ -4320,6 +4860,7 @@ module.exports = {
   deleteMediaAsset,
   deleteMediaFolder,
   deleteTemplate,
+  enqueuePublishLaunch,
   failPublishSession,
   getMediaAssetForActor,
   getTemplateAssetForActor,
@@ -4331,7 +4872,9 @@ module.exports = {
   publishLaunch,
   requestPublishSessionPause,
   resumePublishSession,
+  runPublishSessionQueue,
   saveMediaUploadChunk,
+  schedulePublishSessionQueueRun,
   startPublishSession,
   updateMediaAssetBrand,
   updateTemplate,

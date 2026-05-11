@@ -2,6 +2,7 @@ const dotenv = require('dotenv');
 const http = require('http');
 const { attachFrontend, createApiApp } = require('./app');
 const connectDB = require('./app/config/db');
+const adsLaunchService = require('./modules/ads-launch/adsLaunch.service');
 const adsManageService = require('./modules/ads-manage/adsManage.service');
 const { seedDatabase } = require('./scripts/seedDatabase');
 
@@ -21,6 +22,7 @@ async function startServer() {
 
   server.listen(PORT, () => {
     console.log(`Server is running on http://localhost:${PORT}`);
+    adsLaunchService.schedulePublishSessionQueueRun(15000);
     adsManageService.schedulePublishQueueRun(15000);
   });
 }

@@ -8,6 +8,7 @@ const HISTORY_SEEN_STORAGE_KEY = 'meta-manager.ads-publish-history-seen-at.v1';
 const HISTORY_LIMIT = 15;
 const HISTORY_EVENT_LIMIT = 120;
 const ACTIVE_SESSION_STATUSES = new Set(['active', 'pausing']);
+const LIVE_QUEUE_RAW_STATUSES = new Set(['PENDING']);
 
 const readStoredHistory = () => {
   if (typeof window === 'undefined') {
@@ -80,6 +81,7 @@ const normalizeServerSession = (session) => {
     title: session.title || 'Ads publish',
     source: session.source || 'Meta publish',
     status: session.status || progress?.status || 'active',
+    rawStatus: session.rawStatus || '',
     startedAt: session.startedAt || progress?.timestamp || new Date().toISOString(),
     completedAt: session.completedAt || '',
     progress,
@@ -90,6 +92,7 @@ const normalizeServerSession = (session) => {
     canResume: Boolean(session.canResume),
     resumeCount: session.resumeCount || 0,
     pauseRequested: Boolean(session.pauseRequested),
+    queue: session.queue || null,
   };
 };
 
@@ -138,6 +141,7 @@ export const PublishProgressProvider = ({ children }) => {
 
     const activeSession =
       normalizedSessions.find((session) => ACTIVE_SESSION_STATUSES.has(session.status)) ||
+      normalizedSessions.find((session) => LIVE_QUEUE_RAW_STATUSES.has(session.rawStatus)) ||
       normalizedSessions.find((session) => session.id === activeSessionRef.current?.id) ||
       normalizedSessions.find((session) => session.status === 'paused' && session.canResume);
 
@@ -147,7 +151,7 @@ export const PublishProgressProvider = ({ children }) => {
 
     activeSessionRef.current = activeSession;
     setCurrentPublishId(activeSession.id);
-    setIsPublishing(ACTIVE_SESSION_STATUSES.has(activeSession.status));
+    setIsPublishing(ACTIVE_SESSION_STATUSES.has(activeSession.status) || LIVE_QUEUE_RAW_STATUSES.has(activeSession.rawStatus));
     setLatestResult(activeSession.latestResult || null);
     setLatestError(activeSession.latestError || '');
     setEvents((activeSession.events || []).slice(-40));
@@ -342,12 +346,23 @@ export const PublishProgressProvider = ({ children }) => {
     activeSessionRef.current = null;
   };
 
-  const clearPublishHistory = () => {
+  const clearPublishHistory = useCallback(async () => {
+    const result = await adsLaunchApi.clearPublishSessionsHistory();
     writeStoredHistory([]);
     setPublishHistory([]);
-    writeSeenAt(new Date().toISOString());
+    const seenAt = new Date().toISOString();
+    writeSeenAt(seenAt);
     setPublishHistorySeenAt(readSeenAt());
-  };
+
+    try {
+      const data = await adsLaunchApi.getPublishSessions({ limit: HISTORY_LIMIT });
+      applyServerSessions(data.sessions || []);
+    } catch {
+      // The delete already succeeded; the next poll will restore active/queued sessions if needed.
+    }
+
+    return result;
+  }, [applyServerSessions]);
 
   const markPublishHistorySeen = () => {
     const latestTimestamp = publishHistory
@@ -413,13 +428,14 @@ export const PublishProgressProvider = ({ children }) => {
   }, [refreshPublishSessions]);
 
   useEffect(() => {
-    if (!isPublishing && !ACTIVE_SESSION_STATUSES.has(progress?.status)) {
+    if (!isPublishing && !ACTIVE_SESSION_STATUSES.has(progress?.status) && activeSessionRef.current?.rawStatus !== 'PENDING') {
       return undefined;
     }
 
-    const intervalId = window.setInterval(refreshPublishSessions, 4000);
+    const pollMs = progress?.step === 'account-interval' || progress?.status === 'waiting' ? 1000 : 4000;
+    const intervalId = window.setInterval(refreshPublishSessions, pollMs);
     return () => window.clearInterval(intervalId);
-  }, [isPublishing, progress?.status, refreshPublishSessions]);
+  }, [isPublishing, progress?.status, progress?.step, refreshPublishSessions]);
 
   useEffect(() => {
     if (!latestResult || isPublishing || progress?.status === 'paused') {
@@ -468,6 +484,7 @@ export const PublishProgressProvider = ({ children }) => {
       publishHistorySeenAt,
       publishHistoryUnreadCount,
       applyPublishSessions,
+      clearPublishHistory,
       refreshPublishSessions,
       requestPausePublish,
       resumeBusy,

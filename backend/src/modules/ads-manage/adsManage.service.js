@@ -1,8 +1,10 @@
 const HttpError = require('../../app/utils/httpError');
+const mongoose = require('mongoose');
 const { waitForMetaApiPacing } = require('../../app/utils/metaApiPacing');
 const { writeActivityLog } = require('../activity-logs/activityLog.service');
 const settingsService = require('../settings/settings.service');
 const tokenService = require('../token-management/token.service');
+const { Token, TOKEN_CONNECTION_STATUSES, TOKEN_STATUSES } = require('../token-management/token.model');
 const { User, USER_ROLES } = require('../users/user.model');
 const ManagedCampaign = require('./adsManage.model');
 
@@ -31,6 +33,7 @@ const RETRYABLE_PUBLISH_QUEUE_STATUSES = [
 const DEFAULT_QUEUE_RETRY_DELAY_MS = 5 * 60 * 1000;
 const MAX_QUEUE_RETRY_DELAY_MS = 60 * 60 * 1000;
 const META_ACCESS_COLLECTION_LIMIT = 500;
+const ERROR_PAGE_SIZE_OPTIONS = new Set([10, 25, 50]);
 
 let publishQueueTimer = null;
 let publishQueueTimerDueAt = null;
@@ -184,6 +187,438 @@ function getQueueState({ queue = [] } = {}) {
     lastResult: publishQueueLastResult,
     counts,
   };
+}
+
+function normalizeErrorPagination({ page = 1, limit = 25 } = {}) {
+  const normalizedPage = Math.max(Number.parseInt(page, 10) || 1, 1);
+  const parsedLimit = Number.parseInt(limit, 10) || 25;
+  const normalizedLimit = ERROR_PAGE_SIZE_OPTIONS.has(parsedLimit) ? parsedLimit : 25;
+
+  return {
+    page: normalizedPage,
+    limit: normalizedLimit,
+    skip: (normalizedPage - 1) * normalizedLimit,
+  };
+}
+
+function getLatestProblemAction(record = {}) {
+  const history = Array.isArray(record.actionHistory) ? record.actionHistory : [];
+
+  return [...history]
+    .reverse()
+    .find((item) => {
+      const action = normalizeText(item.action).toUpperCase();
+      const status = normalizeText(item.status).toUpperCase();
+      return (
+        action !== 'RETRY_REQUESTED' &&
+        (status === 'BLOCKED' ||
+          action.includes('FAILED') ||
+          action.includes('BLOCKED') ||
+          (status === 'FAILED' && !action.includes('REQUESTED')))
+      );
+    });
+}
+
+function getLatestRecoveryAction(record = {}) {
+  const history = Array.isArray(record.actionHistory) ? record.actionHistory : [];
+
+  return [...history]
+    .reverse()
+    .find((item) => {
+      const action = normalizeText(item.action).toUpperCase();
+      const status = normalizeText(item.status).toUpperCase();
+      return action === 'RETRY_SUCCEEDED' || action === 'PUBLISH_QUEUE_COMPLETED' || status === 'RETRIED';
+    });
+}
+
+function classifyErrorMessage(message = '', queueStatus = '') {
+  const text = normalizeText(message).toLowerCase();
+  const normalizedQueueStatus = normalizeQueueStatus(queueStatus);
+
+  if (
+    text.includes('access token') ||
+    text.includes('oauth') ||
+    text.includes('session has expired') ||
+    text.includes('session is invalid') ||
+    text.includes('permission') ||
+    text.includes('does not have access') ||
+    text.includes('not authorized') ||
+    text.includes('login')
+  ) {
+    return 'AUTH';
+  }
+
+  if (
+    normalizedQueueStatus === PUBLISH_QUEUE_STATUSES.BLOCKED ||
+    text.includes('temporarily blocked') ||
+    text.includes('api access blocked') ||
+    text.includes('rate limit') ||
+    text.includes('too many calls') ||
+    text.includes('application request limit') ||
+    text.includes('please reduce the amount')
+  ) {
+    return 'BLOCKED';
+  }
+
+  if (
+    text.includes('creative') ||
+    text.includes('asset_feed_spec') ||
+    text.includes('call_to_action') ||
+    text.includes('display url')
+  ) {
+    return 'CREATIVE';
+  }
+
+  if (
+    text.includes('video') ||
+    text.includes('image') ||
+    text.includes('thumbnail') ||
+    text.includes('upload') ||
+    text.includes('media')
+  ) {
+    return 'MEDIA';
+  }
+
+  if (
+    text.includes('invalid parameter') ||
+    text.includes('unsupported') ||
+    text.includes('must specify') ||
+    text.includes('required') ||
+    text.includes('budget') ||
+    text.includes('url')
+  ) {
+    return 'VALIDATION';
+  }
+
+  return 'UNKNOWN';
+}
+
+function getErrorSeverity(errorType, status = '') {
+  if (errorType === 'AUTH' || errorType === 'BLOCKED') {
+    return 'CRITICAL';
+  }
+
+  if (normalizeText(status).toUpperCase() === 'FAILED') {
+    return 'HIGH';
+  }
+
+  if (errorType === 'VALIDATION' || errorType === 'CREATIVE') {
+    return 'MEDIUM';
+  }
+
+  return 'LOW';
+}
+
+function getResumeFromStep(record = {}) {
+  if (record.adId) {
+    return 'history save';
+  }
+
+  if (record.creativeId) {
+    return 'ad creation';
+  }
+
+  if (record.adSetId) {
+    return 'creative creation';
+  }
+
+  if (record.campaignId && !String(record.campaignId).startsWith('failed_')) {
+    return 'ad set creation';
+  }
+
+  return 'campaign creation';
+}
+
+function buildTokenContext(token) {
+  const safeToken = token?.toSafeObject ? token.toSafeObject() : token || {};
+
+  return {
+    id: safeToken.id || safeToken._id?.toString?.() || '',
+    label: safeToken.label || '',
+    purpose: safeToken.purpose || '',
+    adsPowerProfile: safeToken.adsPowerProfile || '',
+    brand: safeToken.brand
+      ? {
+          id: safeToken.brand.id || safeToken.brand._id?.toString?.() || '',
+          name: safeToken.brand.name || '',
+          color: safeToken.brand.color || '',
+        }
+      : null,
+    agency: safeToken.agency
+      ? {
+          id: safeToken.agency.id || safeToken.agency._id?.toString?.() || '',
+          name: safeToken.agency.name || '',
+        }
+      : null,
+    connectionStatus: safeToken.connectionStatus || '',
+    systemUserConnectionStatus: safeToken.systemUserAccessTokenConnectionStatus || safeToken.systemUserConnectionStatus || '',
+  };
+}
+
+function buildCampaignErrorRow(record, tokenContextById = new Map()) {
+  const safeRecord = record.toSafeObject ? record.toSafeObject() : record;
+  const queue = safeRecord.publishQueue || {};
+  const queueStatus = normalizeQueueStatus(queue.status);
+  const latestProblemAction = getLatestProblemAction(record);
+  const latestRecoveryAction = getLatestRecoveryAction(record);
+  const latestClearedAction = [...(Array.isArray(record.actionHistory) ? record.actionHistory : [])]
+    .reverse()
+    .find((item) => normalizeText(item.action).toUpperCase() === 'ERROR_SUCCESS_CLEARED');
+  const recoveryTime = latestRecoveryAction?.at ? new Date(latestRecoveryAction.at).getTime() : 0;
+  const clearedTime = latestClearedAction?.at ? new Date(latestClearedAction.at).getTime() : 0;
+  const message = normalizeText(queue.lastError) || normalizeText(safeRecord.lastMetaError) || normalizeText(latestProblemAction?.message);
+  const errorType = classifyErrorMessage(message, queueStatus);
+  const retryPayload = safeRecord.launch?.retryPayload || null;
+  const queueIsActive = ACTIVE_PUBLISH_QUEUE_STATUSES.includes(queueStatus);
+
+  if (
+    latestRecoveryAction &&
+    clearedTime > recoveryTime &&
+    safeRecord.status !== 'FAILED' &&
+    !normalizeText(safeRecord.lastMetaError) &&
+    !queueIsActive
+  ) {
+    return null;
+  }
+
+  const recovered = Boolean(
+    latestRecoveryAction &&
+      safeRecord.status !== 'FAILED' &&
+      !normalizeText(safeRecord.lastMetaError) &&
+      !queueIsActive &&
+      clearedTime <= recoveryTime
+  );
+  const canRetry = !recovered && safeRecord.status === 'FAILED' && Boolean(retryPayload);
+  const status = recovered
+    ? 'SUCCESS'
+    : queueIsActive
+    ? queueStatus
+    : safeRecord.status === 'FAILED'
+      ? 'FAILED'
+      : 'WITH_ERROR';
+  const token = tokenContextById.get(safeRecord.tokenId) || {
+    id: safeRecord.tokenId,
+    label: safeRecord.tokenLabel,
+    brand: safeRecord.launch?.brandId
+      ? {
+          id: safeRecord.launch.brandId,
+          name: safeRecord.launch.brandName || '',
+        }
+      : null,
+    agency: null,
+    adsPowerProfile: '',
+  };
+
+  return {
+    id: `campaign:${safeRecord.recordId || safeRecord.campaignId}`,
+    kind: 'CAMPAIGN',
+    status,
+    errorType,
+    severity: getErrorSeverity(errorType, status),
+    message: message || 'Saved Meta action error',
+    successMessage: recovered ? normalizeText(latestRecoveryAction?.message) || 'Retry completed successfully' : '',
+    recovered,
+    recoveredAt: recovered ? latestRecoveryAction?.at || safeRecord.updatedAt : null,
+    campaignId: safeRecord.campaignId,
+    recordId: safeRecord.recordId,
+    campaignName: safeRecord.name,
+    tokenId: safeRecord.tokenId,
+    tokenLabel: safeRecord.tokenLabel,
+    token,
+    brandName: token.brand?.name || safeRecord.launch?.brandName || '',
+    agencyName: token.agency?.name || '',
+    adsPowerProfile: token.adsPowerProfile || '',
+    adAccount: safeRecord.adAccount || {},
+    page: safeRecord.launch?.page || {},
+    pixel: safeRecord.launch?.pixel || {},
+    source: safeRecord.source || '',
+    canRetry,
+    canCheckAccess: canRetry,
+    retryLabel: getResumeFromStep(safeRecord) === 'campaign creation' ? 'Retry' : 'Continue',
+    resumeFromStep: canRetry ? getResumeFromStep(safeRecord) : '',
+    partialMeta: {
+      campaignId: safeRecord.campaignId && !String(safeRecord.campaignId).startsWith('failed_') ? safeRecord.campaignId : '',
+      adSetId: safeRecord.adSetId || '',
+      creativeId: safeRecord.creativeId || '',
+      adId: safeRecord.adId || '',
+    },
+    queue: {
+      status: queueStatus,
+      reason: queue.reason || '',
+      tokenType: queue.tokenType || '',
+      source: queue.source || '',
+      queuedAt: queue.queuedAt || null,
+      nextAttemptAt: queue.nextAttemptAt || null,
+      lastAttemptAt: queue.lastAttemptAt || null,
+      attemptCount: queue.attemptCount || 0,
+      lastError: queue.lastError || '',
+    },
+    latestAction: latestProblemAction
+      ? {
+          action: latestProblemAction.action,
+          status: latestProblemAction.status,
+          message: latestProblemAction.message,
+          at: latestProblemAction.at,
+        }
+      : null,
+    recoveryAction: latestRecoveryAction
+      ? {
+          action: latestRecoveryAction.action,
+          status: latestRecoveryAction.status,
+          message: latestRecoveryAction.message,
+          at: latestRecoveryAction.at,
+        }
+      : null,
+    createdAt: safeRecord.createdAt,
+    updatedAt: safeRecord.updatedAt,
+  };
+}
+
+function buildTokenErrorRows(token) {
+  const safeToken = token.toSafeObject ? token.toSafeObject() : token;
+  const tokenContext = buildTokenContext(token);
+  const rows = [];
+  const baseRow = {
+    kind: 'TOKEN',
+    status: 'AUTH',
+    errorType: 'AUTH',
+    severity: 'CRITICAL',
+    tokenId: safeToken.id,
+    tokenLabel: safeToken.label,
+    token: tokenContext,
+    brandName: tokenContext.brand?.name || '',
+    agencyName: tokenContext.agency?.name || '',
+    adsPowerProfile: tokenContext.adsPowerProfile || '',
+    canRetry: false,
+    canCheckAccess: false,
+    retryLabel: '',
+    campaignId: '',
+    recordId: '',
+    campaignName: '',
+    adAccount: null,
+    page: null,
+    pixel: null,
+    source: 'TOKEN_HEALTH',
+    queue: null,
+    latestAction: null,
+    partialMeta: {},
+    createdAt: safeToken.createdAt,
+    updatedAt: safeToken.updatedAt,
+  };
+
+  if (safeToken.status === TOKEN_STATUSES.DEACTIVE) {
+    rows.push({
+      ...baseRow,
+      id: `token:${safeToken.id}:status`,
+      message: 'Meta token is deactivated in this system',
+    });
+  }
+
+  if ([TOKEN_CONNECTION_STATUSES.BLOCKED, TOKEN_CONNECTION_STATUSES.DISABLED].includes(safeToken.connectionStatus)) {
+    rows.push({
+      ...baseRow,
+      id: `token:${safeToken.id}:profile`,
+      message: safeToken.connectionMessage || `Profile access token is ${String(safeToken.connectionStatus).toLowerCase()}`,
+    });
+  }
+
+  if ([TOKEN_CONNECTION_STATUSES.BLOCKED, TOKEN_CONNECTION_STATUSES.DISABLED].includes(safeToken.systemUserAccessTokenConnectionStatus)) {
+    rows.push({
+      ...baseRow,
+      id: `token:${safeToken.id}:system-user`,
+      message:
+        safeToken.systemUserAccessTokenConnectionMessage ||
+        `System user access token is ${String(safeToken.systemUserAccessTokenConnectionStatus).toLowerCase()}`,
+    });
+  }
+
+  return rows;
+}
+
+function applyErrorFilters(rows, { type = '', status = '', search = '' } = {}) {
+  const normalizedType = normalizeText(type).toUpperCase();
+  const normalizedStatus = normalizeText(status).toUpperCase();
+  const normalizedSearch = normalizeText(search).toLowerCase();
+
+  return rows.filter((row) => {
+    if (normalizedType && row.errorType !== normalizedType) {
+      return false;
+    }
+
+    if (normalizedStatus) {
+      if (normalizedStatus === 'OPEN' && row.status === 'SUCCESS') {
+        return false;
+      }
+
+      if (normalizedStatus === 'RETRYABLE' && !row.canRetry) {
+        return false;
+      }
+
+      if (!['OPEN', 'RETRYABLE'].includes(normalizedStatus) && row.status !== normalizedStatus) {
+        return false;
+      }
+    }
+
+    if (!normalizedSearch) {
+      return true;
+    }
+
+    return [
+      row.message,
+      row.status,
+      row.errorType,
+      row.successMessage,
+      row.campaignId,
+      row.campaignName,
+      row.tokenLabel,
+      row.brandName,
+      row.agencyName,
+      row.adsPowerProfile,
+      row.adAccount?.name,
+      row.adAccount?.id,
+      row.page?.name,
+      row.pixel?.name,
+      row.resumeFromStep,
+    ]
+      .filter(Boolean)
+      .some((value) => String(value).toLowerCase().includes(normalizedSearch));
+  });
+}
+
+function summarizeErrorRows(rows) {
+  return rows.reduce(
+    (summary, row) => {
+      summary.total += 1;
+
+      if (row.status === 'SUCCESS') {
+        summary.success += 1;
+      } else {
+        summary.open += 1;
+      }
+
+      if (row.canRetry) {
+        summary.retryable += 1;
+      }
+
+      if (row.status === PUBLISH_QUEUE_STATUSES.BLOCKED || row.errorType === 'BLOCKED') {
+        summary.blocked += 1;
+      }
+
+      if (row.errorType === 'AUTH') {
+        summary.auth += 1;
+      }
+
+      return summary;
+    },
+    {
+      total: 0,
+      open: 0,
+      success: 0,
+      retryable: 0,
+      blocked: 0,
+      auth: 0,
+    }
+  );
 }
 
 function buildGraphUrl(path, params = {}) {
@@ -890,6 +1325,144 @@ async function listCampaigns({ tokenId, adAccountIds = [], status }) {
   };
 }
 
+async function listErrors({ actor = null, tokenId = '', type = '', status = '', search = '', page = 1, limit = 25 } = {}) {
+  const pagination = normalizeErrorPagination({ page, limit });
+  const normalizedTokenId = normalizeText(tokenId);
+  const accessFilter = campaignAccessFilter(actor);
+  const campaignQuery = {
+    ...accessFilter,
+    $or: [
+      { status: 'FAILED' },
+      {
+        lastMetaError: {
+          $nin: ['', null],
+        },
+      },
+      {
+        'publishQueue.status': {
+          $in: ACTIVE_PUBLISH_QUEUE_STATUSES,
+        },
+      },
+      {
+        'actionHistory.action': 'RETRY_SUCCEEDED',
+      },
+    ],
+  };
+
+  if (normalizedTokenId) {
+    campaignQuery.tokenId = normalizedTokenId;
+  }
+
+  const tokenQuery = {
+    $or: [
+      { status: TOKEN_STATUSES.DEACTIVE },
+      { connectionStatus: { $in: [TOKEN_CONNECTION_STATUSES.BLOCKED, TOKEN_CONNECTION_STATUSES.DISABLED] } },
+      { systemUserConnectionStatus: { $in: [TOKEN_CONNECTION_STATUSES.BLOCKED, TOKEN_CONNECTION_STATUSES.DISABLED] } },
+    ],
+  };
+
+  if (normalizedTokenId) {
+    tokenQuery._id = normalizedTokenId;
+  }
+
+  const [campaigns, tokens] = await Promise.all([
+    ManagedCampaign.find(campaignQuery).sort({ updatedAt: -1, createdAt: -1 }).limit(300),
+    Token.find(tokenQuery).populate('brand', 'name color').populate('agency', 'name').sort({ updatedAt: -1, createdAt: -1 }).limit(100),
+  ]);
+  const campaignTokenIds = Array.from(
+    new Set(campaigns.map((campaign) => normalizeText(campaign.tokenId)).filter((id) => mongoose.Types.ObjectId.isValid(id)))
+  );
+  const campaignTokens = campaignTokenIds.length
+    ? await Token.find({ _id: { $in: campaignTokenIds } }).populate('brand', 'name color').populate('agency', 'name')
+    : [];
+  const tokenContextById = new Map(
+    [...campaignTokens, ...tokens].map((token) => {
+      const context = buildTokenContext(token);
+      return [context.id, context];
+    })
+  );
+  const campaignRows = campaigns.map((campaign) => buildCampaignErrorRow(campaign, tokenContextById)).filter((row) => row?.message);
+  const tokenRows = tokens.flatMap(buildTokenErrorRows);
+  const allRows = [...campaignRows, ...tokenRows].sort(
+    (left, right) => new Date(right.updatedAt || 0).getTime() - new Date(left.updatedAt || 0).getTime()
+  );
+  const filteredRows = applyErrorFilters(allRows, { type, status, search });
+  const pageRows = filteredRows.slice(pagination.skip, pagination.skip + pagination.limit);
+
+  return {
+    errors: pageRows,
+    summary: summarizeErrorRows(filteredRows),
+    pagination: {
+      page: pagination.page,
+      limit: pagination.limit,
+      total: filteredRows.length,
+      pages: Math.max(Math.ceil(filteredRows.length / pagination.limit), 1),
+    },
+    filters: {
+      type: normalizeText(type).toUpperCase(),
+      status: normalizeText(status).toUpperCase(),
+      search: normalizeText(search),
+      tokenId: normalizedTokenId,
+    },
+  };
+}
+
+async function clearRecoveredErrors({ actor = null, req = null } = {}) {
+  const accessFilter = campaignAccessFilter(actor);
+  const candidates = await ManagedCampaign.find({
+    ...accessFilter,
+    status: {
+      $ne: 'FAILED',
+    },
+    lastMetaError: {
+      $in: ['', null],
+    },
+    'actionHistory.action': 'RETRY_SUCCEEDED',
+  });
+  let cleared = 0;
+
+  for (const campaign of candidates) {
+    const latestRecoveryAction = getLatestRecoveryAction(campaign);
+    const latestClearedAction = [...(campaign.actionHistory || [])]
+      .reverse()
+      .find((item) => normalizeText(item.action).toUpperCase() === 'ERROR_SUCCESS_CLEARED');
+    const recoveryTime = latestRecoveryAction?.at ? new Date(latestRecoveryAction.at).getTime() : 0;
+    const clearedTime = latestClearedAction?.at ? new Date(latestClearedAction.at).getTime() : 0;
+
+    if (!latestRecoveryAction || clearedTime > recoveryTime) {
+      continue;
+    }
+
+    campaign.actionHistory.push(
+      pushAction({
+        action: 'ERROR_SUCCESS_CLEARED',
+        status: 'SUCCESS',
+        message: 'Recovered error hidden from Errors table',
+        actor,
+      })
+    );
+    campaign.lastActionAt = new Date();
+    campaign.updatedBy = actor?._id || actor?.id || null;
+    await campaign.save();
+    cleared += 1;
+  }
+
+  await writeActivityLog({
+    user: actor,
+    action: 'ADS_ERRORS_SUCCESS_CLEARED',
+    entity: 'ManagedCampaign',
+    metadata: {
+      cleared,
+    },
+    req,
+  });
+
+  return {
+    message: `${cleared} recovered error${cleared === 1 ? '' : 's'} cleared`,
+    cleared,
+  };
+}
+
 async function getCampaignForAction({ tokenId, campaignId }) {
   const normalizedTokenId = normalizeText(tokenId);
   const normalizedCampaignId = normalizeText(campaignId);
@@ -1538,6 +2111,38 @@ async function syncCampaignDetails({ tokenId, campaignId, actor, req }) {
   }
 }
 
+async function checkFailedLaunchAccess({ tokenId, campaignId, actor, tokenType = null, retryTokenId = '' }) {
+  const campaign = await getCampaignForAction({ tokenId, campaignId });
+
+  if (campaign.status !== 'FAILED' || !campaign.launch?.retryPayload) {
+    throw new HttpError(400, 'Only retryable failed launch records can be checked');
+  }
+
+  const retryToken = await resolveRetryTokenForCampaign({
+    campaign,
+    tokenType,
+    retryTokenId,
+    actor,
+  });
+  const requirements = getRetryAccessRequirements(campaign);
+
+  return {
+    message: retryToken.switched
+      ? `Access check passed with replacement token ${retryToken.token.label || retryToken.token.id}`
+      : `Access check passed with ${retryToken.token.label || 'saved token'}`,
+    ok: true,
+    token: {
+      id: retryToken.token.id,
+      label: retryToken.token.label,
+      switched: retryToken.switched,
+      selected: retryToken.selected,
+      tokenType: retryToken.token.tokenType || tokenType || '',
+    },
+    requirements,
+    campaign: campaign.toSafeObject(),
+  };
+}
+
 async function retryFailedLaunch({ tokenId, campaignId, actor, req, tokenType = null, retryTokenId = '', fromQueue = false }) {
   const campaign = await getCampaignForAction({ tokenId, campaignId });
 
@@ -2012,10 +2617,13 @@ async function clearPublishQueue({ actor, req }) {
 }
 
 module.exports = {
+  checkFailedLaunchAccess,
+  clearRecoveredErrors,
   clearPublishQueue,
   deleteCampaign,
   duplicateCampaign,
   getPublishQueue,
+  listErrors,
   listCampaigns,
   recordFailedLaunch,
   recordPublishedCampaign,

@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { NavLink, Outlet, useNavigate } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import {
+  AlertTriangle,
   BarChart3,
   Bell,
   CheckCircle2,
@@ -45,6 +46,7 @@ const navItemsConfig = [
   { to: '/ads-media-library', label: 'Ads Media Library', icon: ImageIcon, roles: [USER_ROLES.SUPER_ADMIN, USER_ROLES.ADMIN] },
   { to: '/dynamic-ads-launch', label: 'Dynamic Ads Launch', icon: Megaphone, roles: [USER_ROLES.SUPER_ADMIN, USER_ROLES.ADMIN] },
   { to: '/ads-manage', label: 'Ads Manage', icon: FolderKanban, roles: [USER_ROLES.SUPER_ADMIN] },
+  { to: '/errors', label: 'Errors', icon: AlertTriangle, roles: [USER_ROLES.SUPER_ADMIN] },
   { to: '/users', label: 'Users', icon: Users, roles: [USER_ROLES.SUPER_ADMIN] },
   { to: '/activity-logs', label: 'Activity Logs', icon: ClipboardList, roles: [USER_ROLES.SUPER_ADMIN] },
   { to: '/notifications', label: 'Notifications', icon: Bell },
@@ -339,12 +341,18 @@ const MetaKeySettingsControl = () => {
   const [telegramLoading, setTelegramLoading] = useState(false);
   const [telegramSaving, setTelegramSaving] = useState(false);
   const [telegramTesting, setTelegramTesting] = useState(false);
+  const [publishIntervalSaving, setPublishIntervalSaving] = useState(false);
   const [telegramForm, setTelegramForm] = useState({
     enabled: false,
     botToken: '',
     botTokenMasked: '',
     botTokenSet: false,
     chatId: '',
+  });
+  const [publishIntervalForm, setPublishIntervalForm] = useState({
+    enabled: true,
+    minMinutes: '0.167',
+    maxMinutes: '10',
   });
   const controlRef = useRef(null);
 
@@ -370,19 +378,23 @@ const MetaKeySettingsControl = () => {
 
     let mounted = true;
     setTelegramLoading(true);
-    settingsApi
-      .getTelegramSettings()
-      .then((data) => {
+    Promise.all([settingsApi.getTelegramSettings(), settingsApi.getPublishIntervalSettings()])
+      .then(([telegramData, intervalData]) => {
         if (!mounted) {
           return;
         }
 
         setTelegramForm({
-          enabled: Boolean(data.telegram?.enabled),
+          enabled: Boolean(telegramData.telegram?.enabled),
           botToken: '',
-          botTokenMasked: data.telegram?.botTokenMasked || '',
-          botTokenSet: Boolean(data.telegram?.botTokenSet),
-          chatId: data.telegram?.chatId || '',
+          botTokenMasked: telegramData.telegram?.botTokenMasked || '',
+          botTokenSet: Boolean(telegramData.telegram?.botTokenSet),
+          chatId: telegramData.telegram?.chatId || '',
+        });
+        setPublishIntervalForm({
+          enabled: intervalData.publishInterval?.enabled !== false,
+          minMinutes: String(intervalData.publishInterval?.minMinutes ?? 0.167),
+          maxMinutes: String(intervalData.publishInterval?.maxMinutes ?? 10),
         });
       })
       .catch((requestError) => toast.error(requestError.message))
@@ -399,6 +411,13 @@ const MetaKeySettingsControl = () => {
 
   const updateTelegramForm = (field, value) => {
     setTelegramForm((current) => ({
+      ...current,
+      [field]: value,
+    }));
+  };
+
+  const updatePublishIntervalForm = (field, value) => {
+    setPublishIntervalForm((current) => ({
       ...current,
       [field]: value,
     }));
@@ -444,6 +463,27 @@ const MetaKeySettingsControl = () => {
     }
   };
 
+  const savePublishIntervalSettings = async () => {
+    setPublishIntervalSaving(true);
+    try {
+      const data = await settingsApi.updatePublishIntervalSettings({
+        enabled: publishIntervalForm.enabled,
+        minMinutes: publishIntervalForm.minMinutes,
+        maxMinutes: publishIntervalForm.maxMinutes,
+      });
+      setPublishIntervalForm({
+        enabled: data.publishInterval?.enabled !== false,
+        minMinutes: String(data.publishInterval?.minMinutes ?? 0.167),
+        maxMinutes: String(data.publishInterval?.maxMinutes ?? 10),
+      });
+      toast.success(data.message);
+    } catch (requestError) {
+      toast.error(requestError.message);
+    } finally {
+      setPublishIntervalSaving(false);
+    }
+  };
+
   return (
     <div className="relative" ref={controlRef}>
       <button
@@ -472,6 +512,70 @@ const MetaKeySettingsControl = () => {
                 <p className="mt-1 text-xs font-semibold text-slate-500">{getMetaKeyTypeLabel(publishTokenType)}</p>
               </div>
               <KeyTypeToggle value={publishTokenType} onChange={setPublishTokenType} />
+            </div>
+
+            <div className="border-t border-sky-50 pt-4">
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div>
+                  <p className="text-sm font-black text-slate-950">Ad account interval</p>
+                  <p className="mt-1 text-xs font-semibold text-slate-500">
+                    Random wait between accounts during Ads Launch and Dynamic Ads Launch.
+                  </p>
+                </div>
+                <label className="inline-flex cursor-pointer items-center gap-2 rounded-full bg-lime-50 px-3 py-2 text-xs font-black text-lime-700">
+                  <input
+                    type="checkbox"
+                    checked={publishIntervalForm.enabled}
+                    onChange={(event) => updatePublishIntervalForm('enabled', event.target.checked)}
+                    className="h-4 w-4 rounded border-lime-200 text-lime-600 focus:ring-lime-500"
+                  />
+                  Enabled
+                </label>
+              </div>
+              <div className="mt-3 grid gap-3 sm:grid-cols-2">
+                <div className="space-y-1.5">
+                  <label htmlFor="publish-interval-min" className="text-xs font-black uppercase tracking-[0.14em] text-slate-500">
+                    Min minutes
+                  </label>
+                  <input
+                    id="publish-interval-min"
+                    value={publishIntervalForm.minMinutes}
+                    onChange={(event) => updatePublishIntervalForm('minMinutes', event.target.value)}
+                    className="h-11 w-full rounded-xl border border-sky-100 px-3 text-sm font-semibold outline-none focus:border-sky-400 focus:ring-4 focus:ring-sky-100"
+                    min="0.167"
+                    max="10"
+                    step="0.001"
+                    type="number"
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <label htmlFor="publish-interval-max" className="text-xs font-black uppercase tracking-[0.14em] text-slate-500">
+                    Max minutes
+                  </label>
+                  <input
+                    id="publish-interval-max"
+                    value={publishIntervalForm.maxMinutes}
+                    onChange={(event) => updatePublishIntervalForm('maxMinutes', event.target.value)}
+                    className="h-11 w-full rounded-xl border border-sky-100 px-3 text-sm font-semibold outline-none focus:border-sky-400 focus:ring-4 focus:ring-sky-100"
+                    min="0.167"
+                    max="10"
+                    step="0.001"
+                    type="number"
+                  />
+                </div>
+              </div>
+              <p className="mt-2 text-xs font-semibold leading-5 text-slate-500">
+                Allowed range is 10 seconds (0.167 min) to 10 minutes. Example: 0.667 minutes waits about 40 seconds.
+              </p>
+              <button
+                type="button"
+                onClick={savePublishIntervalSettings}
+                disabled={telegramLoading || publishIntervalSaving}
+                className="mt-3 inline-flex h-10 items-center gap-2 rounded-xl bg-lime-600 px-4 text-sm font-bold text-white transition hover:bg-lime-700 disabled:opacity-60"
+              >
+                {publishIntervalSaving ? <LoaderCircle size={16} className="animate-spin" /> : <Settings2 size={16} />}
+                Save interval
+              </button>
             </div>
 
             <div className="border-t border-sky-50 pt-4">

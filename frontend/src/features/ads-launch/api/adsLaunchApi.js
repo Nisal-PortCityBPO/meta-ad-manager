@@ -233,6 +233,10 @@ export const adsLaunchApi = {
     const queryString = query.toString();
     return apiRequest(`/ads-launch/publish-sessions${queryString ? `?${queryString}` : ''}`);
   },
+  clearPublishSessionsHistory: () =>
+    apiRequest('/ads-launch/publish-sessions/history', {
+      method: 'DELETE',
+    }),
   pausePublishSession: (sessionId) =>
     apiRequest(`/ads-launch/publish-sessions/${sessionId}/pause`, {
       method: 'POST',

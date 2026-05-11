@@ -646,11 +646,9 @@ const AdsLaunchPage = () => {
   } = useTokenMetaAssets();
   const { error: templatesError, loadTemplates, loading: templatesLoading, templates } = useLaunchTemplates();
   const {
-    beginPublish,
-    completePublish,
-    failPublish,
+    applyPublishSessions,
     isPublishing: publishInProgress,
-    pushPublishEvent,
+    refreshPublishSessions,
   } = usePublishProgress();
   const { publishTokenType } = useMetaKeySettings();
 
@@ -849,7 +847,7 @@ const AdsLaunchPage = () => {
       !scheduleValidationError
   );
   const canPublish = Boolean(canGenerate && activeMediaAsset && (!isVideoAsset || activeThumbnailAsset));
-  const publishBusy = publishing || publishInProgress;
+  const publishBusy = publishing;
   const minimumScheduleStartValue = getMinimumScheduleStartValue();
 
   useEffect(() => {
@@ -1831,7 +1829,7 @@ const AdsLaunchPage = () => {
 
   const handlePublish = async () => {
     if (publishBusy) {
-      toast.error('A publish is already processing. Open Notifications to watch the live process.');
+      toast.error('This publish request is already being queued.');
       return;
     }
 
@@ -1861,28 +1859,23 @@ const AdsLaunchPage = () => {
     setCreativeUploadProgress(null);
     const publishTitle = form.launchLabel ? `Ads Launch: ${form.launchLabel}` : 'Ads Launch publish';
     const publishSource = 'Ads Launch';
-    const publishSessionId = beginPublish({
-      title: publishTitle,
-      source: publishSource,
-    });
 
     try {
       const payload = {
         ...(await buildPublishPayload()),
         tokenType: publishTokenType,
-        publishSessionId,
         publishTitle,
         publishSource,
       };
-      const data = await adsLaunchApi.publishLaunchStream(payload, {
-        onProgress: pushPublishEvent,
-      });
+      const data = await adsLaunchApi.publishLaunch(payload);
       setLatestPublish(data);
-      completePublish(data);
+      if (data.session) {
+        applyPublishSessions([data.session]);
+      }
+      await refreshPublishSessions();
       await loadTemplates();
       toast.success(data.message);
     } catch (requestError) {
-      failPublish(requestError.message);
       toast.error(requestError.message);
     } finally {
       setPublishing(false);
@@ -2702,7 +2695,7 @@ const AdsLaunchPage = () => {
                 className="flex h-11 w-full items-center justify-center gap-2 rounded-xl bg-slate-950 px-5 text-sm font-bold text-white transition hover:bg-slate-800 disabled:opacity-70 sm:w-auto"
               >
                 {publishBusy ? <LoaderCircle size={17} strokeWidth={2.2} className="animate-spin" /> : <Rocket size={17} strokeWidth={2.2} />}
-                {publishBusy ? 'Publishing...' : 'Publish to Meta'}
+                {publishBusy ? 'Queuing...' : publishInProgress ? 'Add to queue' : 'Publish to Meta'}
               </button>
             </div>
           </form>
@@ -3222,9 +3215,15 @@ const AdsLaunchPage = () => {
               {latestPublish ? (
                 <div className="rounded-2xl border border-emerald-100 bg-emerald-50/60 p-4">
                   <p className="text-sm font-black text-emerald-900">{latestPublish.message}</p>
-                  <p className="mt-2 text-sm font-semibold text-emerald-800">
-                    Published {latestPublish.summary?.published || 0} of {latestPublish.summary?.requested || 0} requested accounts.
-                  </p>
+                  {latestPublish.summary ? (
+                    <p className="mt-2 text-sm font-semibold text-emerald-800">
+                      Published {latestPublish.summary?.published || 0} of {latestPublish.summary?.requested || 0} requested accounts.
+                    </p>
+                  ) : (
+                    <p className="mt-2 text-sm font-semibold text-emerald-800">
+                      You can watch this queued publish from the notification panel while it runs in the background.
+                    </p>
+                  )}
 
                   {latestPublish.results?.length ? (
                     <div className="mt-4 space-y-2">

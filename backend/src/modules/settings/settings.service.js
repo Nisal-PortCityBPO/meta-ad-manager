@@ -3,6 +3,9 @@ const { writeActivityLog } = require('../activity-logs/activityLog.service');
 const AppSetting = require('./appSetting.model');
 
 const SETTINGS_KEY = 'global';
+const PUBLISH_INTERVAL_MIN_MINUTES = 10 / 60;
+const PUBLISH_INTERVAL_DEFAULT_MIN_MINUTES = 0.167;
+const PUBLISH_INTERVAL_MAX_MINUTES = 10;
 
 function normalizeText(value) {
   return typeof value === 'string' ? value.trim() : '';
@@ -20,12 +23,62 @@ function maskBotToken(value) {
   return `${botId || 'bot'}:${'*'.repeat(Math.max(secret.length - visibleSecret.length, 6))}${visibleSecret}`;
 }
 
+function normalizeIntervalMinutes(value, fallback) {
+  const numericValue = Number(value);
+
+  if (!Number.isFinite(numericValue)) {
+    return fallback;
+  }
+
+  return Math.round(numericValue * 1000) / 1000;
+}
+
 async function getGlobalSettingsDoc() {
   return AppSetting.findOneAndUpdate(
     { key: SETTINGS_KEY },
     { $setOnInsert: { key: SETTINGS_KEY } },
     { new: true, upsert: true, setDefaultsOnInsert: true }
   );
+}
+
+function toPublishIntervalSafeObject(settings) {
+  const publishInterval = settings?.publishInterval || {};
+  const minMinutes = normalizeIntervalMinutes(publishInterval.minMinutes, PUBLISH_INTERVAL_DEFAULT_MIN_MINUTES);
+  const maxMinutes = normalizeIntervalMinutes(publishInterval.maxMinutes, PUBLISH_INTERVAL_MAX_MINUTES);
+
+  return {
+    enabled: publishInterval.enabled !== false,
+    minMinutes,
+    maxMinutes: Math.max(minMinutes, maxMinutes),
+  };
+}
+
+async function upgradeLegacyPublishIntervalDefault(settings) {
+  const publishInterval = settings?.publishInterval;
+
+  if (!publishInterval) {
+    return settings;
+  }
+
+  const legacyDefaultMin = normalizeIntervalMinutes(publishInterval.minMinutes, PUBLISH_INTERVAL_DEFAULT_MIN_MINUTES);
+  const legacyDefaultMax = normalizeIntervalMinutes(publishInterval.maxMinutes, 10);
+  let changed = false;
+
+  if (!publishInterval.updatedBy && legacyDefaultMin === 0.3) {
+    publishInterval.minMinutes = PUBLISH_INTERVAL_DEFAULT_MIN_MINUTES;
+    changed = true;
+  }
+
+  if (!publishInterval.updatedBy && legacyDefaultMax === 2) {
+    publishInterval.maxMinutes = PUBLISH_INTERVAL_MAX_MINUTES;
+    changed = true;
+  }
+
+  if (changed) {
+    await settings.save();
+  }
+
+  return settings;
 }
 
 function toTelegramSafeObject(settings) {
@@ -80,6 +133,49 @@ async function updateTelegramSettings({ enabled, botToken, chatId, actor, req })
   });
 
   return toTelegramSafeObject(settings);
+}
+
+async function getPublishIntervalSettings() {
+  const settings = await upgradeLegacyPublishIntervalDefault(await getGlobalSettingsDoc());
+  return toPublishIntervalSafeObject(settings);
+}
+
+async function updatePublishIntervalSettings({ enabled, minMinutes, maxMinutes, actor, req }) {
+  const settings = await getGlobalSettingsDoc();
+  const nextMinMinutes = normalizeIntervalMinutes(minMinutes, PUBLISH_INTERVAL_DEFAULT_MIN_MINUTES);
+  const nextMaxMinutes = normalizeIntervalMinutes(maxMinutes, PUBLISH_INTERVAL_MAX_MINUTES);
+
+  if (nextMinMinutes < PUBLISH_INTERVAL_MIN_MINUTES || nextMinMinutes > PUBLISH_INTERVAL_MAX_MINUTES) {
+    throw new HttpError(400, 'Minimum ad account interval must be between 10 seconds and 10 minutes');
+  }
+
+  if (nextMaxMinutes < PUBLISH_INTERVAL_MIN_MINUTES || nextMaxMinutes > PUBLISH_INTERVAL_MAX_MINUTES) {
+    throw new HttpError(400, 'Maximum ad account interval must be between 10 seconds and 10 minutes');
+  }
+
+  if (nextMaxMinutes < nextMinMinutes) {
+    throw new HttpError(400, 'Maximum ad account interval must be greater than or equal to minimum interval');
+  }
+
+  settings.publishInterval.enabled = Boolean(enabled);
+  settings.publishInterval.minMinutes = nextMinMinutes;
+  settings.publishInterval.maxMinutes = nextMaxMinutes;
+  settings.publishInterval.updatedBy = actor?._id || null;
+  await settings.save();
+
+  await writeActivityLog({
+    user: actor,
+    action: 'SETTINGS_PUBLISH_INTERVAL_UPDATED',
+    entity: 'Settings',
+    metadata: {
+      enabled: settings.publishInterval.enabled,
+      minMinutes: settings.publishInterval.minMinutes,
+      maxMinutes: settings.publishInterval.maxMinutes,
+    },
+    req,
+  });
+
+  return toPublishIntervalSafeObject(settings);
 }
 
 async function sendTelegramMessage({ text }) {
@@ -207,9 +303,11 @@ async function notifyPublishQueueStatus({ status, message, records = [] }) {
 }
 
 module.exports = {
+  getPublishIntervalSettings,
   getTelegramSettings,
   notifyPublishQueueStatus,
   notifyPublishSummary,
   testTelegramSettings,
+  updatePublishIntervalSettings,
   updateTelegramSettings,
 };
