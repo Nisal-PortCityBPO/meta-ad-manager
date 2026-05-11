@@ -10,6 +10,7 @@ import LoginPage from '../../features/auth/pages/LoginPage';
 import DashboardPage from '../../features/dashboard/pages/DashboardPage';
 import NotificationsPage from '../../features/notifications/pages/NotificationsPage';
 import OverviewPage from '../../features/overview/pages/OverviewPage';
+import PerformancePage from '../../features/performance/pages/PerformancePage';
 import ProfilePage from '../../features/profile/pages/ProfilePage';
 import RoadmapPage from '../../features/roadmap/pages/RoadmapPage';
 import TokenManagementPage from '../../features/token-management/pages/TokenManagementPage';
@@ -80,6 +81,7 @@ const AppRouter = () => {
           </Route>
 
           <Route element={<RoleRoute roles={[USER_ROLES.SUPER_ADMIN]} />}>
+            <Route path="/performance" element={<PerformancePage />} />
             <Route path="/ads-manage" element={<AdsManagePage />} />
             <Route path="/users" element={<UsersPage />} />
             <Route path="/activity-logs" element={<ActivityLogsPage />} />
