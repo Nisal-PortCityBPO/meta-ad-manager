@@ -148,6 +148,18 @@ function sleep(ms) {
   });
 }
 
+function formatDelayDuration(ms) {
+  const seconds = Math.max(Math.round(ms / 1000), 0);
+
+  if (seconds < 60) {
+    return `${seconds}s`;
+  }
+
+  const minutes = Math.floor(seconds / 60);
+  const remainingSeconds = seconds % 60;
+  return remainingSeconds ? `${minutes}m ${remainingSeconds}s` : `${minutes}m`;
+}
+
 function normalizeTemplateType(value) {
   const templateType = normalizeText(value).toUpperCase();
   return Object.values(LAUNCH_TEMPLATE_TYPES).includes(templateType) ? templateType : LAUNCH_TEMPLATE_TYPES.FULL;
@@ -1458,6 +1470,56 @@ async function isPublishSessionPauseRequested(sessionId) {
       session?.status === PUBLISH_SESSION_STATUSES.PAUSE_REQUESTED ||
       session?.status === PUBLISH_SESSION_STATUSES.PAUSED
   );
+}
+
+function getRandomPublishIntervalMs(settings = {}) {
+  if (!settings.enabled) {
+    return 0;
+  }
+
+  const minMinutes = Number(settings.minMinutes);
+  const maxMinutes = Number(settings.maxMinutes);
+
+  if (!Number.isFinite(minMinutes) || !Number.isFinite(maxMinutes) || minMinutes <= 0 || maxMinutes <= 0) {
+    return 0;
+  }
+
+  const minMs = Math.round(Math.min(minMinutes, maxMinutes) * 60 * 1000);
+  const maxMs = Math.round(Math.max(minMinutes, maxMinutes) * 60 * 1000);
+
+  if (maxMs <= minMs) {
+    return minMs;
+  }
+
+  return Math.round(minMs + Math.random() * (maxMs - minMs));
+}
+
+async function waitBetweenPublishAccounts({ sessionId, settings, progress, progressContext, nextAccountName }) {
+  const delayMs = getRandomPublishIntervalMs(settings);
+
+  if (!delayMs) {
+    return { paused: false, delayMs: 0 };
+  }
+
+  const startedAt = Date.now();
+  progress.info({
+    ...progressContext,
+    step: 'account-interval',
+    status: 'waiting',
+    message: `Waiting ${formatDelayDuration(delayMs)} before ${nextAccountName || 'next ad account'} to avoid rapid Meta API calls`,
+    delayMs,
+    nextAccountName,
+  });
+
+  while (Date.now() - startedAt < delayMs) {
+    if (await isPublishSessionPauseRequested(sessionId)) {
+      return { paused: true, delayMs: Date.now() - startedAt };
+    }
+
+    await sleep(Math.min(1000, delayMs - (Date.now() - startedAt)));
+  }
+
+  return { paused: false, delayMs };
 }
 
 async function listPublishSessions({ actor, limit = 15 }) {
@@ -3882,6 +3944,7 @@ async function publishLaunch({ payload, actor, req, onProgress = null, tokenType
   }
 
   const token = await tokenService.getActiveTokenWithSecret(launch.tokenId, tokenType);
+  const publishIntervalSettings = await settingsService.getPublishIntervalSettings();
   const accountMap = new Map(launch.selectedAdAccounts.map((account) => [account.id, account]));
   const results = [];
   const failed = [];
@@ -4230,6 +4293,32 @@ async function publishLaunch({ payload, actor, req, onProgress = null, tokenType
         message: `Publish paused safely after ${accountLabel}. ${remainingAdAccountIds.length} ad account${remainingAdAccountIds.length === 1 ? '' : 's'} left to continue.`,
       });
       break;
+    }
+
+    if (remainingAdAccountIds.length) {
+      const nextAccount = accountMap.get(remainingAdAccountIds[0]);
+      const intervalResult = await waitBetweenPublishAccounts({
+        sessionId,
+        settings: publishIntervalSettings,
+        progress,
+        progressContext,
+        nextAccountName: nextAccount?.name || remainingAdAccountIds[0],
+      });
+
+      if (intervalResult.paused) {
+        paused = true;
+        pauseResumePayload = buildRemainingPublishPayload({
+          payload,
+          remainingAdAccountIds,
+        });
+        progress.info({
+          ...progressContext,
+          step: 'paused',
+          status: 'paused',
+          message: `Publish paused during account interval. ${remainingAdAccountIds.length} ad account${remainingAdAccountIds.length === 1 ? '' : 's'} left to continue.`,
+        });
+        break;
+      }
     }
   }
 

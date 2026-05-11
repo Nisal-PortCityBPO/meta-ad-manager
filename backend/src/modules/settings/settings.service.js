@@ -20,12 +20,51 @@ function maskBotToken(value) {
   return `${botId || 'bot'}:${'*'.repeat(Math.max(secret.length - visibleSecret.length, 6))}${visibleSecret}`;
 }
 
+function normalizeIntervalMinutes(value, fallback) {
+  const numericValue = Number(value);
+
+  if (!Number.isFinite(numericValue)) {
+    return fallback;
+  }
+
+  return Math.round(numericValue * 10) / 10;
+}
+
 async function getGlobalSettingsDoc() {
   return AppSetting.findOneAndUpdate(
     { key: SETTINGS_KEY },
     { $setOnInsert: { key: SETTINGS_KEY } },
     { new: true, upsert: true, setDefaultsOnInsert: true }
   );
+}
+
+function toPublishIntervalSafeObject(settings) {
+  const publishInterval = settings?.publishInterval || {};
+  const minMinutes = normalizeIntervalMinutes(publishInterval.minMinutes, 0.3);
+  const maxMinutes = normalizeIntervalMinutes(publishInterval.maxMinutes, 10);
+
+  return {
+    enabled: publishInterval.enabled !== false,
+    minMinutes,
+    maxMinutes: Math.max(minMinutes, maxMinutes),
+  };
+}
+
+async function upgradeLegacyPublishIntervalDefault(settings) {
+  const publishInterval = settings?.publishInterval;
+
+  if (!publishInterval) {
+    return settings;
+  }
+
+  const legacyDefaultMax = normalizeIntervalMinutes(publishInterval.maxMinutes, 10);
+
+  if (!publishInterval.updatedBy && legacyDefaultMax === 2) {
+    publishInterval.maxMinutes = 10;
+    await settings.save();
+  }
+
+  return settings;
 }
 
 function toTelegramSafeObject(settings) {
@@ -80,6 +119,49 @@ async function updateTelegramSettings({ enabled, botToken, chatId, actor, req })
   });
 
   return toTelegramSafeObject(settings);
+}
+
+async function getPublishIntervalSettings() {
+  const settings = await upgradeLegacyPublishIntervalDefault(await getGlobalSettingsDoc());
+  return toPublishIntervalSafeObject(settings);
+}
+
+async function updatePublishIntervalSettings({ enabled, minMinutes, maxMinutes, actor, req }) {
+  const settings = await getGlobalSettingsDoc();
+  const nextMinMinutes = normalizeIntervalMinutes(minMinutes, 0.3);
+  const nextMaxMinutes = normalizeIntervalMinutes(maxMinutes, 10);
+
+  if (nextMinMinutes < 0.3 || nextMinMinutes > 10) {
+    throw new HttpError(400, 'Minimum ad account interval must be between 0.3 and 10 minutes');
+  }
+
+  if (nextMaxMinutes < 0.3 || nextMaxMinutes > 10) {
+    throw new HttpError(400, 'Maximum ad account interval must be between 0.3 and 10 minutes');
+  }
+
+  if (nextMaxMinutes < nextMinMinutes) {
+    throw new HttpError(400, 'Maximum ad account interval must be greater than or equal to minimum interval');
+  }
+
+  settings.publishInterval.enabled = Boolean(enabled);
+  settings.publishInterval.minMinutes = nextMinMinutes;
+  settings.publishInterval.maxMinutes = nextMaxMinutes;
+  settings.publishInterval.updatedBy = actor?._id || null;
+  await settings.save();
+
+  await writeActivityLog({
+    user: actor,
+    action: 'SETTINGS_PUBLISH_INTERVAL_UPDATED',
+    entity: 'Settings',
+    metadata: {
+      enabled: settings.publishInterval.enabled,
+      minMinutes: settings.publishInterval.minMinutes,
+      maxMinutes: settings.publishInterval.maxMinutes,
+    },
+    req,
+  });
+
+  return toPublishIntervalSafeObject(settings);
 }
 
 async function sendTelegramMessage({ text }) {
@@ -207,9 +289,11 @@ async function notifyPublishQueueStatus({ status, message, records = [] }) {
 }
 
 module.exports = {
+  getPublishIntervalSettings,
   getTelegramSettings,
   notifyPublishQueueStatus,
   notifyPublishSummary,
   testTelegramSettings,
+  updatePublishIntervalSettings,
   updateTelegramSettings,
 };
