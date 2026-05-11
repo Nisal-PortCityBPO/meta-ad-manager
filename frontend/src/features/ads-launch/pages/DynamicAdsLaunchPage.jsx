@@ -6,7 +6,7 @@ import DashboardPanel from '../../dashboard/components/DashboardPanel';
 import { businessDataApi } from '../../dashboard/api/businessDataApi';
 import { useTokens } from '../../token-management/hooks/useTokens';
 import { usePublishProgress } from '../../notifications/PublishProgressContext';
-import { useMetaKeySettings } from '../../settings/MetaKeySettingsContext';
+import { getMetaKeyTypeLabel, META_KEY_TYPES, useMetaKeySettings } from '../../settings/MetaKeySettingsContext';
 import { adsLaunchApi } from '../api/adsLaunchApi';
 import MediaLibraryFolderPicker from '../components/MediaLibraryFolderPicker';
 import { useLaunchTemplates } from '../hooks/useLaunchTemplates';
@@ -35,6 +35,7 @@ const defaultWebsiteEventByObjective = {
 const TRAFFIC_OBJECTIVE = 'OUTCOME_TRAFFIC';
 const enabledCampaignObjectives = new Set([TRAFFIC_OBJECTIVE, 'OUTCOME_LEADS', 'OUTCOME_SALES']);
 const pixelRequiredObjectives = new Set(['OUTCOME_LEADS', 'OUTCOME_SALES']);
+const blockedApiStatuses = new Set(['BLOCKED', 'DISABLED']);
 
 const FieldLabel = ({ htmlFor, children }) => (
   <label htmlFor={htmlFor} className="text-sm font-semibold text-slate-700">
@@ -56,6 +57,35 @@ const getCampaignStatusBadgeClass = (status) =>
   status === 'ACTIVE' ? 'bg-emerald-50 text-emerald-700' : 'bg-amber-50 text-amber-700';
 
 const campaignRequiresPixel = (template) => pixelRequiredObjectives.has(template?.config?.objective);
+
+const getTokenApiState = (token, tokenType) => {
+  if (!token) {
+    return {
+      blocked: false,
+      label: getMetaKeyTypeLabel(tokenType),
+      message: '',
+      status: '',
+    };
+  }
+
+  const isSystemUser = tokenType === META_KEY_TYPES.SYSTEM_USER;
+  const status = String(
+    isSystemUser
+      ? token.systemUserAccessTokenConnectionStatus || 'UNKNOWN'
+      : token.profileAccessTokenConnectionStatus || token.connectionStatus || 'UNKNOWN'
+  ).toUpperCase();
+  const message =
+    (isSystemUser
+      ? token.systemUserAccessTokenConnectionMessage
+      : token.profileAccessTokenConnectionMessage || token.connectionMessage) || '';
+
+  return {
+    blocked: blockedApiStatuses.has(status),
+    label: getMetaKeyTypeLabel(tokenType),
+    message,
+    status,
+  };
+};
 
 const MAX_THUMBNAIL_BYTES = 30 * 1024 * 1024;
 const MIN_THUMBNAIL_DIMENSION = 600;
@@ -377,8 +407,19 @@ const toSchedulePayloadValue = (value) => {
 };
 
 const DynamicAdsLaunchPage = () => {
-  const { loading: tokensLoading, tokens } = useTokens();
-  const { accountPixels, adAccounts, loadAccountPixels, loadAssets, loadingAssets, loadingPixels, pages } = useTokenMetaAssets();
+  const { loadTokens, loading: tokensLoading, tokens } = useTokens();
+  const {
+    accountPixels,
+    adAccounts,
+    error: metaAssetsError,
+    loadAccountPixels,
+    loadAssets,
+    loadingAssets,
+    loadingPixels,
+    pages,
+    pixelError,
+    warnings: metaAssetsWarnings,
+  } = useTokenMetaAssets();
   const { error: templatesError, loading: templatesLoading, templates } = useLaunchTemplates();
   const { applyPublishSessions, isPublishing, refreshPublishSessions } = usePublishProgress();
   const assignmentScrollRef = useRef(null);
@@ -416,6 +457,21 @@ const DynamicAdsLaunchPage = () => {
     return activeTokens.filter((token) => tokenIds.has(token.id)).sort((first, second) => first.label.localeCompare(second.label));
   }, [activeTokens, selectedBrandSocialAccounts]);
   const selectedToken = activeTokens.find((token) => token.id === tokenId) || null;
+  const selectedTokenApiState = useMemo(
+    () => getTokenApiState(selectedToken, publishTokenType),
+    [publishTokenType, selectedToken]
+  );
+  const metaAssetIssueMessages = useMemo(
+    () =>
+      [
+        metaAssetsError,
+        pixelError,
+        ...(metaAssetsWarnings || []).map((warning) =>
+          `${warning.scope ? `${warning.scope}: ` : ''}${warning.message || 'Meta API warning'}`
+        ),
+      ].filter(Boolean),
+    [metaAssetsError, metaAssetsWarnings, pixelError]
+  );
   const selectedPage = pages.find((page) => page.id === pageId) || null;
   const savedBrandAccountKeys = useMemo(() => {
     const keys = new Set();
@@ -602,7 +658,8 @@ const DynamicAdsLaunchPage = () => {
         const assignmentPixelId = getAssignmentPixelId(assignment);
 
         return Boolean(
-          campaignTemplate &&
+          !selectedTokenApiState.blocked &&
+            campaignTemplate &&
             mediaTemplate &&
             mediaAsset &&
             (!videoMediaSelected || thumbnailAsset) &&
@@ -610,7 +667,7 @@ const DynamicAdsLaunchPage = () => {
             (!requiresPixel || assignmentPixelId)
         );
       }),
-    [brandScopedMediaAssets, campaignTemplates, mediaTemplates, pageId, selectedAssignments]
+    [brandScopedMediaAssets, campaignTemplates, mediaTemplates, pageId, selectedAssignments, selectedTokenApiState.blocked]
   );
 
   useEffect(() => {
@@ -761,6 +818,9 @@ const DynamicAdsLaunchPage = () => {
     setSharedPixelId('');
     setAssignments({});
     await loadAssets(nextTokenId);
+    if (nextTokenId) {
+      await loadTokens();
+    }
   };
 
   const updateAssignment = (accountId, field, value) => {
@@ -937,6 +997,11 @@ const DynamicAdsLaunchPage = () => {
       return;
     }
 
+    if (selectedTokenApiState.blocked) {
+      toast.error(`${selectedTokenApiState.label} is ${selectedTokenApiState.status}. Fix or refresh the Meta key before publishing.`);
+      return;
+    }
+
     if (!readyAssignments.length) {
       toast.error('No ready ad account rows. Complete campaign template, media template, media asset, page, and required pixel for at least one row.');
       return;
@@ -1027,6 +1092,46 @@ const DynamicAdsLaunchPage = () => {
       />
 
       {templatesError ? <p className="mb-4 rounded-xl bg-red-50 px-4 py-3 text-sm font-semibold text-red-700">{templatesError}</p> : null}
+      {selectedTokenApiState.blocked ? (
+        <div className="mb-4 rounded-2xl border border-red-100 bg-red-50 px-4 py-3 text-sm font-semibold text-red-800">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div>
+              <p className="flex items-center gap-2 font-black">
+                <AlertTriangle size={17} strokeWidth={2.4} />
+                Selected {selectedTokenApiState.label} API is {selectedTokenApiState.status}
+              </p>
+              <p className="mt-1 leading-6">
+                {selectedTokenApiState.message || 'Meta marked this key as blocked/disabled. Rows will stay blocked until the key is fixed or another token is selected.'}
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={loadTokens}
+              className="rounded-xl border border-red-100 bg-white px-3 py-2 text-xs font-black uppercase tracking-[0.12em] text-red-700 transition hover:bg-red-100"
+            >
+              Refresh key
+            </button>
+          </div>
+        </div>
+      ) : null}
+      {metaAssetIssueMessages.length ? (
+        <div className="mb-4 rounded-2xl border border-amber-100 bg-amber-50 px-4 py-3 text-sm font-semibold text-amber-900">
+          <p className="flex items-center gap-2 font-black">
+            <AlertTriangle size={17} strokeWidth={2.4} />
+            Meta API warning while loading this selection
+          </p>
+          <div className="mt-2 space-y-1">
+            {metaAssetIssueMessages.slice(0, 3).map((message, index) => (
+              <p key={`${message}-${index}`} className="break-words text-xs leading-5">
+                {message}
+              </p>
+            ))}
+            {metaAssetIssueMessages.length > 3 ? (
+              <p className="text-xs font-black text-amber-700">+{metaAssetIssueMessages.length - 3} more warning{metaAssetIssueMessages.length - 3 === 1 ? '' : 's'}</p>
+            ) : null}
+          </div>
+        </div>
+      ) : null}
 
       <div className="space-y-4">
         <DashboardPanel title="Launch scope">
@@ -1042,8 +1147,20 @@ const DynamicAdsLaunchPage = () => {
               <FieldLabel htmlFor="dynamic-token">Token key</FieldLabel>
               <select id="dynamic-token" value={tokenId} onChange={(event) => handleTokenChange(event.target.value)} disabled={tokensLoading || !brandTokenOptions.length} className="h-12 w-full rounded-xl border border-sky-100 px-4 outline-none focus:border-sky-400 focus:ring-4 focus:ring-sky-100">
                 <option value="">{brandId ? 'Select brand token' : 'Select brand first'}</option>
-                {brandTokenOptions.map((token) => <option key={token.id} value={token.id}>{token.label}</option>)}
+                {brandTokenOptions.map((token) => {
+                  const tokenApiState = getTokenApiState(token, publishTokenType);
+                  return (
+                    <option key={token.id} value={token.id}>
+                      {token.label}{tokenApiState.blocked ? ` - API ${tokenApiState.status}` : ''}
+                    </option>
+                  );
+                })}
               </select>
+              {selectedToken ? (
+                <p className={`text-xs font-black uppercase tracking-[0.12em] ${selectedTokenApiState.blocked ? 'text-red-600' : 'text-slate-400'}`}>
+                  {selectedTokenApiState.label}: {selectedTokenApiState.status || 'UNKNOWN'}
+                </p>
+              ) : null}
             </div>
             <div className="space-y-2">
               <FieldLabel htmlFor="dynamic-page">Shared fallback page</FieldLabel>
@@ -1153,7 +1270,13 @@ const DynamicAdsLaunchPage = () => {
                     const requiresPixel = campaignRequiresPixel(campaignTemplate);
                     const campaignStatus = getCampaignStatus(campaignTemplate);
                     const hasSchedule = Boolean(campaignTemplate?.config?.scheduleStart && campaignTemplate?.config?.scheduleEnd);
-                    const ready = Boolean(campaignTemplate && mediaTemplate && mediaAsset && (!videoMediaSelected || thumbnailAsset) && accountPageId && (!requiresPixel || accountPixelId));
+                    const apiBlocked = selectedTokenApiState.blocked;
+                    const ready = Boolean(!apiBlocked && campaignTemplate && mediaTemplate && mediaAsset && (!videoMediaSelected || thumbnailAsset) && accountPageId && (!requiresPixel || accountPixelId));
+                    const readyClass = apiBlocked
+                      ? 'bg-red-50 text-red-700'
+                      : ready
+                        ? 'bg-emerald-50 text-emerald-700'
+                        : 'bg-slate-100 text-slate-500';
 
                     return (
                       <tr key={account.id} className="align-top">
@@ -1320,10 +1443,15 @@ const DynamicAdsLaunchPage = () => {
                           ) : null}
                         </td>
                         <td className="px-3 py-3">
-                          <span className={`inline-flex items-center gap-2 rounded-full px-3 py-1 text-xs font-black ${ready ? 'bg-emerald-50 text-emerald-700' : 'bg-slate-100 text-slate-500'}`}>
-                            {ready ? <CheckCircle2 size={14} /> : <Shuffle size={14} />}
-                            {ready ? 'Ready' : 'Waiting'}
+                          <span className={`inline-flex items-center gap-2 rounded-full px-3 py-1 text-xs font-black ${readyClass}`}>
+                            {apiBlocked ? <AlertTriangle size={14} /> : ready ? <CheckCircle2 size={14} /> : <Shuffle size={14} />}
+                            {apiBlocked ? 'API blocked' : ready ? 'Ready' : 'Waiting'}
                           </span>
+                          {apiBlocked ? (
+                            <p className="mt-2 max-w-44 text-xs font-semibold leading-5 text-red-600">
+                              {selectedTokenApiState.label} is {selectedTokenApiState.status}. Select another token or refresh after fixing.
+                            </p>
+                          ) : null}
                         </td>
                       </tr>
                     );

@@ -79,12 +79,12 @@ const AppRouter = () => {
 
           <Route element={<RoleRoute roles={[USER_ROLES.SUPER_ADMIN, USER_ROLES.ADMIN]} />}>
             <Route path="/overview" element={<OverviewPage />} />
+            <Route path="/errors" element={<ErrorsPage />} />
           </Route>
 
           <Route element={<RoleRoute roles={[USER_ROLES.SUPER_ADMIN]} />}>
             <Route path="/performance" element={<PerformancePage />} />
             <Route path="/ads-manage" element={<AdsManagePage />} />
-            <Route path="/errors" element={<ErrorsPage />} />
             <Route path="/users" element={<UsersPage />} />
             <Route path="/activity-logs" element={<ActivityLogsPage />} />
           </Route>

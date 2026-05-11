@@ -116,6 +116,16 @@ function campaignAccessFilter(actor) {
   };
 }
 
+function tokenAccessFilter(actor) {
+  if (!actor || isSuperAdmin(actor)) {
+    return {};
+  }
+
+  return {
+    createdBy: actor._id || actor.id || null,
+  };
+}
+
 function normalizeQueueStatus(status) {
   const normalizedStatus = normalizeText(status).toUpperCase();
   return Object.values(PUBLISH_QUEUE_STATUSES).includes(normalizedStatus)
@@ -1354,6 +1364,7 @@ async function listErrors({ actor = null, tokenId = '', type = '', status = '', 
   }
 
   const tokenQuery = {
+    ...tokenAccessFilter(actor),
     $or: [
       { status: TOKEN_STATUSES.DEACTIVE },
       { connectionStatus: { $in: [TOKEN_CONNECTION_STATUSES.BLOCKED, TOKEN_CONNECTION_STATUSES.DISABLED] } },
@@ -1463,7 +1474,7 @@ async function clearRecoveredErrors({ actor = null, req = null } = {}) {
   };
 }
 
-async function getCampaignForAction({ tokenId, campaignId }) {
+async function getCampaignForAction({ tokenId, campaignId, actor = null }) {
   const normalizedTokenId = normalizeText(tokenId);
   const normalizedCampaignId = normalizeText(campaignId);
 
@@ -1476,6 +1487,7 @@ async function getCampaignForAction({ tokenId, campaignId }) {
   }
 
   const campaign = await ManagedCampaign.findOne({
+    ...campaignAccessFilter(actor),
     tokenId: normalizedTokenId,
     campaignId: normalizedCampaignId,
   });
@@ -1742,7 +1754,7 @@ async function updateCampaignStatus({ tokenId, campaignId, status, actor, req })
     throw new HttpError(400, 'Campaign status must be ACTIVE or PAUSED');
   }
 
-  const campaign = await getCampaignForAction({ tokenId, campaignId });
+  const campaign = await getCampaignForAction({ tokenId, campaignId, actor });
   const token = await tokenService.getActiveTokenWithSecret(tokenId);
 
   try {
@@ -1821,7 +1833,7 @@ async function duplicateCampaign({ tokenId, campaignId, name, status = 'PAUSED',
     throw new HttpError(400, 'New campaign status must be ACTIVE or PAUSED');
   }
 
-  const sourceCampaign = await getCampaignForAction({ tokenId, campaignId });
+  const sourceCampaign = await getCampaignForAction({ tokenId, campaignId, actor });
 
   if (sourceCampaign.status === 'DELETED') {
     throw new HttpError(400, 'Deleted campaigns cannot be duplicated');
@@ -1960,7 +1972,7 @@ async function duplicateCampaign({ tokenId, campaignId, name, status = 'PAUSED',
 }
 
 async function deleteCampaign({ tokenId, campaignId, actor, req }) {
-  const campaign = await getCampaignForAction({ tokenId, campaignId });
+  const campaign = await getCampaignForAction({ tokenId, campaignId, actor });
 
   if (campaign.status === 'DELETED') {
     return {
@@ -2028,7 +2040,7 @@ async function deleteCampaign({ tokenId, campaignId, actor, req }) {
 }
 
 async function syncCampaignDetails({ tokenId, campaignId, actor, req }) {
-  const campaign = await getCampaignForAction({ tokenId, campaignId });
+  const campaign = await getCampaignForAction({ tokenId, campaignId, actor });
 
   if (campaign.campaignId.startsWith('failed_')) {
     throw new HttpError(400, 'This failed launch has no Meta campaign id to fetch yet');
@@ -2112,7 +2124,7 @@ async function syncCampaignDetails({ tokenId, campaignId, actor, req }) {
 }
 
 async function checkFailedLaunchAccess({ tokenId, campaignId, actor, tokenType = null, retryTokenId = '' }) {
-  const campaign = await getCampaignForAction({ tokenId, campaignId });
+  const campaign = await getCampaignForAction({ tokenId, campaignId, actor });
 
   if (campaign.status !== 'FAILED' || !campaign.launch?.retryPayload) {
     throw new HttpError(400, 'Only retryable failed launch records can be checked');
@@ -2144,7 +2156,7 @@ async function checkFailedLaunchAccess({ tokenId, campaignId, actor, tokenType =
 }
 
 async function retryFailedLaunch({ tokenId, campaignId, actor, req, tokenType = null, retryTokenId = '', fromQueue = false }) {
-  const campaign = await getCampaignForAction({ tokenId, campaignId });
+  const campaign = await getCampaignForAction({ tokenId, campaignId, actor });
 
   if (campaign.status !== 'FAILED') {
     throw new HttpError(400, 'Only failed launch records can be retried');

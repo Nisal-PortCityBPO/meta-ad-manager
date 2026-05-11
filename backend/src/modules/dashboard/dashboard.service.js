@@ -7,11 +7,12 @@ const { Token } = require('../token-management/token.model');
 const { User, USER_ROLES } = require('../users/user.model');
 
 async function getDashboard(user) {
-  const recentLogs = await ActivityLog.find({
-    ...(user.role === USER_ROLES.SUPER_ADMIN ? {} : { actor: user._id }),
-  })
-    .sort({ createdAt: -1 })
-    .limit(5);
+  const recentLogs =
+    user.role === USER_ROLES.SUPER_ADMIN
+      ? await ActivityLog.find()
+          .sort({ createdAt: -1 })
+          .limit(5)
+      : [];
 
   const base = {
     role: user.role,
