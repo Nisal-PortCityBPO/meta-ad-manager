@@ -70,6 +70,7 @@ function buildLogQuery({ actorEmail, entity, dateFrom, dateTo } = {}) {
 function toLogObject(log) {
   return {
     id: log._id.toString(),
+    actorId: log.actor?._id?.toString?.() || log.actor?.toString?.() || null,
     actorName: log.actor?.name || 'System',
     actorEmail: log.actorEmail,
     actorRole: log.actor?.role || null,
@@ -77,7 +78,12 @@ function toLogObject(log) {
     entity: log.entity,
     entityId: log.entityId,
     metadata: log.metadata,
+    ipAddress: log.ipAddress,
+    requestMethod: log.requestMethod,
+    requestPath: log.requestPath,
+    userAgent: log.userAgent,
     createdAt: log.createdAt,
+    updatedAt: log.updatedAt,
   };
 }
 
@@ -90,7 +96,7 @@ async function writeActivityLog({
   req = null,
 }) {
   try {
-    await ActivityLog.create({
+    const log = await ActivityLog.create({
       actor: user?._id || null,
       actorEmail: user?.email || metadata.actorEmail || 'system',
       action,
@@ -98,10 +104,21 @@ async function writeActivityLog({
       entityId,
       metadata,
       ipAddress: req?.ip || null,
+      requestMethod: req?.method || null,
+      requestPath: req?.originalUrl || req?.url || null,
+      userAgent: req?.get?.('user-agent') || req?.headers?.['user-agent'] || null,
     });
+
+    if (req) {
+      req.activityLogged = true;
+    }
+
+    return log;
   } catch (error) {
     console.error('Activity log failed:', error.message);
   }
+
+  return null;
 }
 
 async function getActivityLogFilterOptions() {

@@ -5,6 +5,7 @@ const { pathToFileURL } = require('url');
 const express = require('express');
 const cors = require('cors');
 const cookieParser = require('cookie-parser');
+const activityAudit = require('./app/middleware/activityAudit');
 const authRoutes = require('./modules/auth/auth.route');
 const usersRoutes = require('./modules/users/users.route');
 const profileRoutes = require('./modules/profile/profile.route');
@@ -19,6 +20,7 @@ const metaAssetsRoutes = require('./modules/meta-assets/metaAssets.route');
 const adsLaunchRoutes = require('./modules/ads-launch/adsLaunch.route');
 const adsManageRoutes = require('./modules/ads-manage/adsManage.route');
 const settingsRoutes = require('./modules/settings/settings.route');
+const performanceRoutes = require('./modules/performance/performance.route');
 
 const frontendRoot = path.resolve(__dirname, '../../frontend');
 const frontendDist = path.join(frontendRoot, 'dist');
@@ -69,6 +71,7 @@ function registerApiRoutes(app) {
   app.use('/api/ads-launch', adsLaunchRoutes);
   app.use('/api/ads-manage', adsManageRoutes);
   app.use('/api/settings', settingsRoutes);
+  app.use('/api/performance', performanceRoutes);
   app.use('/api/brands', brandRoutes);
   app.use('/api/agencies', agencyRoutes);
   app.use('/api/social-accounts', socialAccountRoutes);
@@ -139,6 +142,7 @@ function createApiApp() {
   app.use(cors(corsOptions()));
   app.use(express.json({ limit: '100mb' }));
   app.use(cookieParser());
+  app.use(activityAudit);
 
   registerApiRoutes(app);
 

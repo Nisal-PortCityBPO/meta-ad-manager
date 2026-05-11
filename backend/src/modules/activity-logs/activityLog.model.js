@@ -31,6 +31,18 @@ const activityLogSchema = new mongoose.Schema(
       type: String,
       default: null,
     },
+    requestMethod: {
+      type: String,
+      default: null,
+    },
+    requestPath: {
+      type: String,
+      default: null,
+    },
+    userAgent: {
+      type: String,
+      default: null,
+    },
   },
   {
     timestamps: true,

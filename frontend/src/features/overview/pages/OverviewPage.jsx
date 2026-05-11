@@ -444,8 +444,8 @@ const SocialAccountAvatar = ({ account, size = 'md' }) => {
   );
 };
 
-const BrandSearchBox = ({ value, onChange, placeholder = 'Search brands' }) => (
-  <label className="relative block w-full sm:w-72">
+const BrandSearchBox = ({ className = '', value, onChange, placeholder = 'Search brands' }) => (
+  <label className={`relative block w-full ${className}`}>
     <Search
       size={16}
       strokeWidth={2.3}
@@ -941,7 +941,7 @@ const StatusPill = ({ status }) => (
   </span>
 );
 
-const AdAccountTabs = ({ activeTab, onChange }) => {
+const AdAccountTabs = ({ activeTab, headerAction = null, onChange }) => {
   const tabs = [
     { id: 'campaigns', label: 'Campaigns' },
     { id: 'adSets', label: 'Ad Sets' },
@@ -949,21 +949,24 @@ const AdAccountTabs = ({ activeTab, onChange }) => {
   ];
 
   return (
-    <div className="flex flex-wrap gap-2 border-b border-sky-50 bg-white px-4 pt-4">
-      {tabs.map((tab) => (
-        <button
-          key={tab.id}
-          type="button"
-          onClick={() => onChange(tab.id)}
-          className={`rounded-t-xl px-4 py-2 text-sm font-black transition ${
-            activeTab === tab.id
-              ? 'bg-sky-50 text-sky-700'
-              : 'text-slate-500 hover:bg-sky-50/70 hover:text-sky-700'
-          }`}
-        >
-          {tab.label}
-        </button>
-      ))}
+    <div className="flex flex-wrap items-end justify-between gap-3 border-b border-sky-50 bg-white px-4 pt-4">
+      <div className="flex flex-wrap gap-2">
+        {tabs.map((tab) => (
+          <button
+            key={tab.id}
+            type="button"
+            onClick={() => onChange(tab.id)}
+            className={`rounded-t-xl px-4 py-2 text-sm font-black transition ${
+              activeTab === tab.id
+                ? 'bg-sky-50 text-sky-700'
+                : 'text-slate-500 hover:bg-sky-50/70 hover:text-sky-700'
+            }`}
+          >
+            {tab.label}
+          </button>
+        ))}
+      </div>
+      {headerAction ? <div className="pb-2">{headerAction}</div> : null}
     </div>
   );
 };
@@ -1310,13 +1313,15 @@ const AdDetailsModal = ({ ad, context, onClose }) => {
 const AdAccountDetailView = ({
   duplicatingCampaignKey,
   onDuplicateCampaign,
+  onSyncAdAccount,
   onUpdateCampaignStatus,
   selectedAccount,
   selectedAdAccount,
   selectedProfile,
+  syncingAdAccountKey,
   updatingCampaignStatusKey,
 }) => {
-  const { publishTokenType } = useMetaKeySettings();
+  const { fetchTokenType, publishTokenType } = useMetaKeySettings();
   const [activeTab, setActiveTab] = useState('campaigns');
   const [selectedAd, setSelectedAd] = useState(null);
   const [selectedCampaignId, setSelectedCampaignId] = useState(null);
@@ -1333,6 +1338,19 @@ const AdAccountDetailView = ({
       ? hierarchy.ads.filter((ad) => ad.campaignId === selectedCampaignId)
       : hierarchy.ads;
   const publishKeyLabel = getMetaKeyTypeLabel(publishTokenType);
+  const selectedFetchKeyLabel = getMetaKeyTypeLabel(fetchTokenType);
+  const adAccountSyncId = getAdAccountIdForSync(selectedAdAccount);
+  const adAccountSyncKey =
+    selectedProfile && adAccountSyncId ? getAdAccountSyncKey(selectedProfile.id, adAccountSyncId) : '';
+  const isAdAccountSyncing = syncingAdAccountKey === adAccountSyncKey;
+  const canFetchAdAccount =
+    selectedAccount?.sourceTokenId &&
+    selectedAccount.sourceTokenStatus !== 'DEACTIVE' &&
+    selectedProfile &&
+    adAccountSyncId &&
+    (fetchTokenType === META_KEY_TYPES.SYSTEM_USER
+      ? selectedAccount.systemUserAccessTokenStatus !== 'DEACTIVE'
+      : selectedAccount.profileAccessTokenStatus !== 'DEACTIVE');
   const canManageCampaign =
     selectedAccount?.sourceTokenId &&
     selectedAccount.sourceTokenStatus !== 'DEACTIVE' &&
@@ -1366,7 +1384,32 @@ const AdAccountDetailView = ({
   return (
     <>
       <div className="flex h-full min-h-[28rem] flex-col overflow-hidden rounded-2xl border border-sky-100 bg-white shadow-sm shadow-sky-50">
-        <AdAccountTabs activeTab={activeTab} onChange={handleTabChange} />
+        <AdAccountTabs
+          activeTab={activeTab}
+          onChange={handleTabChange}
+          headerAction={
+            <button
+              type="button"
+              onClick={() =>
+                onSyncAdAccount?.({
+                  account: selectedAccount,
+                  profile: selectedProfile,
+                  adAccount: selectedAdAccount,
+                })
+              }
+              disabled={isAdAccountSyncing || !canFetchAdAccount}
+              className="flex h-10 w-10 items-center justify-center rounded-xl bg-sky-600 text-white transition hover:bg-sky-700 disabled:cursor-not-allowed disabled:opacity-60"
+              title={
+                canFetchAdAccount
+                  ? `Fetch ${selectedAdAccount.name || 'ad account'} using ${selectedFetchKeyLabel}`
+                  : `No active ${selectedFetchKeyLabel} for this ad account`
+              }
+              aria-label="Fetch selected ad account data"
+            >
+              <DownloadCloud size={17} strokeWidth={2.4} className={isAdAccountSyncing ? 'animate-pulse' : ''} />
+            </button>
+          }
+        />
 
         {selectedCampaign || selectedAdSet ? (
           <div className="flex flex-wrap items-center gap-2 border-b border-sky-50 bg-sky-50/40 px-5 py-3">
@@ -1515,9 +1558,20 @@ const SelectedBrandView = ({
 
       <section className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden">
         <div className="shrink-0 rounded-2xl border border-sky-100 bg-white p-5 shadow-sm shadow-sky-50">
-          <div className="flex flex-col justify-between gap-4 xl:flex-row xl:items-start">
+          <div className="flex flex-col justify-between gap-5 xl:flex-row xl:flex-wrap xl:items-start">
             <div className="min-w-0 xl:flex-1">
               <div className="flex items-start gap-3">
+                {selectedAdAccount ? (
+                  <button
+                    type="button"
+                    onClick={() => onSelectAdAccount(null)}
+                    className="mt-1 flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-sky-100 bg-sky-50 text-slate-700 transition hover:bg-sky-100 hover:text-sky-700"
+                    title="Back to all ad accounts"
+                    aria-label="Back to all ad accounts"
+                  >
+                    <ArrowLeft size={17} strokeWidth={2.4} />
+                  </button>
+                ) : null}
                 {selectedAccount ? (
                   <SocialAccountAvatar account={selectedAccount} size="lg" />
                 ) : (
@@ -1565,7 +1619,7 @@ const SelectedBrandView = ({
             </div>
 
             {selectedProfile && selectedProfiles.length ? (
-              <label className="grid w-full gap-1 xl:max-w-xs">
+              <label className="grid w-full gap-1 xl:max-w-[13rem]">
                 <span className="text-xs font-black uppercase tracking-[0.14em] text-sky-700">Business profile</span>
                 <select
                   value={selectedProfile.id}
@@ -1582,12 +1636,12 @@ const SelectedBrandView = ({
             ) : null}
 
             {selectedAdAccount && selectedProfileAdAccounts.length ? (
-              <label className="grid w-full gap-1 xl:max-w-xs">
+              <label className="grid w-full min-w-0 gap-1 sm:max-w-[12rem] xl:max-w-[10.5rem]">
                 <span className="text-xs font-black uppercase tracking-[0.14em] text-sky-700">Ad account</span>
                 <select
                   value={getAdAccountKey(selectedAdAccount)}
                   onChange={(event) => onSelectAdAccount(event.target.value)}
-                  className="h-11 rounded-xl border border-sky-100 bg-white px-3 text-sm font-semibold text-slate-700 outline-none transition focus:border-sky-400 focus:ring-4 focus:ring-sky-100"
+                  className="h-11 w-full min-w-0 truncate rounded-xl border border-sky-100 bg-white px-3 text-sm font-semibold text-slate-700 outline-none transition focus:border-sky-400 focus:ring-4 focus:ring-sky-100"
                 >
                   {selectedProfileAdAccounts.map((account) => (
                     <option key={getAdAccountKey(account)} value={getAdAccountKey(account)}>
@@ -1598,7 +1652,7 @@ const SelectedBrandView = ({
               </label>
             ) : null}
 
-            <div className="grid w-full grid-cols-1 gap-3 sm:w-auto sm:min-w-[22rem] sm:grid-cols-[minmax(max-content,1.2fr)_minmax(8rem,0.8fr)] xl:max-w-[32rem]">
+            <div className="grid w-full grid-cols-1 gap-3 sm:w-auto sm:min-w-[17rem] sm:grid-cols-[minmax(7.5rem,1fr)_minmax(6.5rem,0.8fr)] xl:ml-0 xl:max-w-[24rem]">
               <div className="min-w-0 rounded-xl border border-sky-100 bg-sky-50 px-4 py-3">
                 <p className="flex items-center gap-1 text-xs font-black uppercase tracking-[0.12em] text-sky-700">
                   <BadgeDollarSign size={13} strokeWidth={2.2} />
@@ -1632,10 +1686,12 @@ const SelectedBrandView = ({
                 duplicatingCampaignKey={duplicatingCampaignKey}
                 key={getAdAccountKey(selectedAdAccount)}
                 onDuplicateCampaign={onDuplicateCampaign}
+                onSyncAdAccount={onSyncAdAccount}
                 onUpdateCampaignStatus={onUpdateCampaignStatus}
                 selectedAccount={selectedAccount}
                 selectedAdAccount={selectedAdAccount}
                 selectedProfile={selectedProfile}
+                syncingAdAccountKey={syncingAdAccountKey}
                 updatingCampaignStatusKey={updatingCampaignStatusKey}
               />
             ) : selectedProfile ? (
@@ -1930,7 +1986,14 @@ const OverviewPage = () => {
         <div className="min-h-0 flex-1 overflow-y-auto">
           <DashboardPanel
             title="Brands"
-            headerAction={<BrandSearchBox value={brandSearch} onChange={setBrandSearch} placeholder="Search brand" />}
+            headerAction={
+              <BrandSearchBox
+                className="max-w-full sm:w-56"
+                value={brandSearch}
+                onChange={setBrandSearch}
+                placeholder="Search brand"
+              />
+            }
           >
             {filteredBrands.length ? (
               <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
