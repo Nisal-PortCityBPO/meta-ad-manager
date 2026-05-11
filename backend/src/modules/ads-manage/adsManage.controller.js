@@ -11,6 +11,41 @@ const listCampaigns = asyncHandler(async (req, res) => {
   res.json(result);
 });
 
+const listErrors = asyncHandler(async (req, res) => {
+  const result = await adsManageService.listErrors({
+    actor: req.user,
+    tokenId: req.query.tokenId,
+    type: req.query.type,
+    status: req.query.status,
+    search: req.query.search,
+    page: req.query.page,
+    limit: req.query.limit,
+  });
+
+  res.json(result);
+});
+
+const checkErrorAccess = asyncHandler(async (req, res) => {
+  const result = await adsManageService.checkFailedLaunchAccess({
+    tokenId: req.body.tokenId,
+    campaignId: req.params.campaignId,
+    tokenType: req.body.tokenType,
+    retryTokenId: req.body.retryTokenId,
+    actor: req.user,
+  });
+
+  res.json(result);
+});
+
+const clearRecoveredErrors = asyncHandler(async (req, res) => {
+  const result = await adsManageService.clearRecoveredErrors({
+    actor: req.user,
+    req,
+  });
+
+  res.json(result);
+});
+
 const updateCampaignStatus = asyncHandler(async (req, res) => {
   const result = await adsManageService.updateCampaignStatus({
     tokenId: req.body.tokenId,
@@ -73,8 +108,11 @@ const retryFailedLaunch = asyncHandler(async (req, res) => {
 });
 
 module.exports = {
+  checkErrorAccess,
+  clearRecoveredErrors,
   deleteCampaign,
   duplicateCampaign,
+  listErrors,
   listCampaigns,
   retryFailedLaunch,
   syncCampaignDetails,

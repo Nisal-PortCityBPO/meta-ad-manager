@@ -7,6 +7,10 @@ const router = express.Router();
 
 router.use(authenticate, authorize(USER_ROLES.SUPER_ADMIN));
 
+router.get('/errors', adsManageController.listErrors);
+router.delete('/errors/success', adsManageController.clearRecoveredErrors);
+router.post('/errors/:campaignId/check', adsManageController.checkErrorAccess);
+router.post('/errors/:campaignId/retry', adsManageController.retryFailedLaunch);
 router.post('/campaigns/search', adsManageController.listCampaigns);
 router.post('/campaigns/:campaignId/sync', adsManageController.syncCampaignDetails);
 router.post('/campaigns/:campaignId/retry', adsManageController.retryFailedLaunch);

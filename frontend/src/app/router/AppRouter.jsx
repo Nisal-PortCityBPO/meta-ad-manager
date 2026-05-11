@@ -8,6 +8,7 @@ import DynamicAdsLaunchPage from '../../features/ads-launch/pages/DynamicAdsLaun
 import AdsManagePage from '../../features/ads-manage/pages/AdsManagePage';
 import LoginPage from '../../features/auth/pages/LoginPage';
 import DashboardPage from '../../features/dashboard/pages/DashboardPage';
+import ErrorsPage from '../../features/errors/pages/ErrorsPage';
 import NotificationsPage from '../../features/notifications/pages/NotificationsPage';
 import OverviewPage from '../../features/overview/pages/OverviewPage';
 import ProfilePage from '../../features/profile/pages/ProfilePage';
@@ -81,6 +82,7 @@ const AppRouter = () => {
 
           <Route element={<RoleRoute roles={[USER_ROLES.SUPER_ADMIN]} />}>
             <Route path="/ads-manage" element={<AdsManagePage />} />
+            <Route path="/errors" element={<ErrorsPage />} />
             <Route path="/users" element={<UsersPage />} />
             <Route path="/activity-logs" element={<ActivityLogsPage />} />
           </Route>
