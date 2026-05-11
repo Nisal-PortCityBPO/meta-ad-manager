@@ -25,6 +25,8 @@ const notifications = [
   },
 ];
 
+const isQueuedPublishSession = (item) => item.rawStatus === 'PENDING' || item.queue?.status === 'PENDING';
+
 const NotificationsPage = () => {
   const {
     applyPublishSessions,
@@ -51,9 +53,13 @@ const NotificationsPage = () => {
   const [queueRunning, setQueueRunning] = useState(false);
   const [queueClearing, setQueueClearing] = useState(false);
   const [historyPage, setHistoryPage] = useState(1);
+  const [historyClearing, setHistoryClearing] = useState(false);
   const hasPublishNotice = Boolean(progress || events.length || latestResult || latestError);
   const currentPublishItem = publishHistory.find((item) => item.id === currentPublishId) || null;
-  const savedHistory = publishHistory.filter((item) => !hasPublishNotice || item.id !== currentPublishId);
+  const queuedPublishItems = publishHistory.filter(
+    (item) => item.id !== currentPublishId && isQueuedPublishSession(item)
+  ).sort((first, second) => String(first.queue?.queuedAt || first.startedAt || '').localeCompare(String(second.queue?.queuedAt || second.startedAt || '')));
+  const savedHistory = publishHistory.filter((item) => (!hasPublishNotice || item.id !== currentPublishId) && !isQueuedPublishSession(item));
   const historyPageSize = 5;
   const historyPageCount = Math.max(Math.ceil(savedHistory.length / historyPageSize), 1);
   const safeHistoryPage = Math.min(historyPage, historyPageCount);
@@ -69,6 +75,19 @@ const NotificationsPage = () => {
   useEffect(() => {
     markPublishHistorySeen();
   }, [markPublishHistorySeen]);
+
+  const handleClearPublishHistory = async () => {
+    setHistoryClearing(true);
+    try {
+      const result = await clearPublishHistory();
+      setHistoryPage(1);
+      toast.success(result?.message || 'Publish history cleared');
+    } catch (error) {
+      toast.error(error.message || 'Failed to clear publish history');
+    } finally {
+      setHistoryClearing(false);
+    }
+  };
 
   const loadPublishQueue = async ({ silent = false } = {}) => {
     if (!silent) {
@@ -240,6 +259,42 @@ const NotificationsPage = () => {
         </div>
       ) : null}
 
+      {queuedPublishItems.length ? (
+        <DashboardPanel title="Current publish queue" className="mb-4">
+          <div className="space-y-3">
+            <p className="rounded-2xl bg-sky-50 px-4 py-3 text-sm font-semibold text-slate-600">
+              These publishes are waiting for the current publish to finish. They are not mixed into Publish history until they run.
+            </p>
+            {queuedPublishItems.map((item, index) => (
+              <div key={item.id || `${item.title}-${index}`} className="rounded-2xl border border-sky-100 bg-white p-4 shadow-sm shadow-sky-100/60">
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <p className="truncate text-sm font-black text-slate-950">{index + 1}. {item.title || 'Queued publish'}</p>
+                    <p className="mt-1 truncate text-xs font-semibold text-slate-500">
+                      {item.progress?.message || 'Waiting for the current publish to finish'}
+                    </p>
+                  </div>
+                  <span className="inline-flex items-center gap-2 rounded-full bg-amber-50 px-3 py-1 text-xs font-black uppercase tracking-[0.12em] text-amber-700">
+                    <Clock3 size={13} />
+                    Waiting
+                  </span>
+                </div>
+                <div className="mt-3 grid gap-2 text-xs font-semibold text-slate-500 sm:grid-cols-3">
+                  <span>Queue position: {index + 1}</span>
+                  <span>Source: {item.source || 'Meta publish'}</span>
+                  <span>
+                    Queued:{' '}
+                    {item.queue?.queuedAt || item.startedAt
+                      ? new Date(item.queue?.queuedAt || item.startedAt).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })
+                      : 'Waiting'}
+                  </span>
+                </div>
+              </div>
+            ))}
+          </div>
+        </DashboardPanel>
+      ) : null}
+
       <DashboardPanel
         title="Publish queue"
         className="mb-4"
@@ -343,16 +398,14 @@ const NotificationsPage = () => {
         title="Publish history"
         className="mb-4"
         headerAction={
-          publishHistory.length ? (
+          savedHistory.length ? (
             <button
               type="button"
-              onClick={() => {
-                clearPublishHistory();
-                setHistoryPage(1);
-              }}
-              className="rounded-lg border border-red-100 bg-white px-3 py-2 text-xs font-black uppercase tracking-[0.14em] text-red-600 transition hover:bg-red-50"
+              onClick={handleClearPublishHistory}
+              disabled={historyClearing}
+              className="rounded-lg border border-red-100 bg-white px-3 py-2 text-xs font-black uppercase tracking-[0.14em] text-red-600 transition hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-50"
             >
-              Clear history
+              {historyClearing ? 'Clearing...' : 'Clear history'}
             </button>
           ) : null
         }

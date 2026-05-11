@@ -346,12 +346,23 @@ export const PublishProgressProvider = ({ children }) => {
     activeSessionRef.current = null;
   };
 
-  const clearPublishHistory = () => {
+  const clearPublishHistory = useCallback(async () => {
+    const result = await adsLaunchApi.clearPublishSessionsHistory();
     writeStoredHistory([]);
     setPublishHistory([]);
-    writeSeenAt(new Date().toISOString());
+    const seenAt = new Date().toISOString();
+    writeSeenAt(seenAt);
     setPublishHistorySeenAt(readSeenAt());
-  };
+
+    try {
+      const data = await adsLaunchApi.getPublishSessions({ limit: HISTORY_LIMIT });
+      applyServerSessions(data.sessions || []);
+    } catch {
+      // The delete already succeeded; the next poll will restore active/queued sessions if needed.
+    }
+
+    return result;
+  }, [applyServerSessions]);
 
   const markPublishHistorySeen = () => {
     const latestTimestamp = publishHistory
@@ -421,9 +432,10 @@ export const PublishProgressProvider = ({ children }) => {
       return undefined;
     }
 
-    const intervalId = window.setInterval(refreshPublishSessions, 4000);
+    const pollMs = progress?.step === 'account-interval' || progress?.status === 'waiting' ? 1000 : 4000;
+    const intervalId = window.setInterval(refreshPublishSessions, pollMs);
     return () => window.clearInterval(intervalId);
-  }, [isPublishing, progress?.status, refreshPublishSessions]);
+  }, [isPublishing, progress?.status, progress?.step, refreshPublishSessions]);
 
   useEffect(() => {
     if (!latestResult || isPublishing || progress?.status === 'paused') {
@@ -472,6 +484,7 @@ export const PublishProgressProvider = ({ children }) => {
       publishHistorySeenAt,
       publishHistoryUnreadCount,
       applyPublishSessions,
+      clearPublishHistory,
       refreshPublishSessions,
       requestPausePublish,
       resumeBusy,

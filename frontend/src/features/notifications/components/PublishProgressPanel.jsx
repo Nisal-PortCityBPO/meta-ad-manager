@@ -83,9 +83,12 @@ const PublishProgressPanel = ({
   const totalAccounts = Number(progress?.totalAccounts || 0);
   const remainingAfterCurrentAccount = totalAccounts ? totalAccounts - Math.max(accountIndex || 1, 1) : 1;
   const hasPauseTarget = remainingAfterCurrentAccount > 0;
-  const showPause = Boolean(onPause && canPause && hasPauseTarget && progress?.status === 'active');
+  const waitingBetweenAccounts = progress?.step === 'account-interval' || progress?.status === 'waiting';
+  const showPause = Boolean(onPause && canPause && hasPauseTarget && (progress?.status === 'active' || waitingBetweenAccounts));
   const showResume = Boolean(onResume && canResume && progress?.status === 'paused');
-  const visibleEvents = [...events].sort((first, second) => getEventTime(second) - getEventTime(first));
+  const visibleEvents = [...events]
+    .filter((event) => event.step !== 'account-interval')
+    .sort((first, second) => getEventTime(second) - getEventTime(first));
   const pauseRequestedEvent = visibleEvents.find((event) => event.status === 'pausing' || event.step === 'pause-requested');
   const latestErrorTone =
     progress?.status === 'queued'
@@ -105,7 +108,7 @@ const PublishProgressPanel = ({
               size={18}
               strokeWidth={2.4}
               className={
-                progress?.status === 'active' || progress?.status === 'pausing'
+                progress?.status === 'active' || progress?.status === 'pausing' || progress?.status === 'waiting'
                   ? 'animate-spin text-sky-600'
                   : progress?.status === 'failed'
                     ? 'text-red-600'
@@ -128,7 +131,7 @@ const PublishProgressPanel = ({
               className="inline-flex h-9 items-center gap-2 rounded-lg border border-orange-100 bg-orange-50 px-3 text-xs font-black uppercase tracking-[0.12em] text-orange-700 transition hover:bg-orange-100 disabled:opacity-60"
             >
               {pauseBusy ? <LoaderCircle size={14} className="animate-spin" /> : <PauseCircle size={14} />}
-              Pause after current
+              {waitingBetweenAccounts ? 'Pause before next' : 'Pause after current'}
             </button>
           ) : null}
           {showResume ? (
