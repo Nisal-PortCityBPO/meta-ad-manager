@@ -18,6 +18,7 @@ import {
   Megaphone,
   Route,
   Settings2,
+  SlidersHorizontal,
   UserCircle,
   Users,
   XCircle,
@@ -41,6 +42,7 @@ const navItemsConfig = [
   { to: '/roadmap', label: 'Roadmap', icon: Route, roles: [USER_ROLES.SUPER_ADMIN, USER_ROLES.ADMIN] },
   { to: '/overview', label: 'Overview', icon: BarChart3, roles: [USER_ROLES.SUPER_ADMIN, USER_ROLES.ADMIN] },
   { to: '/performance', label: 'Performance', icon: Gauge, roles: [USER_ROLES.SUPER_ADMIN] },
+  { to: '/analysis', label: 'Analysis', icon: SlidersHorizontal, roles: [USER_ROLES.SUPER_ADMIN] },
   { to: '/ads-launch', label: 'Ads Launch', icon: Megaphone, roles: [USER_ROLES.SUPER_ADMIN, USER_ROLES.ADMIN] },
   { to: '/ads-templates', label: 'Ads Templates', icon: Boxes, roles: [USER_ROLES.SUPER_ADMIN, USER_ROLES.ADMIN] },
   { to: '/ads-media-library', label: 'Ads Media Library', icon: ImageIcon, roles: [USER_ROLES.SUPER_ADMIN, USER_ROLES.ADMIN] },
@@ -666,7 +668,7 @@ const DashboardShell = () => {
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-white via-sky-50 to-blue-100 text-slate-900 lg:flex">
-      <aside className="border-b border-sky-100 bg-white/85 px-4 py-4 shadow-sm backdrop-blur lg:sticky lg:top-0 lg:h-screen lg:w-72 lg:border-b-0 lg:border-r lg:px-5 lg:py-6">
+      <aside className="flex max-h-screen flex-col border-b border-sky-100 bg-white/85 px-4 py-4 shadow-sm backdrop-blur lg:sticky lg:top-0 lg:h-screen lg:w-72 lg:border-b-0 lg:border-r lg:px-5 lg:py-6">
         <div className="flex items-center gap-3">
           <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-white p-1.5 shadow-lg shadow-sky-200 ring-1 ring-sky-100">
             <img src={brandLogo} alt="200M logo" className="h-full w-full object-contain" />
@@ -677,7 +679,7 @@ const DashboardShell = () => {
           </div>
         </div>
 
-        <nav className="mt-6 grid grid-cols-2 gap-2 lg:grid-cols-1">
+        <nav className="mt-6 grid grid-cols-2 gap-2 overflow-y-auto pr-1 lg:min-h-0 lg:grid-cols-1">
           {navItems.map((item) => (
             <NavLink
               key={item.to}

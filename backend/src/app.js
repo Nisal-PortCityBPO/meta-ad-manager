@@ -21,6 +21,7 @@ const adsLaunchRoutes = require('./modules/ads-launch/adsLaunch.route');
 const adsManageRoutes = require('./modules/ads-manage/adsManage.route');
 const settingsRoutes = require('./modules/settings/settings.route');
 const performanceRoutes = require('./modules/performance/performance.route');
+const analysisRoutes = require('./modules/analysis/analysis.route');
 
 const frontendRoot = path.resolve(__dirname, '../../frontend');
 const frontendDist = path.join(frontendRoot, 'dist');
@@ -72,6 +73,7 @@ function registerApiRoutes(app) {
   app.use('/api/ads-manage', adsManageRoutes);
   app.use('/api/settings', settingsRoutes);
   app.use('/api/performance', performanceRoutes);
+  app.use('/api/analysis', analysisRoutes);
   app.use('/api/brands', brandRoutes);
   app.use('/api/agencies', agencyRoutes);
   app.use('/api/social-accounts', socialAccountRoutes);

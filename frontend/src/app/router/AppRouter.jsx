@@ -1,6 +1,7 @@
 import { Navigate, Outlet, Route, Routes } from 'react-router-dom';
 import DashboardLayout from '../layouts/DashboardLayout';
 import ActivityLogsPage from '../../features/activity-logs/pages/ActivityLogsPage';
+import AnalysisPage from '../../features/analysis/pages/AnalysisPage';
 import AdsLaunchPage from '../../features/ads-launch/pages/AdsLaunchPage';
 import AdsMediaLibraryPage from '../../features/ads-launch/pages/AdsMediaLibraryPage';
 import AdsTemplateBuilderPage from '../../features/ads-launch/pages/AdsTemplateBuilderPage';
@@ -83,6 +84,7 @@ const AppRouter = () => {
           </Route>
 
           <Route element={<RoleRoute roles={[USER_ROLES.SUPER_ADMIN]} />}>
+            <Route path="/analysis" element={<AnalysisPage />} />
             <Route path="/performance" element={<PerformancePage />} />
             <Route path="/ads-manage" element={<AdsManagePage />} />
             <Route path="/users" element={<UsersPage />} />
