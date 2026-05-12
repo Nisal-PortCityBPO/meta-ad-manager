@@ -9,6 +9,7 @@ import {
   ChevronDown,
   ClipboardList,
   Boxes,
+  BookOpen,
   FolderKanban,
   Gauge,
   ImageIcon,
@@ -38,6 +39,10 @@ import { settingsApi } from '../../features/settings/api/settingsApi';
 import { decryptFooterPackage, systemIntegrityApi } from '../../features/system-integrity/api/systemIntegrityApi';
 import brandLogo from '../../assets/200m-logo.png';
 import sriLankaFlag from '../../assets/Flag_of_Sri_Lanka.svg.png';
+
+const GUIDE_URL = 'https://guide.host-8ce.workers.dev/';
+const HEADER_ACTION_BUTTON_CLASS =
+  'flex h-11 items-center gap-2 rounded-xl border border-sky-100 bg-white px-4 text-sm font-bold text-slate-700 transition hover:bg-sky-50';
 
 const navGroupsConfig = [
   {
@@ -392,7 +397,7 @@ const NotificationsControl = () => {
       <button
         type="button"
         onClick={toggleOpen}
-        className="relative flex h-11 items-center gap-2 rounded-xl border border-sky-100 bg-white px-4 text-sm font-bold text-slate-700 transition hover:bg-sky-50"
+        className={`relative ${HEADER_ACTION_BUTTON_CLASS}`}
       >
         <Bell size={17} strokeWidth={2.2} />
         Notifications
@@ -615,7 +620,7 @@ const MetaKeySettingsControl = () => {
       <button
         type="button"
         onClick={() => setOpen((current) => !current)}
-        className="flex h-11 items-center gap-2 rounded-xl border border-sky-100 bg-white px-4 text-sm font-bold text-slate-700 transition hover:bg-sky-50"
+        className={HEADER_ACTION_BUTTON_CLASS}
       >
         <Settings2 size={17} strokeWidth={2.2} />
         Settings
@@ -992,12 +997,20 @@ const DashboardShell = () => {
             </div>
             <div className="flex items-center gap-2">
               <PublishStatusControl />
+              <button
+                type="button"
+                onClick={() => window.open(GUIDE_URL, '_blank', 'noopener,noreferrer')}
+                className={HEADER_ACTION_BUTTON_CLASS}
+              >
+                <BookOpen size={17} strokeWidth={2.2} />
+                Guide
+              </button>
               <NotificationsControl />
               <MetaKeySettingsControl />
               <button
                 type="button"
                 onClick={() => navigate('/profile')}
-                className="flex h-11 items-center gap-2 rounded-xl border border-sky-100 bg-white px-4 text-sm font-bold text-slate-700 transition hover:bg-sky-50"
+                className={HEADER_ACTION_BUTTON_CLASS}
               >
                 <UserCircle size={17} strokeWidth={2.2} />
                 Profile
