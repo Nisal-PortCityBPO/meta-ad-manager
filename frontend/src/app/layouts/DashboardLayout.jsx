@@ -6,6 +6,7 @@ import {
   BarChart3,
   Bell,
   CheckCircle2,
+  ChevronDown,
   ClipboardList,
   Boxes,
   FolderKanban,
@@ -34,26 +35,149 @@ import {
   useMetaKeySettings,
 } from '../../features/settings/MetaKeySettingsContext';
 import { settingsApi } from '../../features/settings/api/settingsApi';
+import { decryptFooterPackage, systemIntegrityApi } from '../../features/system-integrity/api/systemIntegrityApi';
 import brandLogo from '../../assets/200m-logo.png';
+import sriLankaFlag from '../../assets/Flag_of_Sri_Lanka.svg.png';
 
-const navItemsConfig = [
-  { to: '/dashboard', label: 'Dashboard', icon: LayoutDashboard },
-  { to: '/meta-connection', label: 'Meta Connection', icon: KeyRound, roles: [USER_ROLES.SUPER_ADMIN, USER_ROLES.ADMIN] },
-  { to: '/roadmap', label: 'Roadmap', icon: Route, roles: [USER_ROLES.SUPER_ADMIN, USER_ROLES.ADMIN] },
-  { to: '/overview', label: 'Overview', icon: BarChart3, roles: [USER_ROLES.SUPER_ADMIN, USER_ROLES.ADMIN] },
-  { to: '/performance', label: 'Performance', icon: Gauge, roles: [USER_ROLES.SUPER_ADMIN] },
-  { to: '/analysis', label: 'Analysis', icon: SlidersHorizontal, roles: [USER_ROLES.SUPER_ADMIN] },
-  { to: '/ads-launch', label: 'Ads Launch', icon: Megaphone, roles: [USER_ROLES.SUPER_ADMIN, USER_ROLES.ADMIN] },
-  { to: '/ads-templates', label: 'Ads Templates', icon: Boxes, roles: [USER_ROLES.SUPER_ADMIN, USER_ROLES.ADMIN] },
-  { to: '/ads-media-library', label: 'Ads Media Library', icon: ImageIcon, roles: [USER_ROLES.SUPER_ADMIN, USER_ROLES.ADMIN] },
-  { to: '/dynamic-ads-launch', label: 'Dynamic Ads Launch', icon: Megaphone, roles: [USER_ROLES.SUPER_ADMIN, USER_ROLES.ADMIN] },
-  { to: '/ads-manage', label: 'Ads Manage', icon: FolderKanban, roles: [USER_ROLES.SUPER_ADMIN] },
-  { to: '/errors', label: 'Errors', icon: AlertTriangle, roles: [USER_ROLES.SUPER_ADMIN, USER_ROLES.ADMIN] },
-  { to: '/users', label: 'Users', icon: Users, roles: [USER_ROLES.SUPER_ADMIN] },
-  { to: '/activity-logs', label: 'Activity Logs', icon: ClipboardList, roles: [USER_ROLES.SUPER_ADMIN] },
-  { to: '/notifications', label: 'Notifications', icon: Bell },
+const navGroupsConfig = [
+  {
+    id: 'main',
+    items: [
+      { to: '/dashboard', label: 'Dashboard', icon: LayoutDashboard },
+    ],
+  },
+  {
+    id: 'setup',
+    label: 'Setup',
+    items: [
+      { to: '/meta-connection', label: 'Meta Connection', icon: KeyRound, roles: [USER_ROLES.SUPER_ADMIN, USER_ROLES.ADMIN] },
+      { to: '/roadmap', label: 'Roadmap', icon: Route, roles: [USER_ROLES.SUPER_ADMIN, USER_ROLES.ADMIN] },
+      { to: '/overview', label: 'Overview', icon: BarChart3, roles: [USER_ROLES.SUPER_ADMIN, USER_ROLES.ADMIN] },
+    ],
+  },
+  {
+    id: 'insights',
+    label: 'Insights',
+    items: [
+      
+      { to: '/performance', label: 'Performance', icon: Gauge, roles: [USER_ROLES.SUPER_ADMIN] },
+      { to: '/analysis', label: 'Analysis', icon: SlidersHorizontal, roles: [USER_ROLES.SUPER_ADMIN] },
+      { to: '/ads-manage', label: 'Ads Manage', icon: FolderKanban, roles: [USER_ROLES.SUPER_ADMIN] },
+    ],
+  },
+  {
+    id: 'ads-creation',
+    label: 'Ads Creation',
+    items: [
+      { to: '/ads-launch', label: 'Ads Launch', icon: Megaphone, roles: [USER_ROLES.SUPER_ADMIN, USER_ROLES.ADMIN] },
+      { to: '/dynamic-ads-launch', label: 'Dynamic Ads Launch', icon: Megaphone, roles: [USER_ROLES.SUPER_ADMIN, USER_ROLES.ADMIN] },
+      
+    ],
+  },
+  {
+    id: 'ads-templates',
+    label: 'Ads Templates',
+    items: [
+      { to: '/ads-templates', label: 'Ads Templates', icon: Boxes, roles: [USER_ROLES.SUPER_ADMIN, USER_ROLES.ADMIN] },
+      { to: '/ads-media-library', label: 'Media Library', icon: ImageIcon, roles: [USER_ROLES.SUPER_ADMIN, USER_ROLES.ADMIN] },
+      
+    ],
+  },
+  {
+    id: 'system',
+    label: 'System',
+    items: [
+      { to: '/errors', label: 'Errors', icon: AlertTriangle, roles: [USER_ROLES.SUPER_ADMIN, USER_ROLES.ADMIN] },
+      { to: '/notifications', label: 'Notifications', icon: Bell, roles: [USER_ROLES.SUPER_ADMIN, USER_ROLES.ADMIN] },
+      { to: '/users', label: 'Users', icon: Users, roles: [USER_ROLES.SUPER_ADMIN] },
+      { to: '/activity-logs', label: 'Activity Logs', icon: ClipboardList, roles: [USER_ROLES.SUPER_ADMIN] },
+    ],
+  },
+];
+
+const accountItemsConfig = [
+  
   { to: '/profile', label: 'Profile', icon: UserCircle },
 ];
+
+const filterByRole = (items, hasRole) => items.filter((item) => !item.roles || hasRole(item.roles));
+
+const NavItem = ({ item }) => {
+  const Icon = item.icon;
+
+  return (
+    <NavLink
+      to={item.to}
+      end={item.to === '/dashboard'}
+      className={({ isActive }) =>
+        [
+          'group relative flex h-10 items-center gap-3 rounded-lg px-3 text-[13px] font-semibold transition-all duration-150',
+          isActive
+            ? 'bg-gradient-to-r from-sky-600 to-sky-500 text-white shadow-sm shadow-sky-300/50'
+            : 'text-slate-600 hover:bg-sky-50/80 hover:text-slate-900',
+        ].join(' ')
+      }
+    >
+      {({ isActive }) => (
+        <>
+          {isActive ? (
+            <span className="absolute left-0 top-1/2 h-5 -translate-y-1/2 rounded-r-full bg-white/90 w-0.5" aria-hidden />
+          ) : null}
+          <Icon
+            size={17}
+            strokeWidth={2.1}
+            className={isActive ? 'text-white' : 'text-slate-400 group-hover:text-sky-600'}
+          />
+          <span className="truncate">{item.label}</span>
+        </>
+      )}
+    </NavLink>
+  );
+};
+
+const NavGroup = ({ group, items }) => {
+  const [open, setOpen] = useState(true);
+
+  if (!group.label) {
+    return (
+      <div className="space-y-1">
+        {items.map((item) => (
+          <NavItem key={item.to} item={item} />
+        ))}
+      </div>
+    );
+  }
+
+  return (
+    <div>
+      <button
+        type="button"
+        onClick={() => setOpen((current) => !current)}
+        className="flex w-full items-center justify-between px-3 py-1.5 text-[10px] font-bold uppercase tracking-[0.16em] text-slate-400 transition hover:text-slate-600"
+      >
+        <span>{group.label}</span>
+        <ChevronDown
+          size={13}
+          strokeWidth={2.5}
+          className={`transition-transform duration-200 ${open ? 'rotate-0' : '-rotate-90'}`}
+        />
+      </button>
+      <div
+        className={`grid transition-all duration-200 ease-out ${
+          open ? 'grid-rows-[1fr] opacity-100' : 'grid-rows-[0fr] opacity-0'
+        }`}
+      >
+        <div className="overflow-hidden">
+          <div className="space-y-1 pt-1">
+            {items.map((item) => (
+              <NavItem key={item.to} item={item} />
+            ))}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+};
 
 const PublishStatusControl = () => {
   const {
@@ -655,10 +779,134 @@ const MetaKeySettingsControl = () => {
   );
 };
 
+function isProtectedFooterDomValid(footer) {
+  const footerNode = document.getElementById(footer.domId);
+  const proofNode = document.getElementById(footer.proofId);
+  const footerText = footerNode?.textContent || '';
+  const requiredText = [
+    footer.copyrightLabel,
+    String(footer.startYear),
+    String(footer.currentYear),
+    footer.company,
+    footer.rightsText,
+    footer.developedByLabel,
+    footer.team,
+    footer.productFromLabel,
+  ];
+  const hasRequiredText = requiredText.every((value) => value && footerText.includes(value));
+  const hasFlag = Boolean(footerNode?.querySelector('img[data-footer-flag="true"]'));
+  const proofMatches = proofNode?.dataset.integrityProof === footer.renderProof;
+
+  return Boolean(footerNode && hasRequiredText && hasFlag && proofMatches);
+}
+
+const ProtectedFooter = ({ footer, flagSrc }) => {
+  if (!footer) {
+    return null;
+  }
+
+  return (
+    <footer
+      id={footer.domId}
+      data-protected-footer={footer.marker}
+      className="fixed bottom-0 left-0 right-0 z-30 flex h-8 items-center justify-between gap-3 border-t border-sky-100 bg-white/95 px-4 text-[11px] font-semibold text-slate-950 shadow-[0_-8px_24px_rgba(14,165,233,0.08)] backdrop-blur lg:left-64"
+    >
+      <span className="min-w-0 truncate">
+        {footer.copyrightLabel} {footer.copyrightSymbol} {footer.startYear} - {footer.currentYear} {footer.company}.{' '}
+        {footer.rightsText} {footer.developedByLabel} <span className="text-sky-700">{footer.team}</span>
+      </span>
+      <span className="inline-flex h-full shrink-0 items-center gap-2 text-slate-950" title={footer.flagAlt}>
+        {footer.productFromLabel}
+        <img
+          src={flagSrc}
+          alt={footer.flagAlt}
+          data-footer-flag="true"
+          className="h-5 w-auto object-contain shadow-sm ring-1 ring-slate-200"
+        />
+      </span>
+      <span id={footer.proofId} data-integrity-proof={footer.renderProof} hidden />
+    </footer>
+  );
+};
+
 const DashboardShell = () => {
   const navigate = useNavigate();
   const { user, logout, hasRole } = useAuth();
-  const navItems = navItemsConfig.filter((item) => !item.roles || hasRole(item.roles));
+  const footerServerValidatedRef = useRef(false);
+  const [protectedFooter, setProtectedFooter] = useState(null);
+  const [footerIntegrityFailed, setFooterIntegrityFailed] = useState(false);
+
+  const visibleGroups = navGroupsConfig
+    .map((group) => ({ ...group, items: filterByRole(group.items, hasRole) }))
+    .filter((group) => group.items.length > 0);
+  const visibleAccountItems = filterByRole(accountItemsConfig, hasRole);
+
+  useEffect(() => {
+    let mounted = true;
+
+    async function loadProtectedFooter() {
+      try {
+        const data = await systemIntegrityApi.getFooterPackage();
+        const footer = await decryptFooterPackage(data.footerPackage);
+
+        if (!footer?.marker || !footer?.renderProof || !footer?.domId || !footer?.proofId) {
+          throw new Error('Protected footer payload is incomplete');
+        }
+
+        if (mounted) {
+          setProtectedFooter(footer);
+        }
+      } catch (_error) {
+        if (mounted) {
+          setFooterIntegrityFailed(true);
+        }
+      }
+    }
+
+    loadProtectedFooter();
+
+    return () => {
+      mounted = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!protectedFooter) {
+      return undefined;
+    }
+
+    const failFooterIntegrity = () => {
+      setFooterIntegrityFailed(true);
+    };
+
+    const validateFooter = () => {
+      if (!isProtectedFooterDomValid(protectedFooter)) {
+        failFooterIntegrity();
+        return;
+      }
+
+      if (!footerServerValidatedRef.current) {
+        footerServerValidatedRef.current = true;
+        systemIntegrityApi.validateFooterProof(protectedFooter.renderProof).catch(failFooterIntegrity);
+      }
+    };
+
+    const animationFrameId = window.requestAnimationFrame(validateFooter);
+    const intervalId = window.setInterval(validateFooter, 1500);
+    const observer = new MutationObserver(validateFooter);
+    observer.observe(document.body, {
+      attributes: true,
+      characterData: true,
+      childList: true,
+      subtree: true,
+    });
+
+    return () => {
+      window.cancelAnimationFrame(animationFrameId);
+      window.clearInterval(intervalId);
+      observer.disconnect();
+    };
+  }, [protectedFooter]);
 
   const handleLogout = async () => {
     await logout();
@@ -666,52 +914,73 @@ const DashboardShell = () => {
     navigate('/login', { replace: true });
   };
 
+  const initials = (user?.name || 'U')
+    .split(' ')
+    .map((part) => part[0])
+    .filter(Boolean)
+    .slice(0, 2)
+    .join('')
+    .toUpperCase();
+
+  if (footerIntegrityFailed) {
+    throw new Error('Protected footer integrity check failed.');
+  }
+
   return (
     <div className="min-h-screen bg-gradient-to-br from-white via-sky-50 to-blue-100 text-slate-900 lg:flex">
-      <aside className="flex max-h-screen flex-col border-b border-sky-100 bg-white/85 px-4 py-4 shadow-sm backdrop-blur lg:sticky lg:top-0 lg:h-screen lg:w-72 lg:border-b-0 lg:border-r lg:px-5 lg:py-6">
-        <div className="flex items-center gap-3">
-          <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-white p-1.5 shadow-lg shadow-sky-200 ring-1 ring-sky-100">
-            <img src={brandLogo} alt="200M logo" className="h-full w-full object-contain" />
+      <aside className="flex max-h-screen flex-col border-b border-slate-200/70 bg-white/95 shadow-sm backdrop-blur-xl lg:sticky lg:top-0 lg:h-screen lg:w-64 lg:border-b-0 lg:border-r">
+        {/* Brand */}
+        <div className="flex items-center gap-3 border-b border-slate-100 px-5 py-5">
+          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-white p-1.5 shadow-md shadow-sky-100 ring-1 ring-slate-100">
+            <img src={brandLogo} alt="200M logo" className="h-full w-full rounded-lg bg-white object-contain" />
           </div>
-          <div>
-            <p className="text-lg font-black text-slate-950">Account Manager</p>
-            <p className="text-xs font-bold uppercase tracking-[0.18em] text-sky-600">{user?.role?.replace('_', ' ')}</p>
+          <div className="min-w-0">
+            <p className="truncate text-[15px] font-bold leading-tight text-slate-900">Account Manager</p>
+            <p className="mt-0.5 truncate text-[10px] font-semibold uppercase tracking-[0.18em] text-sky-600">
+              {user?.role?.replace('_', ' ') || 'Workspace'}
+            </p>
           </div>
         </div>
 
-        <nav className="mt-6 grid grid-cols-2 gap-2 overflow-y-auto pr-1 lg:min-h-0 lg:grid-cols-1">
-          {navItems.map((item) => (
-            <NavLink
-              key={item.to}
-              to={item.to}
-              className={({ isActive }) =>
-                [
-                  'flex h-12 items-center gap-3 rounded-xl px-3 text-sm font-bold transition',
-                  isActive
-                    ? 'bg-sky-600 text-white shadow-lg shadow-sky-200'
-                    : 'text-slate-600 hover:bg-sky-50 hover:text-slate-950',
-                ].join(' ')
-              }
-            >
-              {({ isActive }) => {
-                const Icon = item.icon;
-
-                return (
-                  <>
-                    <span
-                      className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-lg ${
-                        isActive ? 'bg-white/20' : 'bg-sky-50 text-sky-700'
-                      }`}
-                    >
-                      <Icon size={18} strokeWidth={2.2} />
-                    </span>
-                    <span className="truncate">{item.label}</span>
-                  </>
-                );
-              }}
-            </NavLink>
+        {/* Nav */}
+        <nav className="flex-1 space-y-3 overflow-y-auto px-3 py-4 [scrollbar-width:thin] [&::-webkit-scrollbar]:w-1.5 [&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-thumb]:bg-slate-200 hover:[&::-webkit-scrollbar-thumb]:bg-slate-300 [&::-webkit-scrollbar-track]:bg-transparent">
+          {visibleGroups.map((group) => (
+            <NavGroup key={group.id} group={group} items={group.items} />
           ))}
+
+          {visibleAccountItems.length > 0 ? (
+            <>
+              <div className="mx-3 my-2 h-px bg-slate-100" />
+              <div className="space-y-1">
+                {visibleAccountItems.map((item) => (
+                  <NavItem key={item.to} item={item} />
+                ))}
+              </div>
+            </>
+          ) : null}
         </nav>
+
+        {/* User footer */}
+        <div className="border-t border-slate-100 p-3">
+          <div className="flex items-center gap-2.5 rounded-xl bg-slate-50/80 p-2.5">
+            <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-gradient-to-br from-sky-500 to-blue-600 text-xs font-bold text-white shadow-sm">
+              {initials}
+            </div>
+            <div className="min-w-0 flex-1">
+              <p className="truncate text-[13px] font-bold text-slate-900">{user?.name || 'User'}</p>
+              <p className="truncate text-[11px] font-medium text-slate-500">{user?.email || ''}</p>
+            </div>
+            <button
+              type="button"
+              onClick={handleLogout}
+              className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-slate-400 transition hover:bg-red-50 hover:text-red-600"
+              title="Logout"
+              aria-label="Logout"
+            >
+              <LogOut size={15} strokeWidth={2.2} />
+            </button>
+          </div>
+        </div>
       </aside>
 
       <div className="min-w-0 flex-1">
@@ -745,9 +1014,14 @@ const DashboardShell = () => {
           </div>
         </header>
 
-        <main className="w-full px-3 py-4 sm:px-4 lg:px-4 lg:py-5">
+        <main className="w-full px-3 pb-12 pt-4 sm:px-4 lg:px-4 lg:pb-12 lg:pt-5">
           <Outlet />
         </main>
+
+        <ProtectedFooter
+          footer={protectedFooter}
+          flagSrc={sriLankaFlag}
+        />
       </div>
     </div>
   );
@@ -764,3 +1038,4 @@ const DashboardLayout = () => (
 );
 
 export default DashboardLayout;
+

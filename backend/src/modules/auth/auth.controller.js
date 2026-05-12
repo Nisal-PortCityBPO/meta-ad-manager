@@ -33,32 +33,21 @@ const me = asyncHandler(async (req, res) => {
 });
 
 const forgotPassword = asyncHandler(async (req, res) => {
-  const result = await authService.requestPasswordReset({
-    email: req.body.email,
-    req,
+  res.status(403).json({
+    message: 'Forgot password is disabled. Contact the Super Admin to reset your password.',
   });
-
-  res.json(result);
 });
 
 const verifyOtp = asyncHandler(async (req, res) => {
-  const result = await authService.verifyPasswordResetOtp({
-    email: req.body.email,
-    otp: req.body.otp,
+  res.status(403).json({
+    message: 'Forgot password is disabled. Contact the Super Admin to reset your password.',
   });
-
-  res.json(result);
 });
 
 const resetPassword = asyncHandler(async (req, res) => {
-  const result = await authService.resetPassword({
-    email: req.body.email,
-    resetToken: req.body.resetToken,
-    password: req.body.password,
-    req,
+  res.status(403).json({
+    message: 'Forgot password is disabled. Contact the Super Admin to reset your password.',
   });
-
-  res.json(result);
 });
 
 module.exports = {

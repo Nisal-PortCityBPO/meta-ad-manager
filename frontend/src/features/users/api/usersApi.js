@@ -12,4 +12,14 @@ export const usersApi = {
       method: 'PATCH',
       body: { status },
     }),
+  verifySuperAdminPassword: (password) =>
+    apiRequest('/users/verify-super-admin-password', {
+      method: 'POST',
+      body: { password },
+    }),
+  resetAdminPassword: (id, payload) =>
+    apiRequest(`/users/${id}/password`, {
+      method: 'PATCH',
+      body: payload,
+    }),
 };

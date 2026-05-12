@@ -54,6 +54,21 @@ export const AuthProvider = ({ children }) => {
     };
   }, [setSessionUser]);
 
+  useEffect(() => {
+    if (!user) {
+      return undefined;
+    }
+
+    const intervalId = window.setInterval(() => {
+      authApi
+        .me()
+        .then((data) => setSessionUser(data.user))
+        .catch(() => setSessionUser(null));
+    }, 30000);
+
+    return () => window.clearInterval(intervalId);
+  }, [setSessionUser, user]);
+
   const login = useCallback(async (credentials) => {
     const data = await authApi.login(credentials);
     setSessionUser(data.user);
