@@ -35,8 +35,36 @@ const updateUserStatus = asyncHandler(async (req, res) => {
   });
 });
 
+const verifySuperAdminPassword = asyncHandler(async (req, res) => {
+  await usersService.verifySuperAdminPassword({
+    password: req.body.password,
+    actor: req.user,
+  });
+
+  res.json({
+    message: 'Super admin password verified',
+  });
+});
+
+const resetAdminPassword = asyncHandler(async (req, res) => {
+  const user = await usersService.resetAdminPassword({
+    userId: req.params.id,
+    superAdminPassword: req.body.superAdminPassword,
+    newPassword: req.body.newPassword,
+    actor: req.user,
+    req,
+  });
+
+  res.json({
+    message: 'Admin password reset successfully',
+    user,
+  });
+});
+
 module.exports = {
   createAdmin,
   getUsers,
+  resetAdminPassword,
   updateUserStatus,
+  verifySuperAdminPassword,
 };

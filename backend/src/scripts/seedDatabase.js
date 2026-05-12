@@ -2,9 +2,25 @@ const bcrypt = require('bcryptjs');
 const dotenv = require('dotenv');
 const connectDB = require('../app/config/db');
 const { writeActivityLog } = require('../modules/activity-logs/activityLog.service');
+const { seedProtectedFooter } = require('../modules/system-integrity/systemIntegrity.service');
 const { User, USER_ROLES } = require('../modules/users/user.model');
 
 dotenv.config();
+
+const protectedFooterSeed = {
+  marker: '200M_PROTECTED_FOOTER_V1',
+  company: '200M',
+  copyrightLabel: 'Copyright',
+  copyrightSymbol: '\u00a9',
+  startYear: 2026,
+  rightsText: 'All rights reserved.',
+  developedByLabel: 'Developed By',
+  team: '200M SL IT Team',
+  productFromLabel: 'Product From',
+  flagAlt: 'Sri Lankan flag',
+  domId: 'm2m-protected-footer',
+  proofId: 'm2m-protected-footer-proof',
+};
 
 function getSuperAdminSeed() {
   return {
@@ -52,8 +68,10 @@ async function ensureSuperAdmin() {
 
 async function seedDatabase() {
   const superAdmin = await ensureSuperAdmin();
+  const protectedFooter = await seedProtectedFooter(protectedFooterSeed);
 
   return {
+    protectedFooter,
     superAdmin,
   };
 }

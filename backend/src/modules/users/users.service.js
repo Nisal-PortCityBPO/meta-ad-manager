@@ -85,8 +85,72 @@ async function updateUserStatus({ userId, status, actor, req }) {
   return user.toSafeObject();
 }
 
+async function verifySuperAdminPassword({ password, actor }) {
+  if (!password) {
+    throw new HttpError(400, 'Super admin password is required');
+  }
+
+  const superAdmin = await User.findById(actor._id);
+  if (!superAdmin || superAdmin.role !== USER_ROLES.SUPER_ADMIN) {
+    throw new HttpError(403, 'Only super admin can verify this action');
+  }
+
+  const passwordMatches = await bcrypt.compare(password, superAdmin.passwordHash);
+  if (!passwordMatches) {
+    throw new HttpError(401, 'Super admin password is incorrect');
+  }
+
+  return true;
+}
+
+async function resetAdminPassword({ userId, superAdminPassword, newPassword, actor, req }) {
+  await verifySuperAdminPassword({
+    password: superAdminPassword,
+    actor,
+  });
+
+  if (!validatePassword(newPassword)) {
+    throw new HttpError(400, 'New password must be at least 8 characters');
+  }
+
+  if (actor._id.toString() === userId) {
+    throw new HttpError(400, 'You cannot reset your own password here');
+  }
+
+  const user = await User.findById(userId);
+  if (!user) {
+    throw new HttpError(404, 'User not found');
+  }
+
+  if (user.role !== USER_ROLES.ADMIN) {
+    throw new HttpError(400, 'Only admin passwords can be reset here');
+  }
+
+  user.passwordHash = await bcrypt.hash(newPassword, 12);
+  user.passwordResetOtpHash = null;
+  user.passwordResetExpiresAt = null;
+  user.passwordResetVerifiedAt = null;
+  user.tokenVersion += 1;
+  await user.save();
+
+  await writeActivityLog({
+    user: actor,
+    action: 'ADMIN_PASSWORD_RESET',
+    entity: 'User',
+    entityId: user._id.toString(),
+    metadata: {
+      resetUserEmail: user.email,
+    },
+    req,
+  });
+
+  return user.toSafeObject();
+}
+
 module.exports = {
   createAdmin,
   listUsers,
+  resetAdminPassword,
   updateUserStatus,
+  verifySuperAdminPassword,
 };

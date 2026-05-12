@@ -3,7 +3,7 @@ const roleLabel = {
   ADMIN: 'Admin',
 };
 
-const UsersTable = ({ users, onStatusChange, loading }) => {
+const UsersTable = ({ users, onResetPassword, onStatusChange, loading }) => {
   return (
     <div className="overflow-hidden rounded-2xl border border-sky-100 bg-white">
       <div className="overflow-x-auto">
@@ -39,14 +39,24 @@ const UsersTable = ({ users, onStatusChange, loading }) => {
                 </td>
                 <td className="px-5 py-4">
                   {user.role === 'ADMIN' ? (
-                    <button
-                      type="button"
-                      disabled={loading}
-                      onClick={() => onStatusChange(user.id, user.status === 'ACTIVE' ? 'INACTIVE' : 'ACTIVE')}
-                      className="h-10 rounded-xl border border-sky-100 bg-white px-4 text-sm font-bold text-slate-700 transition hover:bg-sky-50 disabled:opacity-70"
-                    >
-                      {user.status === 'ACTIVE' ? 'Deactivate' : 'Activate'}
-                    </button>
+                    <div className="flex flex-wrap gap-2">
+                      <button
+                        type="button"
+                        disabled={loading}
+                        onClick={() => onStatusChange(user.id, user.status === 'ACTIVE' ? 'INACTIVE' : 'ACTIVE')}
+                        className="h-10 rounded-xl border border-sky-100 bg-white px-4 text-sm font-bold text-slate-700 transition hover:bg-sky-50 disabled:opacity-70"
+                      >
+                        {user.status === 'ACTIVE' ? 'Deactivate' : 'Activate'}
+                      </button>
+                      <button
+                        type="button"
+                        disabled={loading}
+                        onClick={() => onResetPassword(user)}
+                        className="h-10 rounded-xl bg-slate-950 px-4 text-sm font-bold text-white transition hover:bg-slate-800 disabled:opacity-70"
+                      >
+                        Reset Password
+                      </button>
+                    </div>
                   ) : (
                     <span className="text-sm font-semibold text-slate-400">Locked</span>
                   )}
