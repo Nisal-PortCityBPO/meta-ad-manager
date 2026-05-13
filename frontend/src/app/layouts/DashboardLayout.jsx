@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { NavLink, Outlet, useNavigate } from 'react-router-dom';
+import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import {
   AlertTriangle,
@@ -17,12 +17,14 @@ import {
   LayoutDashboard,
   LoaderCircle,
   LogOut,
+  Menu,
   Megaphone,
   Route,
   Settings2,
   SlidersHorizontal,
   UserCircle,
   Users,
+  X,
   XCircle,
 } from 'lucide-react';
 import { USER_ROLES, useAuth } from '../../features/auth/hooks/useAuth';
@@ -107,13 +109,14 @@ const accountItemsConfig = [
 
 const filterByRole = (items, hasRole) => items.filter((item) => !item.roles || hasRole(item.roles));
 
-const NavItem = ({ item }) => {
+const NavItem = ({ item, onNavigate }) => {
   const Icon = item.icon;
 
   return (
     <NavLink
       to={item.to}
       end={item.to === '/dashboard'}
+      onClick={onNavigate}
       className={({ isActive }) =>
         [
           'group relative flex h-10 items-center gap-3 rounded-lg px-3 text-[13px] font-semibold transition-all duration-150',
@@ -140,14 +143,14 @@ const NavItem = ({ item }) => {
   );
 };
 
-const NavGroup = ({ group, items }) => {
+const NavGroup = ({ group, items, onNavigate }) => {
   const [open, setOpen] = useState(true);
 
   if (!group.label) {
     return (
       <div className="space-y-1">
         {items.map((item) => (
-          <NavItem key={item.to} item={item} />
+          <NavItem key={item.to} item={item} onNavigate={onNavigate} />
         ))}
       </div>
     );
@@ -175,7 +178,7 @@ const NavGroup = ({ group, items }) => {
         <div className="overflow-hidden">
           <div className="space-y-1 pt-1">
             {items.map((item) => (
-              <NavItem key={item.to} item={item} />
+              <NavItem key={item.to} item={item} onNavigate={onNavigate} />
             ))}
           </div>
         </div>
@@ -836,10 +839,12 @@ const ProtectedFooter = ({ footer, flagSrc }) => {
 
 const DashboardShell = () => {
   const navigate = useNavigate();
+  const location = useLocation();
   const { user, logout, hasRole } = useAuth();
   const footerServerValidatedRef = useRef(false);
   const [protectedFooter, setProtectedFooter] = useState(null);
   const [footerIntegrityFailed, setFooterIntegrityFailed] = useState(false);
+  const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
 
   const visibleGroups = navGroupsConfig
     .map((group) => ({ ...group, items: filterByRole(group.items, hasRole) }))
@@ -913,10 +918,33 @@ const DashboardShell = () => {
     };
   }, [protectedFooter]);
 
+  useEffect(() => {
+    setMobileSidebarOpen(false);
+  }, [location.pathname]);
+
+  useEffect(() => {
+    if (!mobileSidebarOpen) {
+      return undefined;
+    }
+
+    const handleKeyDown = (event) => {
+      if (event.key === 'Escape') {
+        setMobileSidebarOpen(false);
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [mobileSidebarOpen]);
+
   const handleLogout = async () => {
     await logout();
     toast.success('Logged out');
     navigate('/login', { replace: true });
+  };
+
+  const closeMobileSidebar = () => {
+    setMobileSidebarOpen(false);
   };
 
   const initials = (user?.name || 'U')
@@ -933,24 +961,46 @@ const DashboardShell = () => {
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-white via-sky-50 to-blue-100 text-slate-900 lg:flex">
-      <aside className="flex max-h-screen flex-col border-b border-slate-200/70 bg-white/95 shadow-sm backdrop-blur-xl lg:sticky lg:top-0 lg:h-screen lg:w-64 lg:border-b-0 lg:border-r">
+      {mobileSidebarOpen ? (
+        <button
+          type="button"
+          className="fixed inset-0 z-30 bg-slate-950/40 backdrop-blur-sm lg:hidden"
+          onClick={closeMobileSidebar}
+          aria-label="Close menu"
+        />
+      ) : null}
+
+      <aside
+        className={[
+          'fixed inset-y-0 left-0 z-40 flex h-dvh w-72 max-w-[86vw] flex-col border-r border-slate-200/70 bg-white/95 shadow-2xl shadow-slate-900/10 backdrop-blur-xl transition-transform duration-200 lg:sticky lg:top-0 lg:z-auto lg:h-screen lg:w-64 lg:max-w-none lg:translate-x-0 lg:shadow-sm',
+          mobileSidebarOpen ? 'translate-x-0' : '-translate-x-full',
+        ].join(' ')}
+      >
         {/* Brand */}
         <div className="flex items-center gap-3 border-b border-slate-100 px-5 py-5">
           <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-white p-1.5 shadow-md shadow-sky-100 ring-1 ring-slate-100">
             <img src={brandLogo} alt="200M logo" className="h-full w-full rounded-lg bg-white object-contain" />
           </div>
-          <div className="min-w-0">
+          <div className="min-w-0 flex-1">
             <p className="truncate text-[15px] font-bold leading-tight text-slate-900">Account Manager</p>
             <p className="mt-0.5 truncate text-[10px] font-semibold uppercase tracking-[0.18em] text-sky-600">
               {user?.role?.replace('_', ' ') || 'Workspace'}
             </p>
           </div>
+          <button
+            type="button"
+            onClick={closeMobileSidebar}
+            className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl text-slate-400 transition hover:bg-slate-50 hover:text-slate-700 lg:hidden"
+            aria-label="Close menu"
+          >
+            <X size={18} strokeWidth={2.4} />
+          </button>
         </div>
 
         {/* Nav */}
         <nav className="flex-1 space-y-3 overflow-y-auto px-3 py-4 [scrollbar-width:thin] [&::-webkit-scrollbar]:w-1.5 [&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-thumb]:bg-slate-200 hover:[&::-webkit-scrollbar-thumb]:bg-slate-300 [&::-webkit-scrollbar-track]:bg-transparent">
           {visibleGroups.map((group) => (
-            <NavGroup key={group.id} group={group} items={group.items} />
+            <NavGroup key={group.id} group={group} items={group.items} onNavigate={closeMobileSidebar} />
           ))}
 
           {visibleAccountItems.length > 0 ? (
@@ -958,7 +1008,7 @@ const DashboardShell = () => {
               <div className="mx-3 my-2 h-px bg-slate-100" />
               <div className="space-y-1">
                 {visibleAccountItems.map((item) => (
-                  <NavItem key={item.to} item={item} />
+                  <NavItem key={item.to} item={item} onNavigate={closeMobileSidebar} />
                 ))}
               </div>
             </>
@@ -990,12 +1040,21 @@ const DashboardShell = () => {
 
       <div className="min-w-0 flex-1">
         <header className="sticky top-0 z-20 border-b border-sky-100 bg-white/80 px-4 py-3 backdrop-blur lg:px-8">
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <div>
+          <div className="flex flex-wrap items-center gap-3">
+            <div className="min-w-0 flex-1">
               <p className="text-sm font-semibold text-slate-500">Signed in as</p>
               <h1 className="text-xl font-black text-slate-950">{user?.name}</h1>
             </div>
-            <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setMobileSidebarOpen(true)}
+              className="flex h-11 w-11 items-center justify-center rounded-xl border border-sky-100 bg-white text-slate-700 transition hover:bg-sky-50 lg:hidden"
+              aria-label="Open menu"
+              title="Menu"
+            >
+              <Menu size={19} strokeWidth={2.4} />
+            </button>
+            <div className="flex w-full flex-wrap items-center gap-2 lg:w-auto">
               <PublishStatusControl />
               <button
                 type="button"
