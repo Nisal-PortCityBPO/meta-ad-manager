@@ -1558,8 +1558,8 @@ const SelectedBrandView = ({
 
       <section className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden">
         <div className="shrink-0 rounded-2xl border border-sky-100 bg-white p-5 shadow-sm shadow-sky-50">
-          <div className="flex flex-col justify-between gap-5 xl:flex-row xl:flex-wrap xl:items-start">
-            <div className="min-w-0 xl:flex-1">
+          <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_minmax(0,12rem)_minmax(0,10.5rem)_minmax(17rem,24rem)] xl:items-start">
+            <div className="min-w-0">
               <div className="flex items-start gap-3">
                 {selectedAdAccount ? (
                   <button
@@ -1619,12 +1619,13 @@ const SelectedBrandView = ({
             </div>
 
             {selectedProfile && selectedProfiles.length ? (
-              <label className="grid w-full gap-1 xl:max-w-[13rem]">
+              <label className="grid w-full min-w-0 gap-1">
                 <span className="text-xs font-black uppercase tracking-[0.14em] text-sky-700">Business profile</span>
                 <select
                   value={selectedProfile.id}
                   onChange={(event) => selectProfileFromTitle(event.target.value)}
-                  className="h-11 rounded-xl border border-sky-100 bg-white px-3 text-sm font-semibold text-slate-700 outline-none transition focus:border-sky-400 focus:ring-4 focus:ring-sky-100"
+                  title={selectedProfile.name}
+                  className="h-11 w-full min-w-0 truncate rounded-xl border border-sky-100 bg-white px-3 text-sm font-semibold text-slate-700 outline-none transition focus:border-sky-400 focus:ring-4 focus:ring-sky-100"
                 >
                   {selectedProfiles.map((profile) => (
                     <option key={profile.id} value={profile.id}>
@@ -1636,11 +1637,12 @@ const SelectedBrandView = ({
             ) : null}
 
             {selectedAdAccount && selectedProfileAdAccounts.length ? (
-              <label className="grid w-full min-w-0 gap-1 sm:max-w-[12rem] xl:max-w-[10.5rem]">
+              <label className="grid w-full min-w-0 gap-1">
                 <span className="text-xs font-black uppercase tracking-[0.14em] text-sky-700">Ad account</span>
                 <select
                   value={getAdAccountKey(selectedAdAccount)}
                   onChange={(event) => onSelectAdAccount(event.target.value)}
+                  title={selectedAdAccount.name}
                   className="h-11 w-full min-w-0 truncate rounded-xl border border-sky-100 bg-white px-3 text-sm font-semibold text-slate-700 outline-none transition focus:border-sky-400 focus:ring-4 focus:ring-sky-100"
                 >
                   {selectedProfileAdAccounts.map((account) => (
@@ -1652,7 +1654,7 @@ const SelectedBrandView = ({
               </label>
             ) : null}
 
-            <div className="grid w-full grid-cols-1 gap-3 sm:w-auto sm:min-w-[17rem] sm:grid-cols-[minmax(7.5rem,1fr)_minmax(6.5rem,0.8fr)] xl:ml-0 xl:max-w-[24rem]">
+            <div className="grid w-full grid-cols-1 gap-3 sm:grid-cols-[minmax(7.5rem,1fr)_minmax(6.5rem,0.8fr)] xl:col-start-4">
               <div className="min-w-0 rounded-xl border border-sky-100 bg-sky-50 px-4 py-3">
                 <p className="flex items-center gap-1 text-xs font-black uppercase tracking-[0.12em] text-sky-700">
                   <BadgeDollarSign size={13} strokeWidth={2.2} />
