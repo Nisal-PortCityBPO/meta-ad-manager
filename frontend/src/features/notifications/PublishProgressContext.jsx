@@ -9,6 +9,7 @@ const HISTORY_LIMIT = 15;
 const HISTORY_EVENT_LIMIT = 120;
 const ACTIVE_SESSION_STATUSES = new Set(['active', 'pausing']);
 const LIVE_QUEUE_RAW_STATUSES = new Set(['PENDING']);
+const TRACKED_LIVE_STATUSES = new Set(['active', 'pausing', 'queued']);
 
 const readStoredHistory = () => {
   if (typeof window === 'undefined') {
@@ -140,9 +141,13 @@ export const PublishProgressProvider = ({ children }) => {
     });
 
     const activeSession =
+      normalizedSessions.find(
+        (session) =>
+          session.id === activeSessionRef.current?.id &&
+          (ACTIVE_SESSION_STATUSES.has(session.status) || LIVE_QUEUE_RAW_STATUSES.has(session.rawStatus) || (session.status === 'paused' && session.canResume))
+      ) ||
       normalizedSessions.find((session) => ACTIVE_SESSION_STATUSES.has(session.status)) ||
       normalizedSessions.find((session) => LIVE_QUEUE_RAW_STATUSES.has(session.rawStatus)) ||
-      normalizedSessions.find((session) => session.id === activeSessionRef.current?.id) ||
       normalizedSessions.find((session) => session.status === 'paused' && session.canResume);
 
     if (!activeSession) {
@@ -364,6 +369,24 @@ export const PublishProgressProvider = ({ children }) => {
     return result;
   }, [applyServerSessions]);
 
+  const focusPublishSession = useCallback((sessionId) => {
+    const session = publishHistory.find((item) => item.id === sessionId);
+
+    if (!session) {
+      return false;
+    }
+
+    activeSessionRef.current = session;
+    setCurrentPublishId(session.id);
+    setIsPublishing(ACTIVE_SESSION_STATUSES.has(session.status) || LIVE_QUEUE_RAW_STATUSES.has(session.rawStatus));
+    setLatestResult(session.latestResult || null);
+    setLatestError(session.latestError || '');
+    setEvents((session.events || []).slice(-40));
+    setProgress(session.progress || null);
+    setShowStartPopup(false);
+    return true;
+  }, [publishHistory]);
+
   const markPublishHistorySeen = () => {
     const latestTimestamp = publishHistory
       .map(getHistorySortTime)
@@ -428,14 +451,18 @@ export const PublishProgressProvider = ({ children }) => {
   }, [refreshPublishSessions]);
 
   useEffect(() => {
-    if (!isPublishing && !ACTIVE_SESSION_STATUSES.has(progress?.status) && activeSessionRef.current?.rawStatus !== 'PENDING') {
+    const hasTrackedLivePublish = publishHistory.some(
+      (item) => TRACKED_LIVE_STATUSES.has(item.status) || LIVE_QUEUE_RAW_STATUSES.has(item.rawStatus)
+    );
+
+    if (!isPublishing && !hasTrackedLivePublish && !ACTIVE_SESSION_STATUSES.has(progress?.status) && activeSessionRef.current?.rawStatus !== 'PENDING') {
       return undefined;
     }
 
     const pollMs = progress?.step === 'account-interval' || progress?.status === 'waiting' ? 1000 : 4000;
     const intervalId = window.setInterval(refreshPublishSessions, pollMs);
     return () => window.clearInterval(intervalId);
-  }, [isPublishing, progress?.status, progress?.step, refreshPublishSessions]);
+  }, [isPublishing, progress?.status, progress?.step, publishHistory, refreshPublishSessions]);
 
   useEffect(() => {
     if (!latestResult || isPublishing || progress?.status === 'paused') {
@@ -456,6 +483,7 @@ export const PublishProgressProvider = ({ children }) => {
       dismissStartPopup,
       events,
       failPublish,
+      focusPublishSession,
       isPublishing,
       latestError,
       latestResult,
@@ -485,6 +513,7 @@ export const PublishProgressProvider = ({ children }) => {
       publishHistoryUnreadCount,
       applyPublishSessions,
       clearPublishHistory,
+      focusPublishSession,
       refreshPublishSessions,
       requestPausePublish,
       resumeBusy,
