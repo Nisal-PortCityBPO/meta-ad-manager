@@ -195,6 +195,11 @@ const launchTemplateConfigSchema = new mongoose.Schema(
         default: '',
         trim: true,
       },
+      attributionSetting: {
+        type: String,
+        default: 'CLICK_1D',
+        trim: true,
+      },
     },
   },
   {
