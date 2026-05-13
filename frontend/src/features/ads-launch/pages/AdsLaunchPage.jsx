@@ -159,6 +159,13 @@ const staticDefaultOptions = {
     { value: 'LOWEST_COST_WITH_BID_CAP', label: 'Bid cap' },
     { value: 'COST_CAP', label: 'Cost cap' },
   ],
+  attributionSetting: [
+    { value: 'CLICK_1D', label: '1-day click only' },
+    { value: 'CLICK_7D_VIEW_1D', label: '7-day click + 1-day view' },
+    { value: 'CLICK_7D', label: '7-day click only' },
+    { value: 'CLICK_1D_VIEW_1D', label: '1-day click + 1-day view' },
+    { value: 'META_DEFAULT', label: 'Use Meta default' },
+  ],
 };
 
 const cappedBidStrategies = new Set(['LOWEST_COST_WITH_BID_CAP', 'COST_CAP']);
@@ -176,6 +183,7 @@ const defaultStaticDefaults = {
   billingEvent: 'IMPRESSIONS',
   bidStrategy: 'LOWEST_COST_WITHOUT_CAP',
   bidAmount: '',
+  attributionSetting: 'CLICK_1D',
 };
 
 const emptyForm = {
@@ -3027,6 +3035,25 @@ const AdsLaunchPage = () => {
                       : 'Lowest cost does not need a bid amount.'}
                   </p>
                 </div>
+
+                <div className="space-y-2 md:col-span-2">
+                  <FieldLabel htmlFor="default-attribution-setting">Attribution setting</FieldLabel>
+                  <select
+                    id="default-attribution-setting"
+                    value={form.staticDefaults.attributionSetting || defaultStaticDefaults.attributionSetting}
+                    onChange={(event) => updateStaticDefault('attributionSetting', event.target.value)}
+                    className="h-12 w-full rounded-xl border border-sky-100 bg-white px-4 outline-none transition focus:border-sky-400 focus:ring-4 focus:ring-sky-100"
+                  >
+                    {staticDefaultOptions.attributionSetting.map((option) => (
+                      <option key={option.value} value={option.value}>
+                        {option.label}
+                      </option>
+                    ))}
+                  </select>
+                  <p className="text-xs font-semibold text-slate-400">
+                    Sent to Meta as ad set attribution_spec. Use Meta default if the account/objective should decide automatically.
+                  </p>
+                </div>
               </div>
             ) : (
               <div className="space-y-3">
@@ -3088,6 +3115,12 @@ const AdsLaunchPage = () => {
                   <span className="text-sm font-semibold text-slate-500">Bid strategy</span>
                   <span className="text-right text-sm font-black text-slate-950">
                     {getOptionLabel(staticDefaultOptions.bidStrategy, form.staticDefaults.bidStrategy)}
+                  </span>
+                </div>
+                <div className="flex items-start justify-between gap-3 rounded-xl bg-sky-50/70 px-4 py-3">
+                  <span className="text-sm font-semibold text-slate-500">Attribution setting</span>
+                  <span className="text-right text-sm font-black text-slate-950">
+                    {getOptionLabel(staticDefaultOptions.attributionSetting, form.staticDefaults.attributionSetting || defaultStaticDefaults.attributionSetting)}
                   </span>
                 </div>
                 {bidAmountRequired ? (

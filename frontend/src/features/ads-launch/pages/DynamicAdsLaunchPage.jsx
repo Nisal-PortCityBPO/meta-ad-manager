@@ -25,6 +25,15 @@ const defaultStaticDefaults = {
   billingEvent: 'IMPRESSIONS',
   bidStrategy: 'LOWEST_COST_WITHOUT_CAP',
   bidAmount: '',
+  attributionSetting: 'CLICK_1D',
+};
+
+const attributionSettingLabels = {
+  CLICK_1D: '1-day click only',
+  CLICK_7D_VIEW_1D: '7-day click + 1-day view',
+  CLICK_7D: '7-day click only',
+  CLICK_1D_VIEW_1D: '1-day click + 1-day view',
+  META_DEFAULT: 'Use Meta default',
 };
 
 const defaultWebsiteEventByObjective = {
@@ -194,6 +203,10 @@ const TemplatePreviewModal = ({ template, onClose }) => {
             <TemplateDetail label="Daily budget" value={config.dailyBudget} />
             <TemplateDetail label="Publish status" value={campaignStatus} />
             <TemplateDetail label="Budget level" value={config.staticDefaults?.budgetLevel} />
+            <TemplateDetail
+              label="Attribution"
+              value={attributionSettingLabels[config.staticDefaults?.attributionSetting || defaultStaticDefaults.attributionSetting]}
+            />
             <TemplateDetail
               label="Bid strategy"
               value={

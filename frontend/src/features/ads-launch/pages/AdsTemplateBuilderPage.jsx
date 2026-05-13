@@ -35,6 +35,7 @@ const campaignDefaults = {
     billingEvent: 'IMPRESSIONS',
     bidStrategy: 'LOWEST_COST_WITHOUT_CAP',
     bidAmount: '',
+    attributionSetting: 'CLICK_1D',
   },
 };
 
@@ -132,6 +133,13 @@ const staticDefaultOptions = {
     { value: 'LOWEST_COST_WITHOUT_CAP', label: 'Lowest cost' },
     { value: 'LOWEST_COST_WITH_BID_CAP', label: 'Bid cap' },
     { value: 'COST_CAP', label: 'Cost cap' },
+  ],
+  attributionSetting: [
+    { value: 'CLICK_1D', label: '1-day click only' },
+    { value: 'CLICK_7D_VIEW_1D', label: '7-day click + 1-day view' },
+    { value: 'CLICK_7D', label: '7-day click only' },
+    { value: 'CLICK_1D_VIEW_1D', label: '1-day click + 1-day view' },
+    { value: 'META_DEFAULT', label: 'Use Meta default' },
   ],
 };
 
@@ -1006,6 +1014,22 @@ const AdsTemplateBuilderPage = () => {
                   placeholder={campaignBidAmountRequired ? 'Example: 5.00' : 'Only for capped strategies'}
                   className="h-12 w-full rounded-xl border border-sky-100 px-4 outline-none focus:border-sky-400 focus:ring-4 focus:ring-sky-100 disabled:bg-slate-50 disabled:text-slate-400"
                 />
+              </div>
+              <div className="space-y-2 xl:col-span-2">
+                <FieldLabel htmlFor="campaign-attribution-setting">Attribution setting</FieldLabel>
+                <select
+                  id="campaign-attribution-setting"
+                  value={campaignForm.staticDefaults.attributionSetting || campaignDefaults.staticDefaults.attributionSetting}
+                  onChange={(event) => updateCampaignDefault('attributionSetting', event.target.value)}
+                  className="h-12 w-full rounded-xl border border-sky-100 px-4 outline-none focus:border-sky-400 focus:ring-4 focus:ring-sky-100"
+                >
+                  {staticDefaultOptions.attributionSetting.map((option) => (
+                    <option key={option.value} value={option.value}>{option.label}</option>
+                  ))}
+                </select>
+                <p className="text-xs font-semibold text-slate-400">
+                  Saved into campaign templates and sent to Meta as ad set attribution_spec.
+                </p>
               </div>
               <div className="space-y-2">
                 <FieldLabel htmlFor="campaign-schedule-start">Schedule start</FieldLabel>

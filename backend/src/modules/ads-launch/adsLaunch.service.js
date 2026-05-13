@@ -131,8 +131,16 @@ const DEFAULT_STATIC_DEFAULTS = Object.freeze({
   billingEvent: 'IMPRESSIONS',
   bidStrategy: 'LOWEST_COST_WITHOUT_CAP',
   bidAmount: '',
+  attributionSetting: 'CLICK_1D',
 });
 const SPECIAL_AD_CATEGORY_NONE = 'NONE';
+const ATTRIBUTION_SETTINGS = Object.freeze({
+  META_DEFAULT: 'META_DEFAULT',
+  CLICK_1D: 'CLICK_1D',
+  CLICK_7D: 'CLICK_7D',
+  CLICK_1D_VIEW_1D: 'CLICK_1D_VIEW_1D',
+  CLICK_7D_VIEW_1D: 'CLICK_7D_VIEW_1D',
+});
 const SUPPORTED_BID_STRATEGIES = new Set([
   'LOWEST_COST_WITHOUT_CAP',
   'LOWEST_COST_WITH_BID_CAP',
@@ -300,6 +308,78 @@ function dedupeStrings(values) {
   );
 }
 
+function normalizeAttributionSetting(value) {
+  const normalizedValue = normalizeText(value).toUpperCase();
+  return Object.values(ATTRIBUTION_SETTINGS).includes(normalizedValue)
+    ? normalizedValue
+    : DEFAULT_STATIC_DEFAULTS.attributionSetting;
+}
+
+function buildAttributionSpec(staticDefaults = {}) {
+  const attributionSetting = normalizeAttributionSetting(staticDefaults.attributionSetting);
+
+  if (attributionSetting === ATTRIBUTION_SETTINGS.META_DEFAULT) {
+    return null;
+  }
+
+  const spec = [];
+
+  if (attributionSetting.includes('CLICK_1D')) {
+    spec.push({
+      event_type: 'CLICK_THROUGH',
+      window_days: 1,
+    });
+  } else if (attributionSetting.includes('CLICK_7D')) {
+    spec.push({
+      event_type: 'CLICK_THROUGH',
+      window_days: 7,
+    });
+  }
+
+  if (attributionSetting.includes('VIEW_1D')) {
+    spec.push({
+      event_type: 'VIEW_THROUGH',
+      window_days: 1,
+    });
+  }
+
+  return spec.length ? spec : null;
+}
+
+function buildFallbackAttributionSpecFromMetaError(error) {
+  const message = String(error?.message || '');
+  const match = message.match(/supported combination of click-through and view-through attribution window values are:\s*\((\d+),\s*(\d+)\)/i);
+
+  if (!match) {
+    return null;
+  }
+
+  const clickDays = Number.parseInt(match[1], 10);
+  const viewDays = Number.parseInt(match[2], 10);
+  const spec = [];
+
+  if (Number.isFinite(clickDays) && clickDays > 0) {
+    spec.push({
+      event_type: 'CLICK_THROUGH',
+      window_days: clickDays,
+    });
+  }
+
+  if (Number.isFinite(viewDays) && viewDays > 0) {
+    spec.push({
+      event_type: 'VIEW_THROUGH',
+      window_days: viewDays,
+    });
+  }
+
+  return spec.length ? spec : [];
+}
+
+function isAttributionWindowMetaError(error) {
+  const message = String(error?.message || '').toLowerCase();
+  return message.includes('attribution window') || message.includes('attribution_spec');
+}
+
 function sanitizeTemplateConfig(input = {}) {
   const staticDefaults = input.staticDefaults || {};
   const countries = dedupeStrings(input.countries);
@@ -341,6 +421,7 @@ function sanitizeTemplateConfig(input = {}) {
       billingEvent: normalizeText(staticDefaults.billingEvent) || DEFAULT_STATIC_DEFAULTS.billingEvent,
       bidStrategy: normalizeText(staticDefaults.bidStrategy) || DEFAULT_STATIC_DEFAULTS.bidStrategy,
       bidAmount: normalizeText(staticDefaults.bidAmount),
+      attributionSetting: normalizeAttributionSetting(staticDefaults.attributionSetting),
     },
   };
 }
@@ -3169,6 +3250,7 @@ function ensurePublishPayload(payload) {
       billingEvent: normalizeText(staticDefaults.billingEvent) || DEFAULT_STATIC_DEFAULTS.billingEvent,
       bidStrategy: normalizeText(staticDefaults.bidStrategy) || DEFAULT_STATIC_DEFAULTS.bidStrategy,
       bidAmount: normalizeText(staticDefaults.bidAmount),
+      attributionSetting: normalizeAttributionSetting(staticDefaults.attributionSetting),
     },
     media: sanitizeTemplateAssetInput(payload.media),
     thumbnail: sanitizeTemplateAssetInput(payload.thumbnail),
@@ -3367,6 +3449,7 @@ async function createAdSet({
   const isSpecialAdCategory = isSpecialAdCategoryCampaign(staticDefaults.specialAdCategories);
   const campaignBudget = usesCampaignBudget(staticDefaults);
   const bidStrategy = resolveBidStrategy(staticDefaults.bidStrategy);
+  const attributionSpec = buildAttributionSpec(staticDefaults);
   const targeting = {
     geo_locations: {
       countries,
@@ -3402,6 +3485,10 @@ async function createAdSet({
     is_dynamic_creative: resolveDynamicCreative(staticDefaults.dynamicCreative),
   };
 
+  if (attributionSpec) {
+    params.attribution_spec = attributionSpec;
+  }
+
   if (!campaignBudget) {
     params.daily_budget = toMetaBudget(dailyBudget, currency);
     params.bid_strategy = bidStrategy;
@@ -3428,11 +3515,34 @@ async function createAdSet({
     params.destination_type = settings.destinationType;
   }
 
-  return postToMeta({
-    token,
-    path: `${adAccountId}/adsets`,
-    params,
-  });
+  try {
+    return await postToMeta({
+      token,
+      path: `${adAccountId}/adsets`,
+      params,
+    });
+  } catch (error) {
+    if (!params.attribution_spec || !isAttributionWindowMetaError(error)) {
+      throw error;
+    }
+
+    const fallbackAttributionSpec = buildFallbackAttributionSpecFromMetaError(error);
+    const fallbackParams = {
+      ...params,
+    };
+
+    if (fallbackAttributionSpec) {
+      fallbackParams.attribution_spec = fallbackAttributionSpec;
+    } else {
+      delete fallbackParams.attribution_spec;
+    }
+
+    return postToMeta({
+      token,
+      path: `${adAccountId}/adsets`,
+      params: fallbackParams,
+    });
+  }
 }
 
 function buildDynamicAssetFeedSpec({
