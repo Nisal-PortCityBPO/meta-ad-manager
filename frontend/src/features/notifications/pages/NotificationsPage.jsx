@@ -26,6 +26,7 @@ const notifications = [
 ];
 
 const isQueuedPublishSession = (item) => item.rawStatus === 'PENDING' || item.queue?.status === 'PENDING';
+const isLivePublishSession = (item) => ['active', 'pausing'].includes(item.status) || item.queue?.status === 'RUNNING';
 
 const NotificationsPage = () => {
   const {
@@ -33,6 +34,7 @@ const NotificationsPage = () => {
     clearPublishHistory,
     currentPublishId,
     events,
+    focusPublishSession,
     latestError,
     latestResult,
     markPublishHistorySeen,
@@ -56,10 +58,15 @@ const NotificationsPage = () => {
   const [historyClearing, setHistoryClearing] = useState(false);
   const hasPublishNotice = Boolean(progress || events.length || latestResult || latestError);
   const currentPublishItem = publishHistory.find((item) => item.id === currentPublishId) || null;
+  const parallelPublishItems = publishHistory.filter(
+    (item) => item.id !== currentPublishId && isLivePublishSession(item)
+  ).sort((first, second) => String(first.queue?.startedAt || first.startedAt || '').localeCompare(String(second.queue?.startedAt || second.startedAt || '')));
   const queuedPublishItems = publishHistory.filter(
     (item) => item.id !== currentPublishId && isQueuedPublishSession(item)
   ).sort((first, second) => String(first.queue?.queuedAt || first.startedAt || '').localeCompare(String(second.queue?.queuedAt || second.startedAt || '')));
-  const savedHistory = publishHistory.filter((item) => (!hasPublishNotice || item.id !== currentPublishId) && !isQueuedPublishSession(item));
+  const savedHistory = publishHistory.filter(
+    (item) => (!hasPublishNotice || item.id !== currentPublishId) && !isQueuedPublishSession(item) && !isLivePublishSession(item)
+  );
   const historyPageSize = 5;
   const historyPageCount = Math.max(Math.ceil(savedHistory.length / historyPageSize), 1);
   const safeHistoryPage = Math.min(historyPage, historyPageCount);
@@ -259,19 +266,51 @@ const NotificationsPage = () => {
         </div>
       ) : null}
 
-      {queuedPublishItems.length ? (
-        <DashboardPanel title="Current publish queue" className="mb-4">
+      {parallelPublishItems.length || queuedPublishItems.length ? (
+        <DashboardPanel title="Parallel publish lanes" className="mb-4">
           <div className="space-y-3">
             <p className="rounded-2xl bg-sky-50 px-4 py-3 text-sm font-semibold text-slate-600">
-              These publishes are waiting for the current publish to finish. They are not mixed into Publish history until they run.
+              Different token/key lanes can run at the same time. Publishes using the same token or ad account wait here until that lane is free.
             </p>
+            {parallelPublishItems.map((item, index) => {
+              const progressData = item.progress?.progress || {};
+
+              return (
+                <div key={item.id || `${item.title}-${index}`} className="rounded-2xl border border-emerald-100 bg-white p-4 shadow-sm shadow-emerald-100/60">
+                  <div className="flex flex-wrap items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <p className="truncate text-sm font-black text-slate-950">{item.title || 'Running publish'}</p>
+                      <p className="mt-1 truncate text-xs font-semibold text-slate-500">
+                        {item.progress?.message || 'Publishing in a parallel lane'}
+                      </p>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <span className="inline-flex items-center gap-2 rounded-full bg-emerald-50 px-3 py-1 text-xs font-black uppercase tracking-[0.12em] text-emerald-700">
+                        <LoaderCircle size={13} className="animate-spin" />
+                        Running
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => focusPublishSession(item.id)}
+                        className="h-8 rounded-lg border border-sky-100 bg-white px-3 text-xs font-black uppercase tracking-[0.12em] text-sky-700 transition hover:bg-sky-50"
+                      >
+                        View
+                      </button>
+                    </div>
+                  </div>
+                  <div className="mt-3 h-2 overflow-hidden rounded-full bg-sky-50">
+                    <div className="h-full rounded-full bg-lime-500 transition-all duration-300" style={{ width: `${progressData.percent || 0}%` }} />
+                  </div>
+                </div>
+              );
+            })}
             {queuedPublishItems.map((item, index) => (
               <div key={item.id || `${item.title}-${index}`} className="rounded-2xl border border-sky-100 bg-white p-4 shadow-sm shadow-sky-100/60">
                 <div className="flex flex-wrap items-start justify-between gap-3">
                   <div className="min-w-0">
                     <p className="truncate text-sm font-black text-slate-950">{index + 1}. {item.title || 'Queued publish'}</p>
                     <p className="mt-1 truncate text-xs font-semibold text-slate-500">
-                      {item.progress?.message || 'Waiting for the current publish to finish'}
+                      {item.progress?.message || 'Waiting for its token/ad-account lane to become free'}
                     </p>
                   </div>
                   <span className="inline-flex items-center gap-2 rounded-full bg-amber-50 px-3 py-1 text-xs font-black uppercase tracking-[0.12em] text-amber-700">
