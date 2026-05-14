@@ -470,12 +470,15 @@ const KeyTypeToggle = ({ value, onChange }) => (
 );
 
 const MetaKeySettingsControl = () => {
+  const { hasRole } = useAuth();
   const { fetchTokenType, publishTokenType, setFetchTokenType, setPublishTokenType } = useMetaKeySettings();
   const [open, setOpen] = useState(false);
   const [telegramLoading, setTelegramLoading] = useState(false);
   const [telegramSaving, setTelegramSaving] = useState(false);
   const [telegramTesting, setTelegramTesting] = useState(false);
   const [publishIntervalSaving, setPublishIntervalSaving] = useState(false);
+  const [maintenanceSaving, setMaintenanceSaving] = useState(false);
+  const canManageMaintenance = hasRole([USER_ROLES.SUPER_ADMIN]);
   const [telegramForm, setTelegramForm] = useState({
     enabled: false,
     botToken: '',
@@ -487,6 +490,12 @@ const MetaKeySettingsControl = () => {
     enabled: true,
     minMinutes: '0.167',
     maxMinutes: '10',
+  });
+  const [maintenanceForm, setMaintenanceForm] = useState({
+    enabled: false,
+    title: 'Maintenance break',
+    message: 'We are improving Meta Account Manager right now. Please check back shortly.',
+    etaLabel: 'We will be back soon',
   });
   const controlRef = useRef(null);
 
@@ -512,8 +521,12 @@ const MetaKeySettingsControl = () => {
 
     let mounted = true;
     setTelegramLoading(true);
-    Promise.all([settingsApi.getTelegramSettings(), settingsApi.getPublishIntervalSettings()])
-      .then(([telegramData, intervalData]) => {
+    Promise.all([
+      settingsApi.getTelegramSettings(),
+      settingsApi.getPublishIntervalSettings(),
+      canManageMaintenance ? settingsApi.getMaintenanceSettings() : Promise.resolve({ maintenance: null }),
+    ])
+      .then(([telegramData, intervalData, maintenanceData]) => {
         if (!mounted) {
           return;
         }
@@ -530,6 +543,14 @@ const MetaKeySettingsControl = () => {
           minMinutes: String(intervalData.publishInterval?.minMinutes ?? 0.167),
           maxMinutes: String(intervalData.publishInterval?.maxMinutes ?? 10),
         });
+        if (maintenanceData.maintenance) {
+          setMaintenanceForm({
+            enabled: Boolean(maintenanceData.maintenance.enabled),
+            title: maintenanceData.maintenance.title || 'Maintenance break',
+            message: maintenanceData.maintenance.message || 'We are improving Meta Account Manager right now. Please check back shortly.',
+            etaLabel: maintenanceData.maintenance.etaLabel || 'We will be back soon',
+          });
+        }
       })
       .catch((requestError) => toast.error(requestError.message))
       .finally(() => {
@@ -541,7 +562,7 @@ const MetaKeySettingsControl = () => {
     return () => {
       mounted = false;
     };
-  }, [open]);
+  }, [open, canManageMaintenance]);
 
   const updateTelegramForm = (field, value) => {
     setTelegramForm((current) => ({
@@ -552,6 +573,13 @@ const MetaKeySettingsControl = () => {
 
   const updatePublishIntervalForm = (field, value) => {
     setPublishIntervalForm((current) => ({
+      ...current,
+      [field]: value,
+    }));
+  };
+
+  const updateMaintenanceForm = (field, value) => {
+    setMaintenanceForm((current) => ({
       ...current,
       [field]: value,
     }));
@@ -618,6 +646,29 @@ const MetaKeySettingsControl = () => {
     }
   };
 
+  const saveMaintenanceSettings = async () => {
+    setMaintenanceSaving(true);
+    try {
+      const data = await settingsApi.updateMaintenanceSettings({
+        enabled: maintenanceForm.enabled,
+        title: maintenanceForm.title,
+        message: maintenanceForm.message,
+        etaLabel: maintenanceForm.etaLabel,
+      });
+      setMaintenanceForm({
+        enabled: Boolean(data.maintenance?.enabled),
+        title: data.maintenance?.title || 'Maintenance break',
+        message: data.maintenance?.message || 'We are improving Meta Account Manager right now. Please check back shortly.',
+        etaLabel: data.maintenance?.etaLabel || 'We will be back soon',
+      });
+      toast.success(data.message);
+    } catch (requestError) {
+      toast.error(requestError.message);
+    } finally {
+      setMaintenanceSaving(false);
+    }
+  };
+
   return (
     <div className="relative" ref={controlRef}>
       <button
@@ -647,6 +698,78 @@ const MetaKeySettingsControl = () => {
               </div>
               <KeyTypeToggle value={publishTokenType} onChange={setPublishTokenType} />
             </div>
+
+            {canManageMaintenance ? (
+              <div className="border-t border-sky-50 pt-4">
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  <div>
+                    <p className="text-sm font-black text-slate-950">Maintenance break</p>
+                    <p className="mt-1 text-xs font-semibold leading-5 text-slate-500">
+                      Pause the workspace for admins and visitors while super admins keep access.
+                    </p>
+                  </div>
+                  <label className="inline-flex cursor-pointer items-center gap-2 rounded-full bg-orange-50 px-3 py-2 text-xs font-black text-orange-700">
+                    <input
+                      type="checkbox"
+                      checked={maintenanceForm.enabled}
+                      onChange={(event) => updateMaintenanceForm('enabled', event.target.checked)}
+                      className="h-4 w-4 rounded border-orange-200 text-orange-600 focus:ring-orange-500"
+                    />
+                    Enabled
+                  </label>
+                </div>
+                <div className="mt-3 grid gap-3">
+                  <div className="space-y-1.5">
+                    <label htmlFor="maintenance-title" className="text-xs font-black uppercase tracking-[0.14em] text-slate-500">
+                      Title
+                    </label>
+                    <input
+                      id="maintenance-title"
+                      value={maintenanceForm.title}
+                      onChange={(event) => updateMaintenanceForm('title', event.target.value)}
+                      className="h-11 w-full rounded-xl border border-sky-100 px-3 text-sm font-semibold outline-none focus:border-sky-400 focus:ring-4 focus:ring-sky-100"
+                      maxLength={80}
+                      placeholder="Maintenance break"
+                    />
+                  </div>
+                  <div className="space-y-1.5">
+                    <label htmlFor="maintenance-message" className="text-xs font-black uppercase tracking-[0.14em] text-slate-500">
+                      Custom message
+                    </label>
+                    <textarea
+                      id="maintenance-message"
+                      value={maintenanceForm.message}
+                      onChange={(event) => updateMaintenanceForm('message', event.target.value)}
+                      className="min-h-24 w-full rounded-xl border border-sky-100 px-3 py-3 text-sm font-semibold outline-none focus:border-sky-400 focus:ring-4 focus:ring-sky-100"
+                      maxLength={420}
+                      placeholder="Tell users what is happening and when to return."
+                    />
+                  </div>
+                  <div className="space-y-1.5">
+                    <label htmlFor="maintenance-eta" className="text-xs font-black uppercase tracking-[0.14em] text-slate-500">
+                      Status / ETA text
+                    </label>
+                    <input
+                      id="maintenance-eta"
+                      value={maintenanceForm.etaLabel}
+                      onChange={(event) => updateMaintenanceForm('etaLabel', event.target.value)}
+                      className="h-11 w-full rounded-xl border border-sky-100 px-3 text-sm font-semibold outline-none focus:border-sky-400 focus:ring-4 focus:ring-sky-100"
+                      maxLength={120}
+                      placeholder="We will be back soon"
+                    />
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={saveMaintenanceSettings}
+                  disabled={telegramLoading || maintenanceSaving}
+                  className="mt-3 inline-flex h-10 items-center gap-2 rounded-xl bg-orange-600 px-4 text-sm font-bold text-white transition hover:bg-orange-700 disabled:opacity-60"
+                >
+                  {maintenanceSaving ? <LoaderCircle size={16} className="animate-spin" /> : <AlertTriangle size={16} />}
+                  Save maintenance
+                </button>
+              </div>
+            ) : null}
 
             <div className="border-t border-sky-50 pt-4">
               <div className="flex flex-wrap items-start justify-between gap-3">

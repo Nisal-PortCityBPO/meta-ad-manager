@@ -2115,6 +2115,14 @@ async function listPublishSessions({ actor, limit = 15 }) {
   };
 }
 
+async function getPublishSession({ sessionId, actor }) {
+  const session = await getPublishSessionDocForActor(sessionId, actor);
+
+  return {
+    session: normalizeTerminalPublishSessionSafeObject(session.toSafeObject()),
+  };
+}
+
 async function resolvePublishSessionActor(session) {
   if (session?.createdBy) {
     const user = await User.findById(session.createdBy);
@@ -5350,6 +5358,7 @@ module.exports = {
   enqueuePublishLaunch,
   failPublishSession,
   forceStopPublishSession,
+  getPublishSession,
   getMediaAssetForActor,
   getTemplateAssetForActor,
   listPublishSessions,

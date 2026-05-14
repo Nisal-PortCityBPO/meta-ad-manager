@@ -5,8 +5,12 @@ const settingsController = require('./settings.controller');
 
 const router = express.Router();
 
+router.get('/maintenance/status', settingsController.getMaintenanceSettings);
+
 router.use(authenticate, authorize(USER_ROLES.SUPER_ADMIN, USER_ROLES.ADMIN));
 
+router.get('/maintenance', authorize(USER_ROLES.SUPER_ADMIN), settingsController.getMaintenanceSettings);
+router.put('/maintenance', authorize(USER_ROLES.SUPER_ADMIN), settingsController.updateMaintenanceSettings);
 router.get('/publish-interval', settingsController.getPublishIntervalSettings);
 router.put('/publish-interval', settingsController.updatePublishIntervalSettings);
 router.get('/telegram', settingsController.getTelegramSettings);

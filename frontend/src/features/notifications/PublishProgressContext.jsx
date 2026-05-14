@@ -6,6 +6,7 @@ const SUCCESS_CLEAR_DELAY_MS = 12000;
 const HISTORY_STORAGE_KEY = 'meta-manager.ads-publish-history.v1';
 const HISTORY_SEEN_STORAGE_KEY = 'meta-manager.ads-publish-history-seen-at.v1';
 const HISTORY_LIMIT = 15;
+const SERVER_REFRESH_LIMIT = 30;
 const HISTORY_EVENT_LIMIT = 120;
 const ACTIVE_SESSION_STATUSES = new Set(['active', 'pausing']);
 const LIVE_QUEUE_RAW_STATUSES = new Set(['PENDING']);
@@ -171,15 +172,22 @@ export const PublishProgressProvider = ({ children }) => {
       return nextHistory;
     });
 
-    const activeSession =
-      normalizedSessions.find(
-        (session) =>
-          session.id === activeSessionRef.current?.id &&
-          (ACTIVE_SESSION_STATUSES.has(session.status) || LIVE_QUEUE_RAW_STATUSES.has(session.rawStatus) || (session.status === 'paused' && session.canResume))
-      ) ||
+    const focusedSessionIds = uniqueTruthy([
+      activeSessionRef.current?.id,
+      activeSessionRef.current?.progress?.sessionId,
+    ]);
+    const focusedSession = normalizedSessions.find(
+      (session) => focusedSessionIds.includes(session.id) || focusedSessionIds.includes(session.progress?.sessionId)
+    );
+    const nextLiveSession =
       normalizedSessions.find((session) => ACTIVE_SESSION_STATUSES.has(session.status)) ||
       normalizedSessions.find((session) => LIVE_QUEUE_RAW_STATUSES.has(session.rawStatus)) ||
+      normalizedSessions.find((session) => session.status === 'queued') ||
       normalizedSessions.find((session) => session.status === 'paused' && session.canResume);
+    const focusedSessionCanStay =
+      focusedSession &&
+      (isLiveServerSession(focusedSession) || (focusedSession.status === 'paused' && focusedSession.canResume) || !nextLiveSession);
+    const activeSession = focusedSessionCanStay ? focusedSession : nextLiveSession;
 
     if (!activeSession) {
       return;
@@ -187,7 +195,11 @@ export const PublishProgressProvider = ({ children }) => {
 
     activeSessionRef.current = activeSession;
     setCurrentPublishId(activeSession.id);
-    setIsPublishing(ACTIVE_SESSION_STATUSES.has(activeSession.status) || LIVE_QUEUE_RAW_STATUSES.has(activeSession.rawStatus));
+    setIsPublishing(
+      ACTIVE_SESSION_STATUSES.has(activeSession.status) ||
+        LIVE_QUEUE_RAW_STATUSES.has(activeSession.rawStatus) ||
+        activeSession.status === 'queued'
+    );
     setLatestResult(activeSession.latestResult || null);
     setLatestError(activeSession.latestError || '');
     setEvents((activeSession.events || []).slice(-40));
@@ -405,7 +417,7 @@ export const PublishProgressProvider = ({ children }) => {
     setPublishHistorySeenAt(readSeenAt());
 
     try {
-      const data = await adsLaunchApi.getPublishSessions({ limit: HISTORY_LIMIT });
+      const data = await adsLaunchApi.getPublishSessions({ limit: SERVER_REFRESH_LIMIT });
       applyServerSessions(data.sessions || []);
     } catch {
       // The delete already succeeded; the next poll will restore active/queued sessions if needed.
@@ -423,7 +435,11 @@ export const PublishProgressProvider = ({ children }) => {
 
     activeSessionRef.current = session;
     setCurrentPublishId(session.id);
-    setIsPublishing(ACTIVE_SESSION_STATUSES.has(session.status) || LIVE_QUEUE_RAW_STATUSES.has(session.rawStatus));
+    setIsPublishing(
+      ACTIVE_SESSION_STATUSES.has(session.status) ||
+        LIVE_QUEUE_RAW_STATUSES.has(session.rawStatus) ||
+        session.status === 'queued'
+    );
     setLatestResult(session.latestResult || null);
     setLatestError(session.latestError || '');
     setEvents((session.events || []).slice(-40));
@@ -461,7 +477,7 @@ export const PublishProgressProvider = ({ children }) => {
       let serverSessions = [];
 
       try {
-        const sessionData = await adsLaunchApi.getPublishSessions({ limit: HISTORY_LIMIT });
+        const sessionData = await adsLaunchApi.getPublishSessions({ limit: SERVER_REFRESH_LIMIT });
         serverSessions = (sessionData.sessions || []).map(normalizeServerSession).filter(Boolean);
         if (sessionData.sessions?.length) {
           applyServerSessions(sessionData.sessions);
@@ -541,7 +557,7 @@ export const PublishProgressProvider = ({ children }) => {
       let serverSessions = [];
 
       try {
-        const sessionData = await adsLaunchApi.getPublishSessions({ limit: HISTORY_LIMIT });
+        const sessionData = await adsLaunchApi.getPublishSessions({ limit: SERVER_REFRESH_LIMIT });
         serverSessions = (sessionData.sessions || []).map(normalizeServerSession).filter(Boolean);
         if (sessionData.sessions?.length) {
           applyServerSessions(sessionData.sessions);
@@ -605,13 +621,50 @@ export const PublishProgressProvider = ({ children }) => {
   };
 
   const refreshPublishSessions = useCallback(async () => {
+    const candidateIds = uniqueTruthy([
+      currentPublishId,
+      progress?.sessionId,
+      activeSessionRef.current?.id,
+      activeSessionRef.current?.progress?.sessionId,
+    ]);
+    const requests = [
+      adsLaunchApi.getPublishSessions({ limit: SERVER_REFRESH_LIMIT }),
+      ...candidateIds.map((sessionId) => adsLaunchApi.getPublishSession(sessionId)),
+    ];
+
     try {
-      const data = await adsLaunchApi.getPublishSessions({ limit: HISTORY_LIMIT });
-      applyServerSessions(data.sessions || []);
+      const results = await Promise.allSettled(requests);
+      const sessions = [];
+
+      if (results[0]?.status === 'fulfilled') {
+        sessions.push(...(results[0].value?.sessions || []));
+      }
+
+      results.slice(1).forEach((result) => {
+        if (result.status === 'fulfilled' && result.value?.session) {
+          sessions.push(result.value.session);
+        }
+      });
+
+      const seenIds = new Set();
+      const uniqueSessions = sessions.filter((session) => {
+        const sessionId = session?.id || session?.sessionId;
+
+        if (!sessionId || seenIds.has(sessionId)) {
+          return false;
+        }
+
+        seenIds.add(sessionId);
+        return true;
+      });
+
+      if (uniqueSessions.length) {
+        applyServerSessions(uniqueSessions);
+      }
     } catch {
       // Local history still works if the backend is momentarily unreachable.
     }
-  }, [applyServerSessions]);
+  }, [applyServerSessions, currentPublishId, progress?.sessionId]);
 
   const requestPausePublish = useCallback(async (sessionId = currentPublishId) => {
     if (!sessionId) {
@@ -656,12 +709,17 @@ export const PublishProgressProvider = ({ children }) => {
     const hasTrackedLivePublish = publishHistory.some(
       (item) => TRACKED_LIVE_STATUSES.has(item.status) || LIVE_QUEUE_RAW_STATUSES.has(item.rawStatus)
     );
+    const activeSessionIsLive = Boolean(activeSessionRef.current && isLiveServerSession(activeSessionRef.current));
+    const progressIsLive =
+      ACTIVE_SESSION_STATUSES.has(progress?.status) ||
+      TRACKED_LIVE_STATUSES.has(progress?.status) ||
+      progress?.status === 'waiting';
 
-    if (!isPublishing && !hasTrackedLivePublish && !ACTIVE_SESSION_STATUSES.has(progress?.status) && activeSessionRef.current?.rawStatus !== 'PENDING') {
+    if (!isPublishing && !hasTrackedLivePublish && !activeSessionIsLive && !progressIsLive) {
       return undefined;
     }
 
-    const pollMs = progress?.step === 'account-interval' || progress?.status === 'waiting' ? 1000 : 4000;
+    const pollMs = 1000;
     const intervalId = window.setInterval(refreshPublishSessions, pollMs);
     return () => window.clearInterval(intervalId);
   }, [isPublishing, progress?.status, progress?.step, publishHistory, refreshPublishSessions]);

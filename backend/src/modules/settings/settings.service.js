@@ -6,6 +6,9 @@ const SETTINGS_KEY = 'global';
 const PUBLISH_INTERVAL_MIN_MINUTES = 10 / 60;
 const PUBLISH_INTERVAL_DEFAULT_MIN_MINUTES = 0.167;
 const PUBLISH_INTERVAL_MAX_MINUTES = 10;
+const DEFAULT_MAINTENANCE_TITLE = 'Maintenance break';
+const DEFAULT_MAINTENANCE_MESSAGE = 'We are improving Meta Account Manager right now. Please check back shortly.';
+const DEFAULT_MAINTENANCE_ETA = 'We will be back soon';
 
 function normalizeText(value) {
   return typeof value === 'string' ? value.trim() : '';
@@ -90,6 +93,63 @@ function toTelegramSafeObject(settings) {
     botTokenSet: Boolean(telegram.botToken),
     botTokenMasked: maskBotToken(telegram.botToken),
   };
+}
+
+function toMaintenanceSafeObject(settings) {
+  const maintenance = settings?.maintenance || {};
+
+  return {
+    enabled: Boolean(maintenance.enabled),
+    title: normalizeText(maintenance.title) || DEFAULT_MAINTENANCE_TITLE,
+    message: normalizeText(maintenance.message) || DEFAULT_MAINTENANCE_MESSAGE,
+    etaLabel: normalizeText(maintenance.etaLabel) || DEFAULT_MAINTENANCE_ETA,
+    updatedAt: settings?.updatedAt || null,
+  };
+}
+
+async function getMaintenanceSettings() {
+  const settings = await getGlobalSettingsDoc();
+  return toMaintenanceSafeObject(settings);
+}
+
+async function updateMaintenanceSettings({ enabled, title, message, etaLabel, actor, req }) {
+  const settings = await getGlobalSettingsDoc();
+  settings.maintenance = settings.maintenance || {};
+  const nextTitle = normalizeText(title) || DEFAULT_MAINTENANCE_TITLE;
+  const nextMessage = normalizeText(message) || DEFAULT_MAINTENANCE_MESSAGE;
+  const nextEtaLabel = normalizeText(etaLabel) || DEFAULT_MAINTENANCE_ETA;
+
+  if (nextTitle.length > 80) {
+    throw new HttpError(400, 'Maintenance title must be 80 characters or less');
+  }
+
+  if (nextMessage.length > 420) {
+    throw new HttpError(400, 'Maintenance message must be 420 characters or less');
+  }
+
+  if (nextEtaLabel.length > 120) {
+    throw new HttpError(400, 'Maintenance ETA text must be 120 characters or less');
+  }
+
+  settings.maintenance.enabled = Boolean(enabled);
+  settings.maintenance.title = nextTitle;
+  settings.maintenance.message = nextMessage;
+  settings.maintenance.etaLabel = nextEtaLabel;
+  settings.maintenance.updatedBy = actor?._id || null;
+  await settings.save();
+
+  await writeActivityLog({
+    user: actor,
+    action: 'SETTINGS_MAINTENANCE_UPDATED',
+    entity: 'Settings',
+    metadata: {
+      enabled: settings.maintenance.enabled,
+      title: settings.maintenance.title,
+    },
+    req,
+  });
+
+  return toMaintenanceSafeObject(settings);
 }
 
 async function getTelegramSettings() {
@@ -303,11 +363,13 @@ async function notifyPublishQueueStatus({ status, message, records = [] }) {
 }
 
 module.exports = {
+  getMaintenanceSettings,
   getPublishIntervalSettings,
   getTelegramSettings,
   notifyPublishQueueStatus,
   notifyPublishSummary,
   testTelegramSettings,
+  updateMaintenanceSettings,
   updatePublishIntervalSettings,
   updateTelegramSettings,
 };
