@@ -53,6 +53,18 @@ const writeSeenAt = (value) => {
 };
 
 const getHistorySortTime = (item = {}) => item.completedAt || item.progress?.timestamp || item.startedAt || '';
+const isLiveServerSession = (session = {}) =>
+  Boolean(
+    session.canForceStop ||
+      ACTIVE_SESSION_STATUSES.has(session.status) ||
+      LIVE_QUEUE_RAW_STATUSES.has(session.rawStatus) ||
+      session.status === 'queued'
+  );
+
+const isStopLookupError = (error) =>
+  /publish session not found|only a running, waiting, or paused publish can be force-stopped/i.test(error?.message || '');
+
+const uniqueTruthy = (items = []) => [...new Set(items.filter(Boolean))];
 
 const createInitialProgress = () => ({
   type: 'progress',
@@ -391,32 +403,119 @@ export const PublishProgressProvider = ({ children }) => {
   }, [publishHistory]);
 
   const forceStopPublish = useCallback(async (sessionId = currentPublishId) => {
-    if (!sessionId) {
+    const localIds = uniqueTruthy([
+      sessionId,
+      progress?.sessionId,
+      activeSessionRef.current?.id,
+      activeSessionRef.current?.progress?.sessionId,
+      currentPublishId,
+      ...publishHistory
+        .filter(isLiveServerSession)
+        .flatMap((item) => [item.id, item.progress?.sessionId]),
+    ]);
+
+    if (!localIds.length) {
       throw new Error('No live publish session to stop');
     }
 
     setStopBusy(true);
     try {
-      const data = await adsLaunchApi.forceStopPublishSession(sessionId);
-      const stoppedSession = normalizeServerSession(data.session);
-      if (data.session) {
-        applyServerSessions([data.session]);
+      let serverSessions = [];
+
+      try {
+        const sessionData = await adsLaunchApi.getPublishSessions({ limit: HISTORY_LIMIT });
+        serverSessions = (sessionData.sessions || []).map(normalizeServerSession).filter(Boolean);
+        if (sessionData.sessions?.length) {
+          applyServerSessions(sessionData.sessions);
+        }
+      } catch {
+        serverSessions = [];
       }
-      if (stoppedSession) {
-        activeSessionRef.current = stoppedSession;
-        setCurrentPublishId(stoppedSession.id);
-        setIsPublishing(false);
-        setLatestResult(stoppedSession.latestResult || null);
-        setLatestError(stoppedSession.latestError || '');
-        setEvents((stoppedSession.events || []).slice(-40));
-        setProgress(stoppedSession.progress || null);
-        setShowStartPopup(false);
+
+      const liveServerSessions = serverSessions.filter(isLiveServerSession);
+      const matchedServerSession = liveServerSessions.find((item) => localIds.includes(item.id) || localIds.includes(item.progress?.sessionId));
+      const candidateIds = uniqueTruthy([
+        matchedServerSession?.id,
+        liveServerSessions[0]?.id,
+        ...localIds,
+      ]);
+      let lastLookupError = null;
+
+      for (const candidateId of candidateIds) {
+        try {
+          const data = await adsLaunchApi.forceStopPublishSession(candidateId);
+          const stoppedSession = normalizeServerSession(data.session);
+          if (data.session) {
+            applyServerSessions([data.session]);
+          }
+          if (stoppedSession) {
+            activeSessionRef.current = stoppedSession;
+            setCurrentPublishId(stoppedSession.id);
+            setIsPublishing(false);
+            setLatestResult(stoppedSession.latestResult || null);
+            setLatestError(stoppedSession.latestError || '');
+            setEvents((stoppedSession.events || []).slice(-40));
+            setProgress(stoppedSession.progress || null);
+            setShowStartPopup(false);
+          }
+          return data;
+        } catch (error) {
+          if (!isStopLookupError(error)) {
+            throw error;
+          }
+
+          lastLookupError = error;
+        }
       }
-      return data;
+
+      const now = new Date().toISOString();
+      const baseSession =
+        activeSessionRef.current ||
+        publishHistory.find((item) => localIds.includes(item.id) || localIds.includes(item.progress?.sessionId)) ||
+        {};
+      const stoppedProgress = {
+        ...(baseSession.progress || progress || {}),
+        type: 'progress',
+        status: 'stopped',
+        step: 'force-stopped',
+        timestamp: now,
+        message: 'Local live publish was cleared because the server session could not be found.',
+        progress: {
+          ...(baseSession.progress?.progress || progress?.progress || {}),
+          etaSeconds: 0,
+        },
+      };
+      const stoppedSession = {
+        ...baseSession,
+        id: baseSession.id || localIds[0],
+        status: 'stopped',
+        rawStatus: 'FORCE_STOPPED',
+        completedAt: now,
+        progress: stoppedProgress,
+        events: [...(baseSession.events || events || []), stoppedProgress].slice(-HISTORY_EVENT_LIMIT),
+        latestResult: null,
+        latestError: lastLookupError?.message || 'Publish session not found',
+        canForceStop: false,
+      };
+
+      activeSessionRef.current = stoppedSession;
+      setCurrentPublishId(stoppedSession.id);
+      setIsPublishing(false);
+      setLatestResult(null);
+      setLatestError(stoppedSession.latestError);
+      setEvents(stoppedSession.events.slice(-40));
+      setProgress(stoppedProgress);
+      setShowStartPopup(false);
+      commitHistoryItem(stoppedSession);
+
+      return {
+        message: 'Stale live publish cleared locally. The server session was not found.',
+        session: stoppedSession,
+      };
     } finally {
       setStopBusy(false);
     }
-  }, [applyServerSessions, currentPublishId]);
+  }, [applyServerSessions, currentPublishId, events, progress, publishHistory]);
 
   const markPublishHistorySeen = () => {
     const latestTimestamp = publishHistory

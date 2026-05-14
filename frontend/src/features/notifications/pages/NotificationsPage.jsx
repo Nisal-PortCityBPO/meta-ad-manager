@@ -248,7 +248,7 @@ const NotificationsPage = () => {
     }
 
     try {
-      const data = await forceStopPublish(currentPublishId);
+      const data = await forceStopPublish();
       toast.success(data.message || 'Publish force-stopped');
     } catch (requestError) {
       toast.error(requestError.message);
