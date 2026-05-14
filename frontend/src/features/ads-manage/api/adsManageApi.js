@@ -1,6 +1,20 @@
 import { apiRequest } from '../../auth/api/authApi';
 
+const toQueryString = (params = {}) => {
+  const query = new URLSearchParams();
+
+  Object.entries(params).forEach(([key, value]) => {
+    if (value !== undefined && value !== null && value !== '') {
+      query.set(key, value);
+    }
+  });
+
+  const queryString = query.toString();
+  return queryString ? `?${queryString}` : '';
+};
+
 export const adsManageApi = {
+  getDynamicHistory: (params = {}) => apiRequest(`/ads-manage/dynamic-history${toQueryString(params)}`),
   getCampaigns: (payload) =>
     apiRequest('/ads-manage/campaigns/search', {
       method: 'POST',

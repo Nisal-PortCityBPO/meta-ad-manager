@@ -12,6 +12,7 @@ import {
   BookOpen,
   FolderKanban,
   Gauge,
+  History,
   ImageIcon,
   KeyRound,
   LayoutDashboard,
@@ -95,6 +96,7 @@ const navGroupsConfig = [
     label: 'System',
     items: [
       { to: '/errors', label: 'Errors', icon: AlertTriangle, roles: [USER_ROLES.SUPER_ADMIN, USER_ROLES.ADMIN] },
+      { to: '/dynamic-ads-history', label: 'Dynamic Ads History', icon: History, roles: [USER_ROLES.SUPER_ADMIN, USER_ROLES.ADMIN] },
       { to: '/notifications', label: 'Notifications', icon: Bell, roles: [USER_ROLES.SUPER_ADMIN, USER_ROLES.ADMIN] },
       { to: '/users', label: 'Users', icon: Users, roles: [USER_ROLES.SUPER_ADMIN] },
       { to: '/activity-logs', label: 'Activity Logs', icon: ClipboardList, roles: [USER_ROLES.SUPER_ADMIN] },

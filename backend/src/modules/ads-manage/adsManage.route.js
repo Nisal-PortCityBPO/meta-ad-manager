@@ -9,6 +9,7 @@ const superAdminOnly = authorize(USER_ROLES.SUPER_ADMIN);
 
 router.use(authenticate);
 
+router.get('/dynamic-history', adminOrSuperAdmin, adsManageController.listDynamicHistory);
 router.get('/errors', adminOrSuperAdmin, adsManageController.listErrors);
 router.delete('/errors/success', adminOrSuperAdmin, adsManageController.clearRecoveredErrors);
 router.post('/errors/:campaignId/check', adminOrSuperAdmin, adsManageController.checkErrorAccess);

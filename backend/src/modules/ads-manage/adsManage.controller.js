@@ -25,6 +25,20 @@ const listErrors = asyncHandler(async (req, res) => {
   res.json(result);
 });
 
+const listDynamicHistory = asyncHandler(async (req, res) => {
+  const result = await adsManageService.listDynamicHistory({
+    actor: req.user,
+    tokenId: req.query.tokenId,
+    status: req.query.status,
+    search: req.query.search,
+    brandId: req.query.brandId,
+    page: req.query.page,
+    limit: req.query.limit,
+  });
+
+  res.json(result);
+});
+
 const checkErrorAccess = asyncHandler(async (req, res) => {
   const result = await adsManageService.checkFailedLaunchAccess({
     tokenId: req.body.tokenId,
@@ -112,6 +126,7 @@ module.exports = {
   clearRecoveredErrors,
   deleteCampaign,
   duplicateCampaign,
+  listDynamicHistory,
   listErrors,
   listCampaigns,
   retryFailedLaunch,

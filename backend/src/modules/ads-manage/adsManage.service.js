@@ -34,6 +34,7 @@ const DEFAULT_QUEUE_RETRY_DELAY_MS = 5 * 60 * 1000;
 const MAX_QUEUE_RETRY_DELAY_MS = 60 * 60 * 1000;
 const META_ACCESS_COLLECTION_LIMIT = 500;
 const ERROR_PAGE_SIZE_OPTIONS = new Set([10, 25, 50]);
+const HISTORY_PAGE_SIZE_OPTIONS = new Set([10, 25, 50]);
 
 let publishQueueTimer = null;
 let publishQueueTimerDueAt = null;
@@ -203,6 +204,18 @@ function normalizeErrorPagination({ page = 1, limit = 25 } = {}) {
   const normalizedPage = Math.max(Number.parseInt(page, 10) || 1, 1);
   const parsedLimit = Number.parseInt(limit, 10) || 25;
   const normalizedLimit = ERROR_PAGE_SIZE_OPTIONS.has(parsedLimit) ? parsedLimit : 25;
+
+  return {
+    page: normalizedPage,
+    limit: normalizedLimit,
+    skip: (normalizedPage - 1) * normalizedLimit,
+  };
+}
+
+function normalizeHistoryPagination({ page = 1, limit = 25 } = {}) {
+  const normalizedPage = Math.max(Number.parseInt(page, 10) || 1, 1);
+  const parsedLimit = Number.parseInt(limit, 10) || 25;
+  const normalizedLimit = HISTORY_PAGE_SIZE_OPTIONS.has(parsedLimit) ? parsedLimit : 25;
 
   return {
     page: normalizedPage,
@@ -482,6 +495,237 @@ function buildCampaignErrorRow(record, tokenContextById = new Map()) {
     createdAt: safeRecord.createdAt,
     updatedAt: safeRecord.updatedAt,
   };
+}
+
+function getDynamicHistoryState(record = {}) {
+  const status = normalizeText(record.status).toUpperCase();
+  const source = normalizeText(record.source).toUpperCase();
+
+  if (status === 'FAILED' || source === 'ADS_LAUNCH_FAILED' || normalizeText(record.lastMetaError)) {
+    return 'FAILED';
+  }
+
+  if (status === 'DELETED' || record.deletedAt) {
+    return 'DELETED';
+  }
+
+  if (status === 'ACTIVE') {
+    return 'ACTIVE';
+  }
+
+  if (status === 'RETRIED') {
+    return 'RETRIED';
+  }
+
+  return 'SUCCESS';
+}
+
+function buildDynamicHistoryRow(record, tokenContextById = new Map()) {
+  const safeRecord = record.toSafeObject ? record.toSafeObject() : record;
+  const token = tokenContextById.get(safeRecord.tokenId) || {
+    id: safeRecord.tokenId,
+    label: safeRecord.tokenLabel,
+    brand: safeRecord.launch?.brandId
+      ? {
+          id: safeRecord.launch.brandId,
+          name: safeRecord.launch.brandName || '',
+        }
+      : null,
+    agency: null,
+    adsPowerProfile: '',
+  };
+  const queue = safeRecord.publishQueue || {};
+  const queueStatus = normalizeQueueStatus(queue.status);
+  const launch = safeRecord.launch || {};
+  const dynamicLabel =
+    normalizeText(launch.launchLabel) ||
+    normalizeText(safeRecord.name) ||
+    normalizeText(launch.campaignTemplateId) ||
+    'Dynamic launch';
+
+  return {
+    id: safeRecord.recordId || safeRecord.campaignId,
+    recordId: safeRecord.recordId,
+    campaignId: safeRecord.campaignId,
+    campaignName: safeRecord.name,
+    status: normalizeText(safeRecord.status).toUpperCase() || 'UNKNOWN',
+    effectiveStatus: normalizeText(safeRecord.effectiveStatus).toUpperCase() || '',
+    historyStatus: getDynamicHistoryState(safeRecord),
+    source: safeRecord.source || '',
+    objective: safeRecord.objective || '',
+    buyingType: safeRecord.buyingType || '',
+    tokenId: safeRecord.tokenId,
+    tokenLabel: safeRecord.tokenLabel,
+    token,
+    brandName: token.brand?.name || launch.brandName || '',
+    brandId: token.brand?.id || launch.brandId || '',
+    agencyName: token.agency?.name || '',
+    adsPowerProfile: token.adsPowerProfile || '',
+    adAccount: safeRecord.adAccount || {},
+    launch: {
+      launchLabel: dynamicLabel,
+      launchItemId: launch.launchItemId || '',
+      campaignTemplateId: launch.campaignTemplateId || '',
+      mediaTemplateId: launch.mediaTemplateId || '',
+      mediaAssetId: launch.mediaAssetId || '',
+      thumbnailAssetId: launch.thumbnailAssetId || '',
+      brandId: launch.brandId || '',
+      brandName: launch.brandName || '',
+      countries: Array.isArray(launch.countries) ? launch.countries : [],
+      countryLabel: launch.countryLabel || '',
+      dailyBudget: launch.dailyBudget || '',
+      page: launch.page || {},
+      pixel: launch.pixel || {},
+      websiteEvent: launch.websiteEvent || '',
+      headline: launch.headline || '',
+      primaryText: launch.primaryText || '',
+      description: launch.description || '',
+      websiteUrl: launch.websiteUrl || '',
+      displayUrl: launch.displayUrl || '',
+      urlParameters: launch.urlParameters || '',
+      scheduleStart: launch.scheduleStart || '',
+      scheduleEnd: launch.scheduleEnd || '',
+      callToAction: launch.callToAction || '',
+      media: launch.media || null,
+      thumbnail: launch.thumbnail || null,
+      staticDefaults: launch.staticDefaults || {},
+    },
+    meta: {
+      campaignId: safeRecord.campaignId && !String(safeRecord.campaignId).startsWith('failed_') ? safeRecord.campaignId : '',
+      adSetId: safeRecord.adSetId || '',
+      creativeId: safeRecord.creativeId || '',
+      adId: safeRecord.adId || '',
+      adSetName: safeRecord.adSetName || '',
+      creativeName: safeRecord.creativeName || '',
+      adName: safeRecord.adName || '',
+    },
+    budget: safeRecord.budget || {},
+    lastMetaError: safeRecord.lastMetaError || '',
+    queue: {
+      status: queueStatus,
+      reason: queue.reason || '',
+      tokenType: queue.tokenType || '',
+      source: queue.source || '',
+      queuedAt: queue.queuedAt || null,
+      nextAttemptAt: queue.nextAttemptAt || null,
+      runningStartedAt: queue.runningStartedAt || null,
+      completedAt: queue.completedAt || null,
+      attemptCount: queue.attemptCount || 0,
+      lastAttemptAt: queue.lastAttemptAt || null,
+      lastError: queue.lastError || '',
+    },
+    actionHistory: safeRecord.actionHistory || [],
+    createdAt: safeRecord.createdAt,
+    updatedAt: safeRecord.updatedAt,
+  };
+}
+
+function applyDynamicHistoryFilters(rows, { status = '', search = '', brandId = '' } = {}) {
+  const normalizedStatus = normalizeText(status).toUpperCase();
+  const normalizedSearch = normalizeText(search).toLowerCase();
+  const normalizedBrandId = normalizeText(brandId);
+
+  return rows.filter((row) => {
+    if (normalizedBrandId && row.brandId !== normalizedBrandId && row.launch?.brandId !== normalizedBrandId) {
+      return false;
+    }
+
+    if (normalizedStatus) {
+      const statusMatches =
+        row.historyStatus === normalizedStatus ||
+        row.status === normalizedStatus ||
+        row.effectiveStatus === normalizedStatus ||
+        row.queue?.status === normalizedStatus;
+
+      if (!statusMatches) {
+        return false;
+      }
+    }
+
+    if (!normalizedSearch) {
+      return true;
+    }
+
+    return [
+      row.campaignName,
+      row.campaignId,
+      row.historyStatus,
+      row.status,
+      row.objective,
+      row.tokenLabel,
+      row.brandName,
+      row.agencyName,
+      row.adsPowerProfile,
+      row.adAccount?.name,
+      row.adAccount?.id,
+      row.launch?.launchLabel,
+      row.launch?.launchItemId,
+      row.launch?.campaignTemplateId,
+      row.launch?.mediaTemplateId,
+      row.launch?.mediaAssetId,
+      row.launch?.thumbnailAssetId,
+      row.launch?.page?.name,
+      row.launch?.pixel?.name,
+      row.launch?.websiteUrl,
+      row.meta?.adSetId,
+      row.meta?.creativeId,
+      row.meta?.adId,
+      row.lastMetaError,
+    ]
+      .filter(Boolean)
+      .some((value) => String(value).toLowerCase().includes(normalizedSearch));
+  });
+}
+
+function summarizeDynamicHistoryRows(rows) {
+  const adAccounts = new Set();
+  const brands = new Set();
+
+  return rows.reduce(
+    (summary, row) => {
+      summary.total += 1;
+
+      if (row.historyStatus === 'FAILED') {
+        summary.failed += 1;
+      } else {
+        summary.success += 1;
+      }
+
+      if (row.status === 'ACTIVE') {
+        summary.active += 1;
+      }
+
+      if (row.status === 'PAUSED') {
+        summary.paused += 1;
+      }
+
+      if (ACTIVE_PUBLISH_QUEUE_STATUSES.includes(row.queue?.status)) {
+        summary.queued += 1;
+      }
+
+      if (row.adAccount?.id) {
+        adAccounts.add(row.adAccount.id);
+      }
+
+      if (row.brandId || row.brandName) {
+        brands.add(row.brandId || row.brandName);
+      }
+
+      summary.adAccounts = adAccounts.size;
+      summary.brands = brands.size;
+      return summary;
+    },
+    {
+      total: 0,
+      success: 0,
+      failed: 0,
+      active: 0,
+      paused: 0,
+      queued: 0,
+      adAccounts: 0,
+      brands: 0,
+    }
+  );
 }
 
 function buildTokenErrorRows(token) {
@@ -1336,6 +1580,69 @@ async function listCampaigns({ tokenId, adAccountIds = [], status }) {
       source: 'mongo-history',
       campaigns: campaigns.length,
       accounts: adAccounts.length,
+    },
+  };
+}
+
+async function listDynamicHistory({ actor = null, tokenId = '', status = '', search = '', brandId = '', page = 1, limit = 25 } = {}) {
+  const pagination = normalizeHistoryPagination({ page, limit });
+  const normalizedTokenId = normalizeText(tokenId);
+  const query = {
+    ...campaignAccessFilter(actor),
+    $or: [
+      {
+        'launch.launchItemId': {
+          $nin: ['', null],
+        },
+      },
+      {
+        'launch.campaignTemplateId': {
+          $nin: ['', null],
+        },
+      },
+      {
+        'launch.mediaTemplateId': {
+          $nin: ['', null],
+        },
+      },
+    ],
+  };
+
+  if (normalizedTokenId) {
+    query.tokenId = normalizedTokenId;
+  }
+
+  const campaigns = await ManagedCampaign.find(query).sort({ updatedAt: -1, createdAt: -1 });
+  const tokenIds = Array.from(
+    new Set(campaigns.map((campaign) => normalizeText(campaign.tokenId)).filter((id) => mongoose.Types.ObjectId.isValid(id)))
+  );
+  const tokens = tokenIds.length
+    ? await Token.find({ _id: { $in: tokenIds } }).populate('brand', 'name color').populate('agency', 'name')
+    : [];
+  const tokenContextById = new Map(
+    tokens.map((token) => {
+      const context = buildTokenContext(token);
+      return [context.id, context];
+    })
+  );
+  const rows = campaigns.map((campaign) => buildDynamicHistoryRow(campaign, tokenContextById));
+  const filteredRows = applyDynamicHistoryFilters(rows, { status, search, brandId });
+  const pageRows = filteredRows.slice(pagination.skip, pagination.skip + pagination.limit);
+
+  return {
+    history: pageRows,
+    summary: summarizeDynamicHistoryRows(filteredRows),
+    pagination: {
+      page: pagination.page,
+      limit: pagination.limit,
+      total: filteredRows.length,
+      pages: Math.max(Math.ceil(filteredRows.length / pagination.limit), 1),
+    },
+    filters: {
+      tokenId: normalizedTokenId,
+      status: normalizeText(status).toUpperCase(),
+      search: normalizeText(search),
+      brandId: normalizeText(brandId),
     },
   };
 }
@@ -2640,6 +2947,7 @@ module.exports = {
   deleteCampaign,
   duplicateCampaign,
   getPublishQueue,
+  listDynamicHistory,
   listErrors,
   listCampaigns,
   recordFailedLaunch,

@@ -5,6 +5,7 @@ import AnalysisPage from '../../features/analysis/pages/AnalysisPage';
 import AdsLaunchPage from '../../features/ads-launch/pages/AdsLaunchPage';
 import AdsMediaLibraryPage from '../../features/ads-launch/pages/AdsMediaLibraryPage';
 import AdsTemplateBuilderPage from '../../features/ads-launch/pages/AdsTemplateBuilderPage';
+import DynamicAdsHistoryPage from '../../features/ads-launch/pages/DynamicAdsHistoryPage';
 import DynamicAdsLaunchPage from '../../features/ads-launch/pages/DynamicAdsLaunchPage';
 import AdsManagePage from '../../features/ads-manage/pages/AdsManagePage';
 import LoginPage from '../../features/auth/pages/LoginPage';
@@ -73,6 +74,7 @@ const AppRouter = () => {
             <Route path="/ads-templates" element={<AdsTemplateBuilderPage />} />
             <Route path="/ads-media-library" element={<AdsMediaLibraryPage />} />
             <Route path="/dynamic-ads-launch" element={<DynamicAdsLaunchPage />} />
+            <Route path="/dynamic-ads-history" element={<DynamicAdsHistoryPage />} />
             <Route path="/meta-connection" element={<TokenManagementPage />} />
             <Route path="/roadmap" element={<RoadmapPage />} />
             <Route path="/tokens" element={<TokenManagementPage />} />
