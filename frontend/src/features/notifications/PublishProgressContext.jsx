@@ -126,6 +126,7 @@ export const PublishProgressProvider = ({ children }) => {
   const [pauseBusy, setPauseBusy] = useState(false);
   const [resumeBusy, setResumeBusy] = useState(false);
   const [stopBusy, setStopBusy] = useState(false);
+  const [deleteBusy, setDeleteBusy] = useState(false);
   const activeSessionRef = useRef(null);
   const publishHistoryUnreadCount = publishHistory.filter((item) => getHistorySortTime(item) > publishHistorySeenAt).length;
 
@@ -379,8 +380,21 @@ export const PublishProgressProvider = ({ children }) => {
     setPauseBusy(false);
     setResumeBusy(false);
     setStopBusy(false);
+    setDeleteBusy(false);
     activeSessionRef.current = null;
   };
+
+  const getPublishSessionCandidateIds = useCallback((sessionId = currentPublishId) =>
+    uniqueTruthy([
+      sessionId,
+      progress?.sessionId,
+      activeSessionRef.current?.id,
+      activeSessionRef.current?.progress?.sessionId,
+      currentPublishId,
+      ...publishHistory
+        .filter(isLiveServerSession)
+        .flatMap((item) => [item.id, item.progress?.sessionId]),
+    ]), [currentPublishId, progress, publishHistory]);
 
   const clearPublishHistory = useCallback(async () => {
     const result = await adsLaunchApi.clearPublishSessionsHistory();
@@ -419,16 +433,7 @@ export const PublishProgressProvider = ({ children }) => {
   }, [publishHistory]);
 
   const forceStopPublish = useCallback(async (sessionId = currentPublishId) => {
-    const localIds = uniqueTruthy([
-      sessionId,
-      progress?.sessionId,
-      activeSessionRef.current?.id,
-      activeSessionRef.current?.progress?.sessionId,
-      currentPublishId,
-      ...publishHistory
-        .filter(isLiveServerSession)
-        .flatMap((item) => [item.id, item.progress?.sessionId]),
-    ]);
+    const localIds = getPublishSessionCandidateIds(sessionId);
 
     if (progress?.status === 'stopped' || activeSessionRef.current?.status === 'stopped') {
       removeHistoryItems(localIds);
@@ -518,7 +523,71 @@ export const PublishProgressProvider = ({ children }) => {
     } finally {
       setStopBusy(false);
     }
-  }, [applyServerSessions, currentPublishId, progress, publishHistory, removeHistoryItems]);
+  }, [applyServerSessions, getPublishSessionCandidateIds, progress, publishHistory, removeHistoryItems]);
+
+  const deletePublishSession = useCallback(async (sessionId = currentPublishId) => {
+    const localIds = getPublishSessionCandidateIds(sessionId);
+
+    if (!localIds.length) {
+      clearPublishState();
+      return {
+        message: 'Local live publish removed.',
+        deletedCount: 0,
+      };
+    }
+
+    setDeleteBusy(true);
+    try {
+      let serverSessions = [];
+
+      try {
+        const sessionData = await adsLaunchApi.getPublishSessions({ limit: HISTORY_LIMIT });
+        serverSessions = (sessionData.sessions || []).map(normalizeServerSession).filter(Boolean);
+        if (sessionData.sessions?.length) {
+          applyServerSessions(sessionData.sessions);
+        }
+      } catch {
+        serverSessions = [];
+      }
+
+      const matchedServerSession = serverSessions.find((item) => localIds.includes(item.id) || localIds.includes(item.progress?.sessionId));
+      const candidateIds = uniqueTruthy([
+        matchedServerSession?.id,
+        ...localIds,
+      ]);
+      let deletedCount = 0;
+      let lastMessage = 'Publish session removed.';
+
+      for (const candidateId of candidateIds) {
+        try {
+          const data = await adsLaunchApi.deletePublishSession(candidateId);
+          deletedCount += Number(data.deletedCount || 0);
+          lastMessage = data.message || lastMessage;
+        } catch (error) {
+          if (!/publish session not found/i.test(error?.message || '')) {
+            throw error;
+          }
+        }
+      }
+
+      removeHistoryItems(candidateIds);
+      activeSessionRef.current = null;
+      setCurrentPublishId('');
+      setIsPublishing(false);
+      setLatestResult(null);
+      setLatestError('');
+      setEvents([]);
+      setProgress(null);
+      setShowStartPopup(false);
+
+      return {
+        message: deletedCount ? 'Publish session deleted.' : lastMessage,
+        deletedCount,
+      };
+    } finally {
+      setDeleteBusy(false);
+    }
+  }, [applyServerSessions, clearPublishState, currentPublishId, getPublishSessionCandidateIds, removeHistoryItems]);
 
   const markPublishHistorySeen = () => {
     const latestTimestamp = publishHistory
@@ -618,6 +687,8 @@ export const PublishProgressProvider = ({ children }) => {
       failPublish,
       focusPublishSession,
       forceStopPublish,
+      deleteBusy,
+      deletePublishSession,
       isPublishing,
       latestError,
       latestResult,
@@ -637,6 +708,7 @@ export const PublishProgressProvider = ({ children }) => {
     }),
     [
       currentPublishId,
+      deleteBusy,
       events,
       isPublishing,
       latestError,
@@ -648,6 +720,7 @@ export const PublishProgressProvider = ({ children }) => {
       publishHistoryUnreadCount,
       applyPublishSessions,
       clearPublishHistory,
+      deletePublishSession,
       focusPublishSession,
       forceStopPublish,
       refreshPublishSessions,

@@ -46,6 +46,7 @@ let publishSessionQueueTimer = null;
 let publishSessionQueueTimerDueAt = null;
 let publishSessionQueueRunning = false;
 const activePublishSessionResources = new Map();
+const forceStoppedPublishSessionIds = new Set();
 
 const SUPPORTED_WEBSITE_EVENTS = new Set([
   'LEAD',
@@ -1471,6 +1472,7 @@ async function getPublishSessionDocForActor(sessionId, actor) {
 
 async function startPublishSession({ sessionId = '', title = '', source = '', payload, actor }) {
   const normalizedSessionId = normalizePublishSessionId(sessionId) || createPublishSessionId();
+  forceStoppedPublishSessionIds.delete(normalizedSessionId);
   const session = await AdsLaunchPublishSession.findOneAndUpdate(
     {
       sessionId: normalizedSessionId,
@@ -1528,6 +1530,7 @@ async function countQueuedPublishSessionsBefore(session) {
 
 async function enqueuePublishLaunch({ payload, actor }) {
   const normalizedSessionId = normalizePublishSessionId(payload?.publishSessionId) || createPublishSessionId();
+  forceStoppedPublishSessionIds.delete(normalizedSessionId);
   const now = new Date();
   const queuedEvent = {
     sessionId: normalizedSessionId,
@@ -1824,6 +1827,7 @@ async function requestPublishSessionPause({ sessionId, actor }) {
 
 async function forceStopPublishSession({ sessionId, actor, req }) {
   const session = await getPublishSessionDocForActor(sessionId, actor);
+  forceStoppedPublishSessionIds.add(session.sessionId);
 
   if (session.status === PUBLISH_SESSION_STATUSES.FORCE_STOPPED) {
     return session.toSafeObject();
@@ -1897,6 +1901,44 @@ async function forceStopPublishSession({ sessionId, actor, req }) {
   return session.toSafeObject();
 }
 
+async function deletePublishSession({ sessionId, actor, req }) {
+  if (!isSuperAdmin(actor)) {
+    throw new HttpError(403, 'Only the super administrator can delete publish sessions');
+  }
+
+  const normalizedSessionId = normalizePublishSessionId(sessionId);
+
+  if (!normalizedSessionId) {
+    throw new HttpError(400, 'Publish session id is required');
+  }
+
+  const session = await AdsLaunchPublishSession.findOne({ sessionId: normalizedSessionId });
+  forceStoppedPublishSessionIds.add(normalizedSessionId);
+  const result = await AdsLaunchPublishSession.deleteOne({ sessionId: normalizedSessionId });
+  const deletedCount = result.deletedCount || 0;
+
+  releasePublishSessionResources(normalizedSessionId);
+  schedulePublishSessionQueueRun(0);
+
+  await writeActivityLog({
+    user: actor,
+    action: 'ADS_PUBLISH_SESSION_DELETED',
+    entity: 'AdsLaunchPublishSession',
+    entityId: session?._id?.toString?.() || normalizedSessionId,
+    metadata: {
+      sessionId: normalizedSessionId,
+      title: session?.title || '',
+      deletedCount,
+    },
+    req,
+  });
+
+  return {
+    deletedCount,
+    message: deletedCount ? 'Publish session deleted' : 'Publish session was already missing',
+  };
+}
+
 async function isPublishSessionPauseRequested(sessionId) {
   const normalizedSessionId = normalizePublishSessionId(sessionId);
 
@@ -1920,6 +1962,10 @@ async function isPublishSessionForceStopped(sessionId) {
 
   if (!normalizedSessionId) {
     return false;
+  }
+
+  if (forceStoppedPublishSessionIds.has(normalizedSessionId)) {
+    return true;
   }
 
   const session = await AdsLaunchPublishSession.findOne({ sessionId: normalizedSessionId })
@@ -2602,6 +2648,7 @@ async function resumePublishSession({ sessionId, actor, req }) {
   session.pauseRequestedAt = null;
   session.forceStopRequested = false;
   session.forceStopRequestedAt = null;
+  forceStoppedPublishSessionIds.delete(session.sessionId);
   session.pausedAt = null;
   session.stoppedAt = null;
   session.completedAt = null;
@@ -5298,6 +5345,7 @@ module.exports = {
   createTemplate,
   deleteMediaAsset,
   deleteMediaFolder,
+  deletePublishSession,
   deleteTemplate,
   enqueuePublishLaunch,
   failPublishSession,

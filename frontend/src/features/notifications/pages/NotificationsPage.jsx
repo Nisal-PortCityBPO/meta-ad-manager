@@ -9,6 +9,7 @@ import { tokensApi } from '../../token-management/api/tokensApi';
 import PublishHistoryList from '../components/PublishHistoryList';
 import PublishProgressPanel from '../components/PublishProgressPanel';
 import { usePublishProgress } from '../PublishProgressContext';
+import { USER_ROLES, useAuth } from '../../auth/hooks/useAuth';
 
 const notifications = [
   {
@@ -33,6 +34,8 @@ const NotificationsPage = () => {
     applyPublishSessions,
     clearPublishHistory,
     currentPublishId,
+    deleteBusy,
+    deletePublishSession,
     events,
     focusPublishSession,
     forceStopPublish,
@@ -48,6 +51,7 @@ const NotificationsPage = () => {
     resumePausedPublish,
     stopBusy,
   } = usePublishProgress();
+  const { hasRole } = useAuth();
   const { publishTokenType } = useMetaKeySettings();
   const [retryingRecordId, setRetryingRecordId] = useState('');
   const [publishQueue, setPublishQueue] = useState({ queue: [], state: { running: false, counts: {} } });
@@ -59,6 +63,7 @@ const NotificationsPage = () => {
   const [historyPage, setHistoryPage] = useState(1);
   const [historyClearing, setHistoryClearing] = useState(false);
   const hasPublishNotice = Boolean(progress || events.length || latestResult || latestError);
+  const canDeletePublishSession = hasRole([USER_ROLES.SUPER_ADMIN]);
   const currentPublishItem = publishHistory.find((item) => item.id === currentPublishId) || null;
   const parallelPublishItems = publishHistory.filter(
     (item) => item.id !== currentPublishId && isLivePublishSession(item)
@@ -255,6 +260,23 @@ const NotificationsPage = () => {
     }
   };
 
+  const deleteLivePublish = async () => {
+    const confirmed = window.confirm(
+      'Delete this publish process from the database and remove it from the live panel? This is only for stuck/invalid sessions.'
+    );
+
+    if (!confirmed) {
+      return;
+    }
+
+    try {
+      const data = await deletePublishSession();
+      toast.success(data.message || 'Publish session deleted');
+    } catch (requestError) {
+      toast.error(requestError.message);
+    }
+  };
+
   const resumePublish = async (sessionId = currentPublishId) => {
     try {
       const data = await resumePausedPublish(sessionId);
@@ -271,17 +293,20 @@ const NotificationsPage = () => {
       {hasPublishNotice ? (
         <div className="mb-4">
           <PublishProgressPanel
+            canDelete={canDeletePublishSession}
             canForceStop={Boolean(currentPublishItem?.canForceStop || ['active', 'pausing', 'waiting', 'queued'].includes(progress?.status))}
             canPause={Boolean(currentPublishItem?.canPause)}
             canResume={Boolean(currentPublishItem?.canResume)}
             events={events}
             latestError={latestError}
             latestResult={latestResult}
+            onDelete={deleteLivePublish}
             onForceStop={forceStopLivePublish}
             onPause={pauseLivePublish}
             onResume={() => resumePublish(currentPublishId)}
             pauseBusy={pauseBusy}
             progress={progress}
+            deleteBusy={deleteBusy}
             resumeBusy={resumeBusy}
             stopBusy={stopBusy}
           />

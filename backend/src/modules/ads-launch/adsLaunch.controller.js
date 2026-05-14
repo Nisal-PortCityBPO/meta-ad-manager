@@ -220,6 +220,16 @@ const clearPublishSessionHistory = asyncHandler(async (req, res) => {
   res.json(result);
 });
 
+const deletePublishSession = asyncHandler(async (req, res) => {
+  const result = await adsLaunchService.deletePublishSession({
+    sessionId: req.params.sessionId,
+    actor: req.user,
+    req,
+  });
+
+  res.json(result);
+});
+
 const pausePublishSession = asyncHandler(async (req, res) => {
   const session = await adsLaunchService.requestPublishSessionPause({
     sessionId: req.params.sessionId,
@@ -389,6 +399,7 @@ module.exports = {
   createTemplate,
   deleteMediaAsset,
   deleteMediaFolder,
+  deletePublishSession,
   deleteTemplate,
   getMediaAsset,
   getMediaAssets,

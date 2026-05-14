@@ -1,4 +1,4 @@
-import { CheckCircle2, Clock3, LoaderCircle, PauseCircle, Play, XCircle } from 'lucide-react';
+import { CheckCircle2, Clock3, LoaderCircle, PauseCircle, Play, Trash2, XCircle } from 'lucide-react';
 
 export const formatDuration = (seconds) => {
   if (seconds === null || seconds === undefined) {
@@ -62,6 +62,7 @@ const getEventTime = (event) => {
 const PublishProgressPanel = ({
   canPause = false,
   canForceStop = false,
+  canDelete = false,
   canResume = false,
   events,
   label = 'Live publish process',
@@ -69,11 +70,13 @@ const PublishProgressPanel = ({
   latestResult,
   onPause = null,
   onForceStop = null,
+  onDelete = null,
   onResume = null,
   pauseBusy = false,
   progress,
   resumeBusy = false,
   stopBusy = false,
+  deleteBusy = false,
 }) => {
   if (!progress && !events.length && !latestResult && !latestError) {
     return null;
@@ -89,6 +92,7 @@ const PublishProgressPanel = ({
   const waitingBetweenAccounts = progress?.step === 'account-interval' || progress?.status === 'waiting';
   const showPause = Boolean(onPause && canPause && hasPauseTarget && (progress?.status === 'active' || waitingBetweenAccounts));
   const showForceStop = Boolean(onForceStop && canForceStop && ['active', 'pausing', 'waiting', 'queued'].includes(progress?.status));
+  const showDelete = Boolean(onDelete && canDelete);
   const showResume = Boolean(onResume && canResume && progress?.status === 'paused');
   const visibleEvents = [...events]
     .filter((event) => event.step !== 'account-interval')
@@ -150,6 +154,18 @@ const PublishProgressPanel = ({
             >
               {stopBusy ? <LoaderCircle size={14} className="animate-spin" /> : <XCircle size={14} />}
               Force stop
+            </button>
+          ) : null}
+          {showDelete ? (
+            <button
+              type="button"
+              onClick={onDelete}
+              disabled={deleteBusy}
+              className="inline-flex h-9 items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 text-xs font-black uppercase tracking-[0.12em] text-slate-700 transition hover:bg-slate-50 disabled:opacity-60"
+              title="Super admin only. Deletes this publish session from the database and clears the live panel."
+            >
+              {deleteBusy ? <LoaderCircle size={14} className="animate-spin" /> : <Trash2 size={14} />}
+              Delete
             </button>
           ) : null}
           {showResume ? (

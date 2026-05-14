@@ -237,6 +237,10 @@ export const adsLaunchApi = {
     apiRequest('/ads-launch/publish-sessions/history', {
       method: 'DELETE',
     }),
+  deletePublishSession: (sessionId) =>
+    apiRequest(`/ads-launch/publish-sessions/${sessionId}`, {
+      method: 'DELETE',
+    }),
   pausePublishSession: (sessionId) =>
     apiRequest(`/ads-launch/publish-sessions/${sessionId}/pause`, {
       method: 'POST',

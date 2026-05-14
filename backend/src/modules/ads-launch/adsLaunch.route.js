@@ -107,6 +107,7 @@ router.post('/publish-queue/run', adsLaunchController.runPublishQueue);
 router.delete('/publish-queue', adsLaunchController.clearPublishQueue);
 router.get('/publish-sessions', adsLaunchController.getPublishSessions);
 router.delete('/publish-sessions/history', adsLaunchController.clearPublishSessionHistory);
+router.delete('/publish-sessions/:sessionId', authorize(USER_ROLES.SUPER_ADMIN), adsLaunchController.deletePublishSession);
 router.post('/publish-sessions/:sessionId/pause', adsLaunchController.pausePublishSession);
 router.post('/publish-sessions/:sessionId/force-stop', adsLaunchController.forceStopPublishSession);
 router.post('/publish-sessions/:sessionId/resume', adsLaunchController.resumePublishSession);
