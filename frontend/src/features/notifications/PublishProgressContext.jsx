@@ -137,6 +137,22 @@ export const PublishProgressProvider = ({ children }) => {
     });
   };
 
+  const removeHistoryItems = useCallback((ids = []) => {
+    const idSet = new Set(ids.filter(Boolean));
+
+    if (!idSet.size) {
+      return;
+    }
+
+    setPublishHistory((current) => {
+      const nextHistory = current.filter(
+        (historyItem) => !idSet.has(historyItem.id) && !idSet.has(historyItem.progress?.sessionId)
+      );
+      writeStoredHistory(nextHistory);
+      return nextHistory;
+    });
+  }, []);
+
   const applyServerSessions = useCallback((sessions = []) => {
     const normalizedSessions = sessions.map(normalizeServerSession).filter(Boolean);
 
@@ -414,6 +430,23 @@ export const PublishProgressProvider = ({ children }) => {
         .flatMap((item) => [item.id, item.progress?.sessionId]),
     ]);
 
+    if (progress?.status === 'stopped' || activeSessionRef.current?.status === 'stopped') {
+      removeHistoryItems(localIds);
+      activeSessionRef.current = null;
+      setCurrentPublishId('');
+      setIsPublishing(false);
+      setLatestResult(null);
+      setLatestError('');
+      setEvents([]);
+      setProgress(null);
+      setShowStartPopup(false);
+
+      return {
+        message: 'Stale live publish removed.',
+        session: null,
+      };
+    }
+
     if (!localIds.length) {
       throw new Error('No live publish session to stop');
     }
@@ -468,54 +501,24 @@ export const PublishProgressProvider = ({ children }) => {
         }
       }
 
-      const now = new Date().toISOString();
-      const baseSession =
-        activeSessionRef.current ||
-        publishHistory.find((item) => localIds.includes(item.id) || localIds.includes(item.progress?.sessionId)) ||
-        {};
-      const stoppedProgress = {
-        ...(baseSession.progress || progress || {}),
-        type: 'progress',
-        status: 'stopped',
-        step: 'force-stopped',
-        timestamp: now,
-        message: 'Local live publish was cleared because the server session could not be found.',
-        progress: {
-          ...(baseSession.progress?.progress || progress?.progress || {}),
-          etaSeconds: 0,
-        },
-      };
-      const stoppedSession = {
-        ...baseSession,
-        id: baseSession.id || localIds[0],
-        status: 'stopped',
-        rawStatus: 'FORCE_STOPPED',
-        completedAt: now,
-        progress: stoppedProgress,
-        events: [...(baseSession.events || events || []), stoppedProgress].slice(-HISTORY_EVENT_LIMIT),
-        latestResult: null,
-        latestError: lastLookupError?.message || 'Publish session not found',
-        canForceStop: false,
-      };
-
-      activeSessionRef.current = stoppedSession;
-      setCurrentPublishId(stoppedSession.id);
+      removeHistoryItems(localIds);
+      activeSessionRef.current = null;
+      setCurrentPublishId('');
       setIsPublishing(false);
       setLatestResult(null);
-      setLatestError(stoppedSession.latestError);
-      setEvents(stoppedSession.events.slice(-40));
-      setProgress(stoppedProgress);
+      setLatestError('');
+      setEvents([]);
+      setProgress(null);
       setShowStartPopup(false);
-      commitHistoryItem(stoppedSession);
 
       return {
-        message: 'Stale live publish cleared locally. The server session was not found.',
-        session: stoppedSession,
+        message: 'Stale live publish removed.',
+        session: null,
       };
     } finally {
       setStopBusy(false);
     }
-  }, [applyServerSessions, currentPublishId, events, progress, publishHistory]);
+  }, [applyServerSessions, currentPublishId, progress, publishHistory, removeHistoryItems]);
 
   const markPublishHistorySeen = () => {
     const latestTimestamp = publishHistory
