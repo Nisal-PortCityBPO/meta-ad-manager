@@ -279,5 +279,5 @@ jobs:
           port: ${{ secrets[matrix.port_secret] || secrets.VPS_SSH_PORT || '22' }}
           envs: VERSION,IMAGE,GHCR_USER,GHCR_TOKEN,APP_DIR,APP_PORT,DOCKER_NETWORK
           script_stop: true
-          script_path: remote-deploy.sh
+          script_path: deploy.sh
 
