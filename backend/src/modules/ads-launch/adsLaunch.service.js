@@ -41,6 +41,10 @@ const META_QUEUEABLE_HTTP_STATUSES = new Set([429, 500, 502, 503, 504]);
 const DEFAULT_QUEUE_RETRY_AFTER_SECONDS = 300;
 const MAX_QUEUE_RETRY_AFTER_SECONDS = 3600;
 const PUBLISH_SESSION_EVENT_LIMIT = 120;
+const SCHEDULE_MIN_LEAD_MINUTES = 10;
+const INDONESIA_TIME_ZONE_LABEL = 'Indonesia time (WIB, UTC+7)';
+const INDONESIA_UTC_OFFSET_COMPACT = '+0700';
+const INDONESIA_UTC_OFFSET_ISO = '+07:00';
 
 let publishSessionQueueTimer = null;
 let publishSessionQueueTimerDueAt = null;
@@ -386,6 +390,9 @@ function sanitizeTemplateConfig(input = {}) {
   const countries = dedupeStrings(input.countries);
   const fallbackCountry = normalizeText(input.country);
   const normalizedCountries = countries.length ? countries : fallbackCountry ? [fallbackCountry] : [];
+  const scheduleStart = normalizeOptionalScheduleTime(input.scheduleStart, 'Schedule start');
+  const scheduleEnd = normalizeOptionalScheduleTime(input.scheduleEnd, 'Schedule end');
+  validateScheduleWindow({ scheduleStart, scheduleEnd });
 
   return {
     launchLabel: normalizeText(input.launchLabel),
@@ -405,8 +412,8 @@ function sanitizeTemplateConfig(input = {}) {
     websiteUrl: normalizeText(input.websiteUrl),
     displayUrl: normalizeText(input.displayUrl),
     urlParameters: normalizeUrlParameters(input.urlParameters),
-    scheduleStart: normalizeText(input.scheduleStart),
-    scheduleEnd: normalizeText(input.scheduleEnd),
+    scheduleStart,
+    scheduleEnd,
     callToAction: normalizeText(input.callToAction),
     staticDefaults: {
       buyingType: normalizeText(staticDefaults.buyingType) || DEFAULT_STATIC_DEFAULTS.buyingType,
@@ -1346,21 +1353,51 @@ function normalizePublishSessionId(sessionId) {
   return normalizeText(sessionId).slice(0, 120);
 }
 
+function getAccountLaunchItemId(accountLaunch = {}, index = 0) {
+  return (
+    normalizeText(accountLaunch.launchItemId) ||
+    normalizeText(accountLaunch.assignmentId) ||
+    `${normalizeText(accountLaunch.adAccountId) || 'account'}-${index + 1}`
+  );
+}
+
+function getPublishRequestCount(payload = {}) {
+  return Array.isArray(payload.accountLaunches) && payload.accountLaunches.length
+    ? payload.accountLaunches.length
+    : Array.isArray(payload.selectedAdAccountIds)
+      ? payload.selectedAdAccountIds.length
+      : 0;
+}
+
 function getPublishTitleFromPayload(payload = {}) {
   const launchLabel = normalizeText(payload.launchLabel);
   return launchLabel ? `Ads Launch: ${launchLabel}` : 'Ads publish';
 }
 
-function buildRemainingPublishPayload({ payload, remainingAdAccountIds = [] }) {
-  const remainingSet = new Set(remainingAdAccountIds);
+function buildRemainingPublishPayload({ payload, remainingAdAccountIds = [], remainingAccountLaunches = null }) {
+  const hasRemainingAccountLaunches = Array.isArray(remainingAccountLaunches);
+  const normalizedRemainingAccountLaunches = hasRemainingAccountLaunches ? remainingAccountLaunches : null;
+  const effectiveRemainingAdAccountIds = hasRemainingAccountLaunches
+    ? dedupeStrings(normalizedRemainingAccountLaunches.map((accountLaunch) => accountLaunch.adAccountId))
+    : remainingAdAccountIds;
+  const remainingSet = new Set(effectiveRemainingAdAccountIds);
+  const remainingLaunchItemIds = new Set(
+    (normalizedRemainingAccountLaunches || []).map((accountLaunch, index) => getAccountLaunchItemId(accountLaunch, index))
+  );
 
   return {
     ...payload,
-    selectedAdAccountIds: remainingAdAccountIds,
+    selectedAdAccountIds: effectiveRemainingAdAccountIds,
     selectedAdAccounts: (payload.selectedAdAccounts || []).filter((account) => remainingSet.has(account.id)),
-    accountLaunches: (payload.accountLaunches || []).filter((accountLaunch) => remainingSet.has(accountLaunch.adAccountId)),
+    accountLaunches: normalizedRemainingAccountLaunches || (payload.accountLaunches || []).filter((accountLaunch) => remainingSet.has(accountLaunch.adAccountId)),
     resumeState: Object.fromEntries(
-      Object.entries(payload.resumeState || {}).filter(([adAccountId]) => remainingSet.has(adAccountId))
+      Object.entries(payload.resumeState || {}).filter(
+        ([key, state]) =>
+          remainingSet.has(key) ||
+          remainingSet.has(state?.adAccountId) ||
+          remainingLaunchItemIds.has(key) ||
+          remainingLaunchItemIds.has(state?.launchItemId)
+      )
     ),
   };
 }
@@ -1376,7 +1413,9 @@ function normalizePublishAdAccountKey(value) {
 function getPublishSessionResources({ payload = {}, tokenType = null } = {}) {
   const tokenId = normalizeText(payload.tokenId);
   const resolvedTokenType = normalizePublishResourceTokenType(tokenType || payload.tokenType);
-  const adAccountIds = dedupeStrings(payload.selectedAdAccountIds);
+  const selectedIds = dedupeStrings(payload.selectedAdAccountIds);
+  const accountLaunchIds = dedupeStrings((payload.accountLaunches || []).map((accountLaunch) => accountLaunch?.adAccountId));
+  const adAccountIds = dedupeStrings([...selectedIds, ...accountLaunchIds]);
 
   return {
     tokenKey: tokenId ? `${resolvedTokenType}:${tokenId}` : '',
@@ -1503,7 +1542,7 @@ async function startPublishSession({ sessionId = '', title = '', source = '', pa
       },
     },
     {
-      new: true,
+      returnDocument: 'after',
       setDefaultsOnInsert: true,
       upsert: true,
     }
@@ -1541,7 +1580,7 @@ async function enqueuePublishLaunch({ payload, actor }) {
     message: 'Publish added to the background queue. It can start in parallel when its token and ad accounts are free.',
     progress: {
       completed: 0,
-      total: Array.isArray(payload?.selectedAdAccountIds) ? payload.selectedAdAccountIds.length : 0,
+      total: getPublishRequestCount(payload),
       percent: 0,
       etaSeconds: null,
       elapsedSeconds: 0,
@@ -1595,7 +1634,7 @@ async function enqueuePublishLaunch({ payload, actor }) {
       },
     },
     {
-      new: true,
+      returnDocument: 'after',
       setDefaultsOnInsert: true,
       upsert: true,
     }
@@ -1746,7 +1785,7 @@ async function markPublishSessionFinished({ sessionId, status, result = null, er
     timestamp: now.toISOString(),
     message:
       status === PUBLISH_SESSION_STATUSES.PAUSED
-        ? `Publish paused. ${resumePayload?.selectedAdAccountIds?.length || 0} ad account${resumePayload?.selectedAdAccountIds?.length === 1 ? '' : 's'} left to continue.`
+        ? `Publish paused. ${getPublishRequestCount(resumePayload)} publish item${getPublishRequestCount(resumePayload) === 1 ? '' : 's'} left to continue.`
         : status === PUBLISH_SESSION_STATUSES.FORCE_STOPPED
           ? error || 'Publish force-stopped by user'
         : result?.message || error || 'Publish finished',
@@ -2233,7 +2272,7 @@ async function claimNextQueuedPublishSession() {
         },
       },
       {
-        new: true,
+        returnDocument: 'after',
       }
     );
 
@@ -2624,12 +2663,10 @@ async function resumePublishSession({ sessionId, actor, req }) {
   }
 
   const resumePayload = session.resumePayload;
-  const remainingCount = Array.isArray(resumePayload?.selectedAdAccountIds)
-    ? resumePayload.selectedAdAccountIds.length
-    : 0;
+  const remainingCount = getPublishRequestCount(resumePayload);
 
   if (!remainingCount) {
-    throw new HttpError(400, 'This paused publish does not have remaining ad accounts to continue');
+    throw new HttpError(400, 'This paused publish does not have remaining publish items to continue');
   }
 
   const now = new Date();
@@ -2643,7 +2680,7 @@ async function resumePublishSession({ sessionId, actor, req }) {
     status: 'queued',
     step: 'resume-queued',
     timestamp: now.toISOString(),
-    message: `Paused publish queued with ${remainingCount} remaining ad account${remainingCount === 1 ? '' : 's'}`,
+    message: `Paused publish queued with ${remainingCount} remaining publish item${remainingCount === 1 ? '' : 's'}`,
     progress: session.progress?.progress || null,
   };
 
@@ -3506,27 +3543,70 @@ function normalizeOptionalScheduleTime(value, label) {
     return '';
   }
 
-  const date = new Date(normalizedValue.replace(/([+-]\d{2})(\d{2})$/, '$1:$2'));
+  const timezoneMatch = normalizedValue.match(/(Z|[+-]\d{2}:?\d{2})$/i);
+  const localDateTime = normalizedValue
+    .replace(/(Z|[+-]\d{2}:?\d{2})$/i, '')
+    .replace(/\.\d+$/, '');
+  const withSeconds = localDateTime.length === 16 ? `${localDateTime}:00` : localDateTime;
+  const parseCandidate = timezoneMatch
+    ? normalizedValue.replace(/([+-]\d{2})(\d{2})$/, '$1:$2')
+    : `${withSeconds}${INDONESIA_UTC_OFFSET_ISO}`;
+  const date = new Date(parseCandidate);
 
   if (Number.isNaN(date.getTime())) {
     throw new HttpError(400, `${label} must be a valid date and time`);
   }
 
-  const timezoneMatch = normalizedValue.match(/(Z|[+-]\d{2}:?\d{2})$/i);
   if (!timezoneMatch) {
-    return date.toISOString();
+    return `${withSeconds}${INDONESIA_UTC_OFFSET_COMPACT}`;
   }
 
   const timezoneSuffix =
     timezoneMatch[1].toUpperCase() === 'Z'
       ? '+0000'
       : timezoneMatch[1].replace(':', '');
-  const localDateTime = normalizedValue
-    .replace(/(Z|[+-]\d{2}:?\d{2})$/i, '')
-    .replace(/\.\d+$/, '');
-  const withSeconds = localDateTime.length === 16 ? `${localDateTime}:00` : localDateTime;
 
   return `${withSeconds}${timezoneSuffix}`;
+}
+
+function parseNormalizedScheduleDate(value) {
+  const normalizedValue = normalizeText(value);
+
+  if (!normalizedValue) {
+    return null;
+  }
+
+  return new Date(normalizedValue.replace(/([+-]\d{2})(\d{2})$/, '$1:$2'));
+}
+
+function validateScheduleWindow({ scheduleStart, scheduleEnd }) {
+  if ((scheduleStart && !scheduleEnd) || (!scheduleStart && scheduleEnd)) {
+    throw new HttpError(400, 'Schedule start and schedule end must both be set, or both left empty');
+  }
+
+  const start = parseNormalizedScheduleDate(scheduleStart);
+  const end = parseNormalizedScheduleDate(scheduleEnd);
+
+  if (scheduleStart && (!start || Number.isNaN(start.getTime()))) {
+    throw new HttpError(400, 'Schedule start must be a valid date and time');
+  }
+
+  if (scheduleEnd && (!end || Number.isNaN(end.getTime()))) {
+    throw new HttpError(400, 'Schedule end must be a valid date and time');
+  }
+
+  const minimumScheduleStart = new Date(Date.now() + SCHEDULE_MIN_LEAD_MINUTES * 60 * 1000);
+  if (start && start < minimumScheduleStart) {
+    throw new HttpError(400, `Schedule start must be at least ${SCHEDULE_MIN_LEAD_MINUTES} minutes ahead in ${INDONESIA_TIME_ZONE_LABEL}`);
+  }
+
+  if (start && end && end <= start) {
+    throw new HttpError(400, 'Schedule end must be after schedule start');
+  }
+
+  if (end && end <= new Date()) {
+    throw new HttpError(400, `Schedule end must be in the future using ${INDONESIA_TIME_ZONE_LABEL}`);
+  }
 }
 
 function ensurePublishPayload(payload) {
@@ -3536,6 +3616,8 @@ function ensurePublishPayload(payload) {
     countries: payload.countries,
     country: payload.country,
   });
+  const requestedAdAccountIds = dedupeStrings(payload.selectedAdAccountIds);
+  const accountLaunchAdAccountIds = dedupeStrings((payload.accountLaunches || []).map((accountLaunch) => accountLaunch?.adAccountId));
   const cleaned = {
     templateId: normalizeText(payload.templateId),
     launchLabel: normalizeText(payload.launchLabel),
@@ -3547,7 +3629,7 @@ function ensurePublishPayload(payload) {
     countryLabel: normalizeText(payload.countryLabel),
     objective: normalizeText(payload.objective),
     dailyBudget: normalizeText(payload.dailyBudget),
-    selectedAdAccountIds: dedupeStrings(payload.selectedAdAccountIds),
+    selectedAdAccountIds: dedupeStrings([...requestedAdAccountIds, ...accountLaunchAdAccountIds]),
     pageId: normalizeText(payload.pageId),
     pixelId: normalizeText(payload.pixelId),
     websiteEvent: normalizeText(payload.websiteEvent).toUpperCase(),
@@ -3648,22 +3730,7 @@ function ensurePublishPayload(payload) {
     throw new HttpError(400, urlParameterError);
   }
 
-  if ((cleaned.scheduleStart && !cleaned.scheduleEnd) || (!cleaned.scheduleStart && cleaned.scheduleEnd)) {
-    throw new HttpError(400, 'Schedule start and schedule end must both be set, or both left empty');
-  }
-
-  const minimumScheduleStart = new Date(Date.now() + 5 * 60 * 1000);
-  if (cleaned.scheduleStart && new Date(cleaned.scheduleStart) < minimumScheduleStart) {
-    throw new HttpError(400, 'Schedule start must be at least 5 minutes in the future');
-  }
-
-  if (cleaned.scheduleStart && cleaned.scheduleEnd && new Date(cleaned.scheduleEnd) <= new Date(cleaned.scheduleStart)) {
-    throw new HttpError(400, 'Schedule end must be after schedule start');
-  }
-
-  if (cleaned.scheduleEnd && new Date(cleaned.scheduleEnd) <= new Date()) {
-    throw new HttpError(400, 'Schedule end must be in the future');
-  }
+  validateScheduleWindow(cleaned);
 
   if (!cleaned.callToAction) {
     throw new HttpError(400, 'Call to action is required');
@@ -4433,6 +4500,7 @@ function sanitizeAccountLaunches(input = []) {
 
   return input
     .map((item) => ({
+      launchItemId: normalizeText(item?.launchItemId) || normalizeText(item?.assignmentId) || '',
       adAccountId: normalizeText(item?.adAccountId),
       campaignTemplateId: normalizeText(item?.campaignTemplateId),
       mediaTemplateId: normalizeText(item?.mediaTemplateId),
@@ -4443,7 +4511,11 @@ function sanitizeAccountLaunches(input = []) {
       pixelId: normalizeText(item?.pixelId),
       pixelName: normalizeText(item?.pixelName),
     }))
-    .filter((item) => item.adAccountId && (item.campaignTemplateId || item.mediaTemplateId || item.mediaAssetId));
+    .filter((item) => item.adAccountId && (item.campaignTemplateId || item.mediaTemplateId || item.mediaAssetId))
+    .map((item, index) => ({
+      ...item,
+      launchItemId: item.launchItemId || getAccountLaunchItemId(item, index),
+    }));
 }
 
 function sanitizeResumeStates(input = {}) {
@@ -4454,8 +4526,10 @@ function sanitizeResumeStates(input = {}) {
   return new Map(
     Object.entries(input)
       .map(([adAccountId, state]) => [
-        normalizeText(state?.adAccountId) || normalizeText(adAccountId),
+        normalizeText(state?.launchItemId) || normalizeText(state?.adAccountId) || normalizeText(adAccountId),
         {
+          launchItemId: normalizeText(state?.launchItemId),
+          adAccountId: normalizeText(state?.adAccountId) || normalizeText(adAccountId),
           campaignId: normalizeText(state?.campaignId),
           adSetId: normalizeText(state?.adSetId),
           creativeId: normalizeText(state?.creativeId),
@@ -4475,6 +4549,16 @@ function getResumeStateForAccount(resumeStateMap, adAccountId) {
     resumeStateMap.get(`act_${normalizedAdAccountId.replace(/^act_/, '')}`) ||
     {}
   );
+}
+
+function getResumeStateForPublishItem(resumeStateMap, publishItem) {
+  const launchItemId = normalizeText(publishItem?.launchItemId);
+
+  if (launchItemId && resumeStateMap.has(launchItemId)) {
+    return resumeStateMap.get(launchItemId);
+  }
+
+  return getResumeStateForAccount(resumeStateMap, publishItem?.adAccountId);
 }
 
 function isDeletedMetaStatus(value) {
@@ -4800,7 +4884,6 @@ async function publishLaunchUnlocked({ payload, actor, req, onProgress = null, t
     countries: launch.countries,
   };
   const accountLaunches = sanitizeAccountLaunches(payload.accountLaunches);
-  const accountLaunchMap = new Map(accountLaunches.map((item) => [item.adAccountId, item]));
   const resumeStateMap = sanitizeResumeStates(payload.resumeState);
   const usesAccountTemplates = accountLaunches.length > 0;
   const baseCreativeAssets = usesAccountTemplates
@@ -4821,6 +4904,17 @@ async function publishLaunchUnlocked({ payload, actor, req, onProgress = null, t
   const token = await tokenService.getActiveTokenWithSecret(launch.tokenId, tokenType);
   const publishIntervalSettings = await settingsService.getPublishIntervalSettings();
   const accountMap = new Map(launch.selectedAdAccounts.map((account) => [account.id, account]));
+  const publishItems = usesAccountTemplates
+    ? accountLaunches.map((accountLaunch, index) => ({
+        launchItemId: getAccountLaunchItemId(accountLaunch, index),
+        adAccountId: accountLaunch.adAccountId,
+        accountLaunch,
+      }))
+    : launch.selectedAdAccountIds.map((adAccountId, index) => ({
+        launchItemId: `${adAccountId}-${index + 1}`,
+        adAccountId,
+        accountLaunch: null,
+      }));
   const results = [];
   const failed = [];
   let paused = false;
@@ -4828,33 +4922,35 @@ async function publishLaunchUnlocked({ payload, actor, req, onProgress = null, t
   let pauseResumePayload = null;
   const progress = createPublishProgressReporter({
     onProgress: emitProgress,
-    totalSteps: launch.selectedAdAccountIds.length * (usesAccountTemplates ? 6 : getPublishStepCountPerAccount(baseCreativeAssets.media)),
+    totalSteps: publishItems.length * (usesAccountTemplates ? 6 : getPublishStepCountPerAccount(baseCreativeAssets.media)),
   });
 
   progress.info({
     step: 'prepare',
     status: 'active',
-    message: `Preparing ${launch.selectedAdAccountIds.length} ad account publish`,
-    totalAccounts: launch.selectedAdAccountIds.length,
+    message: `Preparing ${publishItems.length} publish item${publishItems.length === 1 ? '' : 's'} across ${launch.selectedAdAccountIds.length} ad account${launch.selectedAdAccountIds.length === 1 ? '' : 's'}`,
+    totalAccounts: publishItems.length,
   });
 
-  for (const [index, adAccountId] of launch.selectedAdAccountIds.entries()) {
+  for (const [index, publishItem] of publishItems.entries()) {
+    const { adAccountId } = publishItem;
     const selectedAccount = accountMap.get(adAccountId) || {
       id: adAccountId,
       name: adAccountId,
       currency: '',
     };
-    const accountLabel = `Ad account ${index + 1}/${launch.selectedAdAccountIds.length} (${selectedAccount.name})`;
+    const accountLabel = `Publish ${index + 1}/${publishItems.length} (${selectedAccount.name})`;
     const progressContext = {
       sessionId,
       accountIndex: index + 1,
-      totalAccounts: launch.selectedAdAccountIds.length,
+      totalAccounts: publishItems.length,
       adAccountId,
       adAccountName: selectedAccount.name,
       accountLabel,
+      launchItemId: publishItem.launchItemId,
     };
-    const accountTemplate = accountLaunchMap.get(adAccountId);
-    let resumeState = getResumeStateForAccount(resumeStateMap, adAccountId);
+    const accountTemplate = publishItem.accountLaunch;
+    let resumeState = getResumeStateForPublishItem(resumeStateMap, publishItem);
     let accountResolved = null;
     let effectiveLaunch = launch;
     let creativeAssets = baseCreativeAssets;
@@ -5053,6 +5149,7 @@ async function publishLaunchUnlocked({ payload, actor, req, onProgress = null, t
       }
 
       results.push({
+        launchItemId: publishItem.launchItemId,
         adAccountId,
         adAccountName: selectedAccount.name,
         campaignId: campaign.id,
@@ -5092,6 +5189,7 @@ async function publishLaunchUnlocked({ payload, actor, req, onProgress = null, t
       }
 
       failed.push({
+        launchItemId: publishItem.launchItemId,
         adAccountId,
         adAccountName: selectedAccount.name,
         message: error.message,
@@ -5174,24 +5272,29 @@ async function publishLaunchUnlocked({ payload, actor, req, onProgress = null, t
       });
     }
 
-    const remainingAdAccountIds = launch.selectedAdAccountIds.slice(index + 1);
+    const remainingPublishItems = publishItems.slice(index + 1);
+    const remainingAdAccountIds = dedupeStrings(remainingPublishItems.map((item) => item.adAccountId));
+    const remainingAccountLaunches = usesAccountTemplates
+      ? remainingPublishItems.map((item) => item.accountLaunch).filter(Boolean)
+      : null;
     if (remainingAdAccountIds.length && (await isPublishSessionPauseRequested(sessionId))) {
       paused = true;
       pauseResumePayload = buildRemainingPublishPayload({
         payload,
         remainingAdAccountIds,
+        remainingAccountLaunches,
       });
       progress.info({
         ...progressContext,
         step: 'paused',
         status: 'paused',
-        message: `Publish paused safely after ${accountLabel}. ${remainingAdAccountIds.length} ad account${remainingAdAccountIds.length === 1 ? '' : 's'} left to continue.`,
+        message: `Publish paused safely after ${accountLabel}. ${remainingPublishItems.length} publish item${remainingPublishItems.length === 1 ? '' : 's'} left to continue.`,
       });
       break;
     }
 
-    if (remainingAdAccountIds.length) {
-      const nextAccount = accountMap.get(remainingAdAccountIds[0]);
+    if (remainingPublishItems.length) {
+      const nextAccount = accountMap.get(remainingPublishItems[0].adAccountId);
       const intervalResult = await waitBetweenPublishAccounts({
         sessionId,
         settings: publishIntervalSettings,
@@ -5205,12 +5308,13 @@ async function publishLaunchUnlocked({ payload, actor, req, onProgress = null, t
         pauseResumePayload = buildRemainingPublishPayload({
           payload,
           remainingAdAccountIds,
+          remainingAccountLaunches,
         });
         progress.info({
           ...progressContext,
           step: 'paused',
           status: 'paused',
-          message: `Publish paused during account interval. ${remainingAdAccountIds.length} ad account${remainingAdAccountIds.length === 1 ? '' : 's'} left to continue.`,
+          message: `Publish paused during publish interval. ${remainingPublishItems.length} publish item${remainingPublishItems.length === 1 ? '' : 's'} left to continue.`,
         });
         break;
       }
@@ -5232,6 +5336,7 @@ async function publishLaunchUnlocked({ payload, actor, req, onProgress = null, t
     metadata: {
       launchLabel: launch.launchLabel,
       adAccountsRequested: launch.selectedAdAccountIds.length,
+      publishItemsRequested: publishItems.length,
       published: results.length,
       failed: failed.length,
       objective: launch.objective,
@@ -5244,7 +5349,7 @@ async function publishLaunchUnlocked({ payload, actor, req, onProgress = null, t
 
   const queuedCount = failed.filter((item) => item.queued).length;
   const hardFailedCount = failed.length - queuedCount;
-  const pausedCount = pauseResumePayload?.selectedAdAccountIds?.length || 0;
+  const pausedCount = pauseResumePayload ? getPublishRequestCount(pauseResumePayload) : 0;
   const finalSessionStatus = stopped
     ? PUBLISH_SESSION_STATUSES.FORCE_STOPPED
     : paused
@@ -5259,7 +5364,7 @@ async function publishLaunchUnlocked({ payload, actor, req, onProgress = null, t
       stopped
         ? `Publish force-stopped after ${results.length} success${failed.length ? ` and ${failed.length} handled failure${failed.length === 1 ? '' : 's'}` : ''}`
         : paused
-        ? `Publish paused after ${results.length} success${failed.length ? ` and ${failed.length} handled failure${failed.length === 1 ? '' : 's'}` : ''}. ${pausedCount} ad account${pausedCount === 1 ? '' : 's'} left to continue`
+        ? `Publish paused after ${results.length} success${failed.length ? ` and ${failed.length} handled failure${failed.length === 1 ? '' : 's'}` : ''}. ${pausedCount} publish item${pausedCount === 1 ? '' : 's'} left to continue`
         : failed.length > 0
         ? queuedCount && !hardFailedCount
           ? `Publish completed with ${results.length} success and ${queuedCount} queued retry`
@@ -5270,7 +5375,8 @@ async function publishLaunchUnlocked({ payload, actor, req, onProgress = null, t
     results,
     failed,
     summary: {
-      requested: launch.selectedAdAccountIds.length,
+      requested: publishItems.length,
+      publishItemsRequested: publishItems.length,
       published: results.length,
       failed: failed.length,
       queued: queuedCount,

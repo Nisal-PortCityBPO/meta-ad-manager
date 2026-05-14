@@ -31,6 +31,13 @@ import { adsLaunchApi } from '../api/adsLaunchApi';
 import MediaLibraryFolderPicker from '../components/MediaLibraryFolderPicker';
 import { useLaunchTemplates } from '../hooks/useLaunchTemplates';
 import { useTokenMetaAssets } from '../hooks/useTokenMetaAssets';
+import {
+  getMinimumScheduleStartValue,
+  getScheduleValidationError as getScheduleWindowValidationError,
+  INDONESIA_TIME_ZONE_LABEL,
+  toDateTimeLocalInputValue,
+  toSchedulePayloadValue,
+} from '../utils/scheduleTime';
 import { createVideoThumbnailFile } from '../utils/videoThumbnail';
 
 const countryOptions = [
@@ -256,56 +263,6 @@ const formatDateTime = (value) => {
   }).format(new Date(value));
 };
 
-const SCHEDULE_MIN_LEAD_MINUTES = 5;
-
-const getLocalDateTimeInputValue = (date) => {
-  const localDate = new Date(date.getTime() - date.getTimezoneOffset() * 60000);
-  return localDate.toISOString().slice(0, 16);
-};
-
-const getMinimumScheduleStartValue = () => getLocalDateTimeInputValue(new Date(Date.now() + SCHEDULE_MIN_LEAD_MINUTES * 60 * 1000));
-
-const hasExplicitTimezone = (value) => /(Z|[+-]\d{2}:?\d{2})$/i.test(String(value || '').trim());
-
-const getLocalTimezoneOffsetSuffix = (date = new Date()) => {
-  const offsetMinutes = -date.getTimezoneOffset();
-  const sign = offsetMinutes >= 0 ? '+' : '-';
-  const absoluteMinutes = Math.abs(offsetMinutes);
-  const hours = String(Math.floor(absoluteMinutes / 60)).padStart(2, '0');
-  const minutes = String(absoluteMinutes % 60).padStart(2, '0');
-  return `${sign}${hours}:${minutes}`;
-};
-
-const toSchedulePayloadValue = (value) => {
-  const normalizedValue = String(value || '').trim();
-
-  if (!normalizedValue) {
-    return '';
-  }
-
-  if (hasExplicitTimezone(normalizedValue)) {
-    return normalizedValue;
-  }
-
-  const withSeconds = normalizedValue.length === 16 ? `${normalizedValue}:00` : normalizedValue;
-  return `${withSeconds}${getLocalTimezoneOffsetSuffix(new Date(withSeconds))}`;
-};
-
-const toDateTimeLocalInputValue = (value) => {
-  const normalizedValue = String(value || '').trim();
-
-  if (!normalizedValue) {
-    return '';
-  }
-
-  if (!hasExplicitTimezone(normalizedValue)) {
-    return normalizedValue.slice(0, 16);
-  }
-
-  const date = new Date(normalizedValue.replace(/([+-]\d{2})(\d{2})$/, '$1:$2'));
-  return Number.isNaN(date.getTime()) ? '' : getLocalDateTimeInputValue(date);
-};
-
 const parseHttpUrl = (value) => {
   const normalizedValue = String(value || '').trim();
 
@@ -439,72 +396,15 @@ const getLaunchValidationError = (form) => {
     return urlParameterError;
   }
 
-  if ((form.scheduleStart && !form.scheduleEnd) || (!form.scheduleStart && form.scheduleEnd)) {
-    return 'Schedule start and schedule end must both be set, or both left empty';
-  }
-
-  if (form.scheduleStart) {
-    const scheduleStart = new Date(form.scheduleStart);
-    const minimumStart = new Date(Date.now() + SCHEDULE_MIN_LEAD_MINUTES * 60 * 1000);
-
-    if (Number.isNaN(scheduleStart.getTime())) {
-      return 'Schedule start must be a valid date and time';
-    }
-
-    if (scheduleStart < minimumStart) {
-      return `Schedule start must be at least ${SCHEDULE_MIN_LEAD_MINUTES} minutes in the future`;
-    }
-  }
-
-  if (form.scheduleEnd) {
-    const scheduleStart = new Date(form.scheduleStart);
-    const scheduleEnd = new Date(form.scheduleEnd);
-
-    if (Number.isNaN(scheduleEnd.getTime())) {
-      return 'Schedule end must be a valid date and time';
-    }
-
-    if (scheduleEnd <= scheduleStart) {
-      return 'Schedule end must be after schedule start';
-    }
+  const scheduleError = getScheduleWindowValidationError(form);
+  if (scheduleError) {
+    return scheduleError;
   }
 
   return '';
 };
 
-const getScheduleValidationError = (form) => {
-  if ((form.scheduleStart && !form.scheduleEnd) || (!form.scheduleStart && form.scheduleEnd)) {
-    return 'Schedule start and schedule end must both be set, or both left empty';
-  }
-
-  if (form.scheduleStart) {
-    const scheduleStart = new Date(form.scheduleStart);
-    const minimumStart = new Date(Date.now() + SCHEDULE_MIN_LEAD_MINUTES * 60 * 1000);
-
-    if (Number.isNaN(scheduleStart.getTime())) {
-      return 'Schedule start must be a valid date and time';
-    }
-
-    if (scheduleStart < minimumStart) {
-      return `Schedule start must be at least ${SCHEDULE_MIN_LEAD_MINUTES} minutes in the future`;
-    }
-  }
-
-  if (form.scheduleEnd) {
-    const scheduleStart = new Date(form.scheduleStart);
-    const scheduleEnd = new Date(form.scheduleEnd);
-
-    if (Number.isNaN(scheduleEnd.getTime())) {
-      return 'Schedule end must be a valid date and time';
-    }
-
-    if (scheduleEnd <= scheduleStart) {
-      return 'Schedule end must be after schedule start';
-    }
-  }
-
-  return '';
-};
+const getScheduleValidationError = getScheduleWindowValidationError;
 
 const getLaunchMissingFields = ({ activeMediaAsset, activeThumbnailAsset, bidAmountRequired, form, isVideoAsset, loadingAssets, loadingPixels, pixelRequired }) => {
   const missing = [];
@@ -2504,7 +2404,7 @@ const AdsLaunchPage = () => {
               </p>
             ) : form.scheduleStart && form.scheduleEnd ? (
               <p className="rounded-xl bg-emerald-50 px-4 py-3 text-sm font-semibold text-emerald-700">
-                Schedule looks valid. Meta will receive the selected local time with your timezone offset.
+                Schedule looks valid. Meta will receive it as {INDONESIA_TIME_ZONE_LABEL}.
               </p>
             ) : null}
 
@@ -2520,7 +2420,7 @@ const AdsLaunchPage = () => {
                   className="h-12 w-full rounded-xl border border-sky-100 bg-white px-4 outline-none transition focus:border-sky-400 focus:ring-4 focus:ring-sky-100"
                 />
                 <p className="text-xs font-semibold text-slate-400">
-                  Optional. If scheduling, start and end are both required and start must be at least 5 minutes ahead.
+                  Optional. If scheduling, start and end are both required and start must be at least 10 minutes ahead in {INDONESIA_TIME_ZONE_LABEL}.
                 </p>
               </div>
 

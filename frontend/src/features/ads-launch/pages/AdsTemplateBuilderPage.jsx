@@ -6,6 +6,13 @@ import DashboardHeader from '../../dashboard/components/DashboardHeader';
 import DashboardPanel from '../../dashboard/components/DashboardPanel';
 import { adsLaunchApi } from '../api/adsLaunchApi';
 import { useLaunchTemplates } from '../hooks/useLaunchTemplates';
+import {
+  getMinimumScheduleStartValue,
+  getScheduleValidationError,
+  INDONESIA_TIME_ZONE_LABEL,
+  toDateTimeLocalInputValue,
+  toSchedulePayloadValue,
+} from '../utils/scheduleTime';
 
 const TEMPLATE_TYPES = {
   CAMPAIGN: 'CAMPAIGN',
@@ -86,7 +93,6 @@ const defaultWebsiteEventByObjective = {
   [SALES_OBJECTIVE]: 'PURCHASE',
 };
 const TEMPLATES_PER_PAGE = 2;
-const SCHEDULE_MIN_LEAD_MINUTES = 5;
 
 const objectiveOptions = [
   { value: TRAFFIC_OBJECTIVE, label: 'Traffic' },
@@ -280,88 +286,6 @@ const normalizeTemplateCountries = (config = {}) => {
 
 const normalizeCampaignStatus = (value) => (String(value || '').trim().toUpperCase() === 'ACTIVE' ? 'ACTIVE' : 'PAUSED');
 const normalizeObjective = (objective) => (supportedObjectiveValues.has(objective) ? objective : TRAFFIC_OBJECTIVE);
-
-const getScheduleValidationError = ({ scheduleStart, scheduleEnd }) => {
-  if ((scheduleStart && !scheduleEnd) || (!scheduleStart && scheduleEnd)) {
-    return 'Schedule start and schedule end must both be set, or both left empty';
-  }
-
-  if (scheduleStart) {
-    const start = new Date(scheduleStart);
-    const minimumStart = new Date(Date.now() + SCHEDULE_MIN_LEAD_MINUTES * 60 * 1000);
-
-    if (Number.isNaN(start.getTime())) {
-      return 'Schedule start must be a valid date and time';
-    }
-
-    if (start < minimumStart) {
-      return `Schedule start must be at least ${SCHEDULE_MIN_LEAD_MINUTES} minutes in the future`;
-    }
-  }
-
-  if (scheduleEnd) {
-    const start = new Date(scheduleStart);
-    const end = new Date(scheduleEnd);
-
-    if (Number.isNaN(end.getTime())) {
-      return 'Schedule end must be a valid date and time';
-    }
-
-    if (end <= start) {
-      return 'Schedule end must be after schedule start';
-    }
-  }
-
-  return '';
-};
-
-const hasExplicitTimezone = (value) => /(Z|[+-]\d{2}:?\d{2})$/i.test(String(value || '').trim());
-
-const getLocalDateTimeInputValue = (date) => {
-  const localDate = new Date(date.getTime() - date.getTimezoneOffset() * 60000);
-  return localDate.toISOString().slice(0, 16);
-};
-
-const getMinimumScheduleStartValue = () => getLocalDateTimeInputValue(new Date(Date.now() + SCHEDULE_MIN_LEAD_MINUTES * 60 * 1000));
-
-const getLocalTimezoneOffsetSuffix = (date = new Date()) => {
-  const offsetMinutes = -date.getTimezoneOffset();
-  const sign = offsetMinutes >= 0 ? '+' : '-';
-  const absoluteMinutes = Math.abs(offsetMinutes);
-  const hours = String(Math.floor(absoluteMinutes / 60)).padStart(2, '0');
-  const minutes = String(absoluteMinutes % 60).padStart(2, '0');
-  return `${sign}${hours}:${minutes}`;
-};
-
-const toSchedulePayloadValue = (value) => {
-  const normalizedValue = String(value || '').trim();
-
-  if (!normalizedValue) {
-    return '';
-  }
-
-  if (hasExplicitTimezone(normalizedValue)) {
-    return normalizedValue;
-  }
-
-  const withSeconds = normalizedValue.length === 16 ? `${normalizedValue}:00` : normalizedValue;
-  return `${withSeconds}${getLocalTimezoneOffsetSuffix(new Date(withSeconds))}`;
-};
-
-const toDateTimeLocalInputValue = (value) => {
-  const normalizedValue = String(value || '').trim();
-
-  if (!normalizedValue) {
-    return '';
-  }
-
-  if (!hasExplicitTimezone(normalizedValue)) {
-    return normalizedValue.slice(0, 16);
-  }
-
-  const date = new Date(normalizedValue.replace(/([+-]\d{2})(\d{2})$/, '$1:$2'));
-  return Number.isNaN(date.getTime()) ? '' : getLocalDateTimeInputValue(date);
-};
 
 const getCampaignStatusBadgeClass = (status) =>
   status === 'ACTIVE' ? 'bg-emerald-50 text-emerald-700' : 'bg-amber-50 text-amber-700';
@@ -1034,6 +958,9 @@ const AdsTemplateBuilderPage = () => {
               <div className="space-y-2">
                 <FieldLabel htmlFor="campaign-schedule-start">Schedule start</FieldLabel>
                 <input id="campaign-schedule-start" type="datetime-local" value={campaignForm.scheduleStart} min={minimumScheduleStartValue} onChange={(event) => updateCampaignField('scheduleStart', event.target.value)} className="h-12 w-full rounded-xl border border-sky-100 px-4 outline-none focus:border-sky-400 focus:ring-4 focus:ring-sky-100" />
+                <p className="text-xs font-semibold text-slate-400">
+                  Optional. Must be at least 10 minutes ahead in {INDONESIA_TIME_ZONE_LABEL}.
+                </p>
               </div>
               <div className="space-y-2">
                 <FieldLabel htmlFor="campaign-schedule-end">Schedule end</FieldLabel>
@@ -1050,7 +977,7 @@ const AdsTemplateBuilderPage = () => {
               </p>
             ) : campaignForm.scheduleStart && campaignForm.scheduleEnd ? (
               <p className="mt-4 rounded-xl bg-emerald-50 px-4 py-3 text-sm font-semibold text-emerald-700">
-                Schedule looks valid. It will be saved with the local timezone offset for Meta.
+                Schedule looks valid. It will be saved as {INDONESIA_TIME_ZONE_LABEL} for Meta.
               </p>
             ) : null}
             <button type="button" onClick={saveCampaignTemplate} disabled={Boolean(savingType)} className="mt-5 flex h-11 items-center gap-2 rounded-xl bg-sky-600 px-5 text-sm font-bold text-white transition hover:bg-sky-700 disabled:opacity-70">

@@ -135,6 +135,11 @@ const launchDetailsSchema = new mongoose.Schema(
       default: '',
       trim: true,
     },
+    launchItemId: {
+      type: String,
+      default: '',
+      trim: true,
+    },
     templateId: {
       type: String,
       default: '',

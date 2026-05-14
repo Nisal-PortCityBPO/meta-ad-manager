@@ -174,9 +174,11 @@ adsLaunchPublishSessionSchema.index({ 'queue.status': 1, 'queue.queuedAt': 1 });
 
 adsLaunchPublishSessionSchema.methods.toSafeObject = function toSafeObject({ eventLimit = 120 } = {}) {
   const status = toClientStatus(this.status);
-  const resumeCount = Array.isArray(this.resumePayload?.selectedAdAccountIds)
-    ? this.resumePayload.selectedAdAccountIds.length
-    : 0;
+  const resumeCount = Array.isArray(this.resumePayload?.accountLaunches) && this.resumePayload.accountLaunches.length
+    ? this.resumePayload.accountLaunches.length
+    : Array.isArray(this.resumePayload?.selectedAdAccountIds)
+      ? this.resumePayload.selectedAdAccountIds.length
+      : 0;
 
   return {
     id: this.sessionId,

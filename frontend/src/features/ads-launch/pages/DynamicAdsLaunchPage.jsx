@@ -1,6 +1,6 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { Fragment, useEffect, useMemo, useRef, useState } from 'react';
 import toast from 'react-hot-toast';
-import { AlertTriangle, CheckCircle2, ChevronLeft, ChevronRight, Eye, ImageIcon, LoaderCircle, RefreshCw, Rocket, Shuffle, Upload, X } from 'lucide-react';
+import { AlertTriangle, CheckCircle2, ChevronLeft, ChevronRight, Copy, Eye, ImageIcon, LoaderCircle, Plus, RefreshCw, Rocket, Shuffle, Trash2, Upload, X } from 'lucide-react';
 import DashboardHeader from '../../dashboard/components/DashboardHeader';
 import DashboardPanel from '../../dashboard/components/DashboardPanel';
 import { businessDataApi } from '../../dashboard/api/businessDataApi';
@@ -11,6 +11,11 @@ import { adsLaunchApi } from '../api/adsLaunchApi';
 import MediaLibraryFolderPicker from '../components/MediaLibraryFolderPicker';
 import { useLaunchTemplates } from '../hooks/useLaunchTemplates';
 import { useTokenMetaAssets } from '../hooks/useTokenMetaAssets';
+import {
+  getScheduleValidationError,
+  INDONESIA_TIME_ZONE_LABEL,
+  toSchedulePayloadValue,
+} from '../utils/scheduleTime';
 
 const defaultStaticDefaults = {
   buyingType: 'AUCTION',
@@ -45,6 +50,22 @@ const TRAFFIC_OBJECTIVE = 'OUTCOME_TRAFFIC';
 const enabledCampaignObjectives = new Set([TRAFFIC_OBJECTIVE, 'OUTCOME_LEADS', 'OUTCOME_SALES']);
 const pixelRequiredObjectives = new Set(['OUTCOME_LEADS', 'OUTCOME_SALES']);
 const blockedApiStatuses = new Set(['BLOCKED', 'DISABLED']);
+const PRIMARY_ASSIGNMENT_ID = 'primary';
+const ASSIGNMENT_KEY_SEPARATOR = '::';
+
+const createAssignmentKey = (accountId, launchItemId = PRIMARY_ASSIGNMENT_ID) =>
+  `${accountId}${ASSIGNMENT_KEY_SEPARATOR}${launchItemId || PRIMARY_ASSIGNMENT_ID}`;
+
+const parseAssignmentKey = (assignmentKey = '') => {
+  const [accountId = '', launchItemId = PRIMARY_ASSIGNMENT_ID] = String(assignmentKey).split(ASSIGNMENT_KEY_SEPARATOR);
+
+  return {
+    accountId,
+    launchItemId: launchItemId || PRIMARY_ASSIGNMENT_ID,
+  };
+};
+
+const createExtraLaunchItemId = () => `launch_${Date.now()}_${Math.random().toString(16).slice(2, 8)}`;
 
 const FieldLabel = ({ htmlFor, children }) => (
   <label htmlFor={htmlFor} className="text-sm font-semibold text-slate-700">
@@ -393,32 +414,6 @@ const sanitizeCountries = (config = {}) => {
 
 const getTemplateLabel = (template) => (template ? template.name : 'Not selected');
 
-const hasExplicitTimezone = (value) => /(Z|[+-]\d{2}:?\d{2})$/i.test(String(value || '').trim());
-
-const getLocalTimezoneOffsetSuffix = (date = new Date()) => {
-  const offsetMinutes = -date.getTimezoneOffset();
-  const sign = offsetMinutes >= 0 ? '+' : '-';
-  const absoluteMinutes = Math.abs(offsetMinutes);
-  const hours = String(Math.floor(absoluteMinutes / 60)).padStart(2, '0');
-  const minutes = String(absoluteMinutes % 60).padStart(2, '0');
-  return `${sign}${hours}:${minutes}`;
-};
-
-const toSchedulePayloadValue = (value) => {
-  const normalizedValue = String(value || '').trim();
-
-  if (!normalizedValue) {
-    return '';
-  }
-
-  if (hasExplicitTimezone(normalizedValue)) {
-    return normalizedValue;
-  }
-
-  const withSeconds = normalizedValue.length === 16 ? `${normalizedValue}:00` : normalizedValue;
-  return `${withSeconds}${getLocalTimezoneOffsetSuffix(new Date(withSeconds))}`;
-};
-
 const DynamicAdsLaunchPage = () => {
   const { loadTokens, loading: tokensLoading, tokens } = useTokens();
   const {
@@ -545,13 +540,37 @@ const DynamicAdsLaunchPage = () => {
     () => mediaFolders.filter((mediaFolder) => !brandId || mediaFolder.brandId === brandId),
     [brandId, mediaFolders]
   );
+  const assignmentRows = useMemo(
+    () =>
+      scopedAdAccounts.flatMap((account, accountIndex) => {
+        const rootAssignment = assignments[account.id] || {};
+        const { extraLaunches: _extraLaunches, ...primaryFields } = rootAssignment;
+        const primaryRow = {
+          account,
+          ...primaryFields,
+          accountIndex,
+          assignmentKey: createAssignmentKey(account.id),
+          launchItemId: PRIMARY_ASSIGNMENT_ID,
+          isPrimary: true,
+        };
+        const extraRows = Array.isArray(rootAssignment.extraLaunches)
+          ? rootAssignment.extraLaunches.map((item, itemIndex) => ({
+              account,
+              ...(item || {}),
+              accountIndex,
+              assignmentKey: createAssignmentKey(account.id, item?.launchItemId || `extra-${itemIndex}`),
+              launchItemId: item?.launchItemId || `extra-${itemIndex}`,
+              isPrimary: false,
+            }))
+          : [];
+
+        return [primaryRow, ...extraRows];
+      }),
+    [assignments, scopedAdAccounts]
+  );
   const selectedAssignments = useMemo(
     () =>
-      scopedAdAccounts
-        .map((account) => ({
-          account,
-          ...(assignments[account.id] || {}),
-        }))
+      assignmentRows
         .filter((assignment) => {
           if (!assignment.campaignTemplateId || !assignment.mediaTemplateId || !assignment.mediaAssetId) {
             return false;
@@ -571,11 +590,14 @@ const DynamicAdsLaunchPage = () => {
               brandScopedMediaAssets.some((asset) => asset.id === assignment.thumbnailAssetId && asset.mediaType === 'IMAGE')
           );
         }),
-    [assignments, brandScopedMediaAssets, scopedAdAccounts]
+    [assignmentRows, brandScopedMediaAssets]
   );
 
   const getAssignmentCampaignTemplate = (assignment) =>
     campaignTemplates.find((template) => template.id === assignment.campaignTemplateId);
+
+  const getCampaignTemplateScheduleError = (template) =>
+    getScheduleValidationError(template?.config || {});
 
   const getAssignmentMediaAsset = (assignment) =>
     brandScopedMediaAssets.find((mediaAsset) => mediaAsset.id === assignment.mediaAssetId);
@@ -603,6 +625,9 @@ const DynamicAdsLaunchPage = () => {
       isDefaultVideoThumbnail: true,
     };
   };
+
+  const getAssignmentByKey = (assignmentKey) =>
+    assignmentRows.find((assignment) => assignment.assignmentKey === assignmentKey) || null;
 
   const getAssignmentPageId = (assignment) => {
     const campaignTemplate = getAssignmentCampaignTemplate(assignment);
@@ -669,10 +694,12 @@ const DynamicAdsLaunchPage = () => {
         const assignmentPageId = getAssignmentPageId(assignment);
         const requiresPixel = campaignRequiresPixel(campaignTemplate);
         const assignmentPixelId = getAssignmentPixelId(assignment);
+        const scheduleError = getCampaignTemplateScheduleError(campaignTemplate);
 
         return Boolean(
           !selectedTokenApiState.blocked &&
             campaignTemplate &&
+            !scheduleError &&
             mediaTemplate &&
             mediaAsset &&
             (!videoMediaSelected || thumbnailAsset) &&
@@ -846,6 +873,111 @@ const DynamicAdsLaunchPage = () => {
     }));
   };
 
+  const updateAssignmentLaunch = (accountId, launchItemId = PRIMARY_ASSIGNMENT_ID, field, value) => {
+    if (launchItemId === PRIMARY_ASSIGNMENT_ID) {
+      updateAssignment(accountId, field, value);
+      return;
+    }
+
+    setAssignments((current) => {
+      const rootAssignment = current[accountId] || {};
+      const extraLaunches = Array.isArray(rootAssignment.extraLaunches) ? rootAssignment.extraLaunches : [];
+
+      return {
+        ...current,
+        [accountId]: {
+          ...rootAssignment,
+          extraLaunches: extraLaunches.map((item) =>
+            item.launchItemId === launchItemId
+              ? {
+                  ...item,
+                  [field]: value,
+                }
+              : item
+          ),
+        },
+      };
+    });
+  };
+
+  const addCampaignForAccount = (accountId) => {
+    setAssignments((current) => {
+      const rootAssignment = current[accountId] || {};
+      const extraLaunches = Array.isArray(rootAssignment.extraLaunches) ? rootAssignment.extraLaunches : [];
+
+      return {
+        ...current,
+        [accountId]: {
+          ...rootAssignment,
+          extraLaunches: [
+            ...extraLaunches,
+            {
+              launchItemId: createExtraLaunchItemId(),
+              pageId: rootAssignment.pageId || '',
+              pixelId: rootAssignment.pixelId || '',
+            },
+          ],
+        },
+      };
+    });
+    toast.success('Added another campaign row for this ad account');
+  };
+
+  const duplicateAssignmentLaunch = (assignment) => {
+    if (!assignment?.account?.id) {
+      return;
+    }
+
+    setAssignments((current) => {
+      const accountId = assignment.account.id;
+      const rootAssignment = current[accountId] || {};
+      const extraLaunches = Array.isArray(rootAssignment.extraLaunches) ? rootAssignment.extraLaunches : [];
+      const {
+        account: _account,
+        accountIndex: _accountIndex,
+        assignmentKey: _assignmentKey,
+        isPrimary: _isPrimary,
+        extraLaunches: _extraLaunches,
+        ...copyableAssignment
+      } = assignment;
+
+      return {
+        ...current,
+        [accountId]: {
+          ...rootAssignment,
+          extraLaunches: [
+            ...extraLaunches,
+            {
+              ...copyableAssignment,
+              launchItemId: createExtraLaunchItemId(),
+            },
+          ],
+        },
+      };
+    });
+    toast.success('Duplicated campaign row');
+  };
+
+  const removeAssignmentLaunch = (accountId, launchItemId) => {
+    if (launchItemId === PRIMARY_ASSIGNMENT_ID) {
+      return;
+    }
+
+    setAssignments((current) => {
+      const rootAssignment = current[accountId] || {};
+      const extraLaunches = Array.isArray(rootAssignment.extraLaunches) ? rootAssignment.extraLaunches : [];
+
+      return {
+        ...current,
+        [accountId]: {
+          ...rootAssignment,
+          extraLaunches: extraLaunches.filter((item) => item.launchItemId !== launchItemId),
+        },
+      };
+    });
+    toast.success('Removed campaign row');
+  };
+
   const applySharedPixel = (nextPixelId) => {
     setSharedPixelId(nextPixelId);
     setAssignments((current) => {
@@ -854,9 +986,16 @@ const DynamicAdsLaunchPage = () => {
       };
 
       scopedAdAccounts.forEach((account) => {
+        const rootAssignment = nextAssignments[account.id] || {};
         nextAssignments[account.id] = {
-          ...(nextAssignments[account.id] || {}),
+          ...rootAssignment,
           pixelId: nextPixelId,
+          extraLaunches: Array.isArray(rootAssignment.extraLaunches)
+            ? rootAssignment.extraLaunches.map((item) => ({
+                ...item,
+                pixelId: nextPixelId,
+              }))
+            : rootAssignment.extraLaunches,
         };
       });
 
@@ -871,9 +1010,16 @@ const DynamicAdsLaunchPage = () => {
     }
   };
 
-  const selectMediaAssetForAccount = (accountId, mediaAsset) => {
+  const selectMediaAssetForAssignment = (assignmentKey, mediaAsset) => {
+    const { accountId, launchItemId } = parseAssignmentKey(assignmentKey);
+
     setAssignments((current) => {
-      const previousAssignment = current[accountId] || {};
+      const rootAssignment = current[accountId] || {};
+      const extraLaunches = Array.isArray(rootAssignment.extraLaunches) ? rootAssignment.extraLaunches : [];
+      const previousAssignment =
+        launchItemId === PRIMARY_ASSIGNMENT_ID
+          ? rootAssignment
+          : extraLaunches.find((item) => item.launchItemId === launchItemId) || {};
       const nextAssignment = {
         ...previousAssignment,
         mediaAssetId: mediaAsset.id,
@@ -890,9 +1036,23 @@ const DynamicAdsLaunchPage = () => {
         nextAssignment.thumbnailAssetId = '';
       }
 
+      if (launchItemId === PRIMARY_ASSIGNMENT_ID) {
+        return {
+          ...current,
+          [accountId]: {
+            ...rootAssignment,
+            ...nextAssignment,
+            extraLaunches: rootAssignment.extraLaunches,
+          },
+        };
+      }
+
       return {
         ...current,
-        [accountId]: nextAssignment,
+        [accountId]: {
+          ...rootAssignment,
+          extraLaunches: extraLaunches.map((item) => (item.launchItemId === launchItemId ? nextAssignment : item)),
+        },
       };
     });
 
@@ -905,21 +1065,17 @@ const DynamicAdsLaunchPage = () => {
       }
 
       toast.success('Video selected. Choose a thumbnail image next.');
-      window.setTimeout(() => setThumbnailPickerAccountId(accountId), 150);
+      window.setTimeout(() => setThumbnailPickerAccountId(assignmentKey), 150);
       return;
     }
 
     toast.success(`Selected ${mediaAsset.name}`);
   };
 
-  const selectThumbnailAssetForAccount = (accountId, thumbnailAsset) => {
-    setAssignments((current) => ({
-      ...current,
-      [accountId]: {
-        ...(current[accountId] || {}),
-        thumbnailAssetId: thumbnailAsset.id,
-      },
-    }));
+  const selectThumbnailAssetForAssignment = (assignmentKey, thumbnailAsset) => {
+    const { accountId, launchItemId } = parseAssignmentKey(assignmentKey);
+
+    updateAssignmentLaunch(accountId, launchItemId, 'thumbnailAssetId', thumbnailAsset.id);
     setThumbnailPickerAccountId('');
     toast.success(`Selected thumbnail ${thumbnailAsset.name}`);
   };
@@ -937,6 +1093,10 @@ const DynamicAdsLaunchPage = () => {
     const firstPage = pages.find((page) => page.id === firstPageId) || selectedPage;
     const firstPixelId = getAssignmentPixelId(firstAssignment);
     const websiteEvent = campaignConfig.websiteEvent || defaultWebsiteEventByObjective[campaignConfig.objective] || '';
+    const readyAdAccountIds = [...new Set(readyAssignments.map((assignment) => assignment.account.id))];
+    const readyAdAccounts = readyAdAccountIds
+      .map((adAccountId) => readyAssignments.find((assignment) => assignment.account.id === adAccountId)?.account)
+      .filter(Boolean);
 
     return {
       templateId: firstAssignment.mediaTemplateId,
@@ -949,12 +1109,12 @@ const DynamicAdsLaunchPage = () => {
       countryLabel: countries.join(', '),
       objective: campaignConfig.objective || 'OUTCOME_TRAFFIC',
       dailyBudget: campaignConfig.dailyBudget || '15',
-      selectedAdAccountIds: readyAssignments.map((assignment) => assignment.account.id),
-      selectedAdAccounts: readyAssignments.map((assignment) => ({
-        id: assignment.account.id,
-        accountId: assignment.account.accountId,
-        name: assignment.account.name,
-        currency: assignment.account.currency,
+      selectedAdAccountIds: readyAdAccountIds,
+      selectedAdAccounts: readyAdAccounts.map((account) => ({
+        id: account.id,
+        accountId: account.accountId,
+        name: account.name,
+        currency: account.currency,
       })),
       pageId: firstPageId,
       pageName: firstPage?.name || '',
@@ -977,6 +1137,7 @@ const DynamicAdsLaunchPage = () => {
         ...(campaignConfig.staticDefaults || {}),
       },
       accountLaunches: readyAssignments.map((assignment) => ({
+        launchItemId: assignment.launchItemId,
         adAccountId: assignment.account.id,
         campaignTemplateId: assignment.campaignTemplateId,
         mediaTemplateId: assignment.mediaTemplateId,
@@ -1020,7 +1181,7 @@ const DynamicAdsLaunchPage = () => {
       return;
     }
 
-    const ignoredRows = scopedAdAccounts.length - readyAssignments.length;
+    const ignoredRows = assignmentRows.length - readyAssignments.length;
 
     setPixelPrompt(null);
     setPublishing(true);
@@ -1056,7 +1217,7 @@ const DynamicAdsLaunchPage = () => {
     <div>
       <DashboardHeader
         title="Dynamic Ads Launch"
-        description="Select a brand token, assign campaign templates, copy templates, and media assets per ad account, then publish all selected accounts in one click."
+        description="Select a brand token, then assign one or more campaign/media rows per ad account and publish only the ready rows."
         action={
           <button
             type="button"
@@ -1078,8 +1239,8 @@ const DynamicAdsLaunchPage = () => {
           mediaFolders={brandScopedMediaFolders}
           onClose={() => setMediaPickerAccountId('')}
           onRefresh={loadMediaAssets}
-          onSelect={(mediaAsset) => selectMediaAssetForAccount(mediaPickerAccountId, mediaAsset)}
-          selectedMediaAssetId={assignments[mediaPickerAccountId]?.mediaAssetId || ''}
+          onSelect={(mediaAsset) => selectMediaAssetForAssignment(mediaPickerAccountId, mediaAsset)}
+          selectedMediaAssetId={getAssignmentByKey(mediaPickerAccountId)?.mediaAssetId || ''}
         />
       ) : null}
       {thumbnailPickerAccountId ? (
@@ -1091,10 +1252,10 @@ const DynamicAdsLaunchPage = () => {
           mode="thumbnail"
           onClose={() => setThumbnailPickerAccountId('')}
           onRefresh={loadMediaAssets}
-          onSelect={(mediaAsset) => selectThumbnailAssetForAccount(thumbnailPickerAccountId, mediaAsset)}
+          onSelect={(mediaAsset) => selectThumbnailAssetForAssignment(thumbnailPickerAccountId, mediaAsset)}
           uploadBrandId={brandId}
           uploadBrandName={selectedBrand?.name || ''}
-          selectedMediaAssetId={assignments[thumbnailPickerAccountId]?.thumbnailAssetId || ''}
+          selectedMediaAssetId={getAssignmentByKey(thumbnailPickerAccountId)?.thumbnailAssetId || ''}
         />
       ) : null}
       <PixelPublishPrompt
@@ -1157,7 +1318,13 @@ const DynamicAdsLaunchPage = () => {
               </select>
             </div>
             <div className="space-y-2">
-              <FieldLabel htmlFor="dynamic-token">Token key</FieldLabel>
+              <FieldLabel htmlFor="dynamic-token">Token key  {selectedToken ? (
+                <span className={`text-xs font-black uppercase tracking-[0.12em] ${selectedTokenApiState.blocked ? 'text-red-600' : 'text-green-600'}`}>
+                 : {selectedTokenApiState.status || 'UNKNOWN'}
+                </span>
+                
+              ) : null}</FieldLabel>
+               
               <select id="dynamic-token" value={tokenId} onChange={(event) => handleTokenChange(event.target.value)} disabled={tokensLoading || !brandTokenOptions.length} className="h-12 w-full rounded-xl border border-sky-100 px-4 outline-none focus:border-sky-400 focus:ring-4 focus:ring-sky-100">
                 <option value="">{brandId ? 'Select brand token' : 'Select brand first'}</option>
                 {brandTokenOptions.map((token) => {
@@ -1169,11 +1336,7 @@ const DynamicAdsLaunchPage = () => {
                   );
                 })}
               </select>
-              {selectedToken ? (
-                <p className={`text-xs font-black uppercase tracking-[0.12em] ${selectedTokenApiState.blocked ? 'text-red-600' : 'text-slate-400'}`}>
-                  {selectedTokenApiState.label}: {selectedTokenApiState.status || 'UNKNOWN'}
-                </p>
-              ) : null}
+           
             </div>
             <div className="space-y-2">
               <FieldLabel htmlFor="dynamic-page">Shared fallback page</FieldLabel>
@@ -1208,9 +1371,7 @@ const DynamicAdsLaunchPage = () => {
             <button type="button" onClick={loadRowPixels} disabled={!tokenId || !scopedAdAccounts.length} className="h-12 rounded-xl border border-sky-100 bg-white px-4 text-sm font-bold text-slate-700 transition hover:bg-sky-50 disabled:opacity-50">
               {loadingPixels ? 'Loading pixels...' : 'Load account pixels'}
             </button>
-            <p className="rounded-xl bg-sky-50 px-3 py-2 text-xs font-semibold leading-5 text-slate-500">
-              Shared page is a fallback. Shared pixel writes to every row after pixels load, and each row can still override it.
-            </p>
+          
           </div>
         </DashboardPanel>
 
@@ -1218,7 +1379,7 @@ const DynamicAdsLaunchPage = () => {
           title="Ad account template assignments"
           headerAction={
             <span className="rounded-full bg-sky-50 px-3 py-1 text-xs font-black text-sky-700">
-              {selectedCount} ready
+              {selectedCount} ready campaign{selectedCount === 1 ? '' : 's'}
             </span>
           }
         >
@@ -1265,208 +1426,258 @@ const DynamicAdsLaunchPage = () => {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-sky-50">
-                  {scopedAdAccounts.map((account, index) => {
-                    const assignment = {
-                      account,
-                      ...(assignments[account.id] || {}),
-                    };
-                    const campaignTemplate = campaignTemplates.find((template) => template.id === assignment.campaignTemplateId);
-                    const mediaTemplate = mediaTemplates.find((template) => template.id === assignment.mediaTemplateId);
-                    const mediaAsset = getAssignmentMediaAsset(assignment);
-                    const thumbnailAsset = getAssignmentThumbnailAsset(assignment);
-                    const videoMediaSelected = mediaAsset?.mediaType === 'VIDEO';
-                    const accountPageId = assignment.pageId || campaignTemplate?.config?.pageId || pageId;
-                    const accountPage = pages.find((page) => page.id === accountPageId);
-                    const accountPixelOptions = getAccountPixelOptions(account.id);
-                    const accountPixelId = getAssignmentPixelId(assignment);
-                    const accountPixelName = getAssignmentPixelName(assignment);
-                    const requiresPixel = campaignRequiresPixel(campaignTemplate);
-                    const campaignStatus = getCampaignStatus(campaignTemplate);
-                    const hasSchedule = Boolean(campaignTemplate?.config?.scheduleStart && campaignTemplate?.config?.scheduleEnd);
-                    const apiBlocked = selectedTokenApiState.blocked;
-                    const ready = Boolean(!apiBlocked && campaignTemplate && mediaTemplate && mediaAsset && (!videoMediaSelected || thumbnailAsset) && accountPageId && (!requiresPixel || accountPixelId));
-                    const readyClass = apiBlocked
-                      ? 'bg-red-50 text-red-700'
-                      : ready
-                        ? 'bg-emerald-50 text-emerald-700'
-                        : 'bg-slate-100 text-slate-500';
+                  {scopedAdAccounts.map((account, accountIndex) => {
+                    const accountRows = assignmentRows.filter((assignment) => assignment.account.id === account.id);
 
                     return (
-                      <tr key={account.id} className="align-top">
-                        <td className="sticky left-0 z-20 w-14 min-w-[3.5rem] bg-white px-3 py-3 text-center shadow-[8px_0_16px_-16px_rgba(15,23,42,0.35)]">
-                          <span className="inline-flex h-7 w-7 items-center justify-center rounded-full bg-sky-50 text-xs font-black text-sky-700">
-                            {index + 1}
-                          </span>
-                        </td>
-                        <td className="sticky left-[3.5rem] z-10 min-w-56 bg-white px-3 py-3 shadow-[8px_0_16px_-16px_rgba(15,23,42,0.45)]">
-                          <p className="font-black text-slate-950">{account.name}</p>
-                          <p className="mt-1 text-xs font-semibold text-slate-400">{account.accountId} {account.currency || ''}</p>
-                        </td>
-                        <td className="px-3 py-3">
-                          <select value={assignment.pageId || ''} onChange={(event) => updateAssignment(account.id, 'pageId', event.target.value)} disabled={!pages.length} className="h-10 min-w-48 rounded-xl border border-sky-100 px-3 text-xs font-semibold outline-none focus:border-sky-400 focus:ring-4 focus:ring-sky-100 disabled:bg-slate-50">
-                            <option value="">{pageId ? `Use shared: ${selectedPage?.name || pageId}` : 'Select page'}</option>
-                            {pages.map((page) => <option key={page.id} value={page.id}>{page.name}</option>)}
-                          </select>
-                          <p className="mt-1 text-xs font-semibold text-slate-400">
-                            {accountPage ? accountPage.name : campaignTemplate?.config?.pageId ? `Template page ${campaignTemplate.config.pageId}` : 'Required before publish'}
-                          </p>
-                        </td>
-                        <td className="px-3 py-3">
-                          <select
-                            value={accountPixelId}
-                            onChange={(event) => updateAssignment(account.id, 'pixelId', event.target.value)}
-                            disabled={loadingPixels || !accountPixelOptions.length}
-                            className="h-10 min-w-40 rounded-xl border border-sky-100 px-3 text-xs font-semibold outline-none focus:border-sky-400 focus:ring-4 focus:ring-sky-100 disabled:bg-slate-50"
-                          >
-                            <option value="">{requiresPixel ? 'Select pixel' : 'No pixel'}</option>
-                            {accountPixelId && !accountPixelOptions.some((pixel) => pixel.id === accountPixelId) ? (
-                              <option value={accountPixelId}>{accountPixelName || accountPixelId}</option>
-                            ) : null}
-                            {accountPixelOptions.map((pixel) => <option key={pixel.id} value={pixel.id}>{pixel.name}</option>)}
-                          </select>
-                          <p className={`mt-1 text-xs font-semibold ${requiresPixel && !accountPixelId ? 'text-red-500' : 'text-slate-400'}`}>
-                            {requiresPixel
-                              ? accountPixelId
-                                ? accountPixelName || 'Pixel selected'
-                                : 'Required for this template'
-                              : accountPixelId
-                                ? accountPixelName || 'Optional pixel selected'
-                                : 'Optional for tracking'}
-                          </p>
-                        </td>
-                        <td className="px-3 py-3">
-                          <div className="flex items-center gap-2">
-                            <select value={assignment.campaignTemplateId || ''} onChange={(event) => updateAssignment(account.id, 'campaignTemplateId', event.target.value)} className="h-10 min-w-52 rounded-xl border border-sky-100 px-3 text-xs font-semibold outline-none focus:border-sky-400 focus:ring-4 focus:ring-sky-100">
-                              <option value="">Select campaign template</option>
-                              {campaignTemplates.map((template) => <option key={template.id} value={template.id}>{template.name}</option>)}
-                            </select>
-                            <button
-                              type="button"
-                              onClick={() => setPreviewTemplate(campaignTemplate)}
-                              disabled={!campaignTemplate}
-                              className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-sky-100 bg-white text-sky-700 transition hover:bg-sky-50 disabled:cursor-not-allowed disabled:text-slate-300"
-                              title="Preview campaign template"
-                            >
-                              <Eye size={17} strokeWidth={2.3} />
-                            </button>
-                          </div>
-                          {campaignTemplate ? (
-                            <div className="mt-2 flex flex-wrap items-center gap-2">
-                              <span className={`rounded-full px-2.5 py-1 text-[11px] font-black ${getCampaignStatusBadgeClass(campaignStatus)}`}>
-                                {campaignStatus}
-                              </span>
-                              {hasSchedule ? (
-                                <span className="rounded-full bg-sky-50 px-2.5 py-1 text-[11px] font-black text-sky-700">
-                                  Scheduled
+                      <Fragment key={account.id}>
+                        {accountRows.map((assignment, rowIndex) => {
+                          const campaignTemplate = campaignTemplates.find((template) => template.id === assignment.campaignTemplateId);
+                          const mediaTemplate = mediaTemplates.find((template) => template.id === assignment.mediaTemplateId);
+                          const mediaAsset = getAssignmentMediaAsset(assignment);
+                          const thumbnailAsset = getAssignmentThumbnailAsset(assignment);
+                          const videoMediaSelected = mediaAsset?.mediaType === 'VIDEO';
+                          const accountPageId = getAssignmentPageId(assignment);
+                          const accountPage = pages.find((page) => page.id === accountPageId);
+                          const accountPixelOptions = getAccountPixelOptions(account.id);
+                          const accountPixelId = getAssignmentPixelId(assignment);
+                          const accountPixelName = getAssignmentPixelName(assignment);
+                          const requiresPixel = campaignRequiresPixel(campaignTemplate);
+                          const campaignStatus = getCampaignStatus(campaignTemplate);
+                          const hasSchedule = Boolean(campaignTemplate?.config?.scheduleStart && campaignTemplate?.config?.scheduleEnd);
+                          const scheduleError = getCampaignTemplateScheduleError(campaignTemplate);
+                          const apiBlocked = selectedTokenApiState.blocked;
+                          const ready = Boolean(!apiBlocked && campaignTemplate && !scheduleError && mediaTemplate && mediaAsset && (!videoMediaSelected || thumbnailAsset) && accountPageId && (!requiresPixel || accountPixelId));
+                          const readyClass = apiBlocked
+                            ? 'bg-red-50 text-red-700'
+                            : ready
+                              ? 'bg-emerald-50 text-emerald-700'
+                              : 'bg-slate-100 text-slate-500';
+                          const rowNumber = accountRows.length > 1 ? `${accountIndex + 1}.${rowIndex + 1}` : `${accountIndex + 1}`;
+
+                          return (
+                            <tr key={assignment.assignmentKey} className="align-top">
+                              <td className="sticky left-0 z-20 w-14 min-w-[3.5rem] bg-white px-3 py-3 text-center shadow-[8px_0_16px_-16px_rgba(15,23,42,0.35)]">
+                                <span className="inline-flex h-7 min-w-7 items-center justify-center rounded-full bg-sky-50 px-2 text-xs font-black text-sky-700">
+                                  {rowNumber}
                                 </span>
+                              </td>
+                              {rowIndex === 0 ? (
+                                <td rowSpan={accountRows.length} className="sticky left-[3.5rem] z-10 min-w-56 bg-white px-3 py-3 shadow-[8px_0_16px_-16px_rgba(15,23,42,0.45)]">
+                                  <p className="font-black text-slate-950">{account.name}</p>
+                                  <p className="mt-1 text-xs font-semibold text-slate-400">{account.accountId} {account.currency || ''}</p>
+                                  <button
+                                    type="button"
+                                    onClick={() => addCampaignForAccount(account.id)}
+                                    className="mt-3 inline-flex h-8 items-center gap-1.5 rounded-lg border border-sky-100 bg-sky-50 px-2.5 text-[11px] font-black uppercase tracking-[0.08em] text-sky-700 transition hover:bg-sky-100"
+                                  >
+                                    <Plus size={13} strokeWidth={2.5} />
+                                    Campaign
+                                  </button>
+                                </td>
                               ) : null}
-                              <span className="text-xs font-semibold text-slate-400">
-                                {campaignTemplate.config?.objective || 'Objective'} | {campaignTemplate.config?.dailyBudget || 'Budget'} daily
-                              </span>
-                            </div>
-                          ) : null}
-                        </td>
-                        <td className="px-3 py-3">
-                          <div className="flex items-center gap-2">
-                            <select value={assignment.mediaTemplateId || ''} onChange={(event) => updateAssignment(account.id, 'mediaTemplateId', event.target.value)} className="h-10 min-w-52 rounded-xl border border-sky-100 px-3 text-xs font-semibold outline-none focus:border-sky-400 focus:ring-4 focus:ring-sky-100">
-                              <option value="">Select media template</option>
-                              {mediaTemplates.map((template) => <option key={template.id} value={template.id}>{template.name}</option>)}
-                            </select>
-                            <button
-                              type="button"
-                              onClick={() => setPreviewTemplate(mediaTemplate)}
-                              disabled={!mediaTemplate}
-                              className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-sky-100 bg-white text-sky-700 transition hover:bg-sky-50 disabled:cursor-not-allowed disabled:text-slate-300"
-                              title="Preview media template"
-                            >
-                              <Eye size={17} strokeWidth={2.3} />
-                            </button>
-                          </div>
-                          {mediaTemplate ? (
-                            <p className="mt-1 text-xs font-semibold text-slate-400">
-                              {mediaTemplate.config?.headline || getTemplateLabel(mediaTemplate)}
-                            </p>
-                          ) : null}
-                        </td>
-                        <td className="px-3 py-3">
-                          <button
-                            type="button"
-                            onClick={() => setMediaPickerAccountId(account.id)}
-                            className="flex min-h-10 min-w-48 items-center gap-3 rounded-xl border border-sky-100 bg-white px-3 py-2 text-left text-xs font-semibold text-slate-700 transition hover:bg-sky-50"
-                          >
-                            {mediaAsset?.media?.url ? (
-                              <span className="h-10 w-10 shrink-0 overflow-hidden rounded-lg bg-slate-950">
-                                {mediaAsset.mediaType === 'VIDEO' ? (
-                                  <video src={mediaAsset.media.url} className="h-full w-full object-cover" />
-                                ) : (
-                                  <img src={mediaAsset.media.url} alt={mediaAsset.name} className="h-full w-full object-cover" />
-                                )}
-                              </span>
-                            ) : (
-                              <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-sky-50 text-sky-700">
-                                <ImageIcon size={17} strokeWidth={2.4} />
-                              </span>
-                            )}
-                            <span className="min-w-0">
-                              <span className="block truncate font-black text-slate-900">{mediaAsset?.name || 'Choose media'}</span>
-                              <span className="mt-0.5 block truncate text-[11px] font-semibold text-slate-400">
-                                {mediaAsset ? `${mediaAsset.mediaType === 'VIDEO' ? 'Video' : 'Image'} | ${mediaAsset.media?.width || 0}x${mediaAsset.media?.height || 0}` : 'Open library'}
-                              </span>
-                            </span>
-                          </button>
-                          {videoMediaSelected ? (
-                            <button
-                              type="button"
-                              onClick={() => setThumbnailPickerAccountId(account.id)}
-                              className={`mt-2 flex min-h-10 min-w-48 items-center gap-3 rounded-xl border px-3 py-2 text-left text-xs font-semibold transition ${
-                                thumbnailAsset
-                                  ? 'border-emerald-100 bg-emerald-50 text-emerald-800 hover:bg-emerald-100'
-                                  : 'border-amber-100 bg-amber-50 text-amber-800 hover:bg-amber-100'
-                              }`}
-                            >
-                              {thumbnailAsset?.media?.url ? (
-                                <span className="h-10 w-10 shrink-0 overflow-hidden rounded-lg bg-slate-950">
-                                  <img src={thumbnailAsset.media.url} alt={thumbnailAsset.name} className="h-full w-full object-cover" />
+                              <td className="px-3 py-3">
+                                <select value={assignment.pageId || ''} onChange={(event) => updateAssignmentLaunch(account.id, assignment.launchItemId, 'pageId', event.target.value)} disabled={!pages.length} className="h-10 min-w-48 rounded-xl border border-sky-100 px-3 text-xs font-semibold outline-none focus:border-sky-400 focus:ring-4 focus:ring-sky-100 disabled:bg-slate-50">
+                                  <option value="">{pageId ? `Use shared: ${selectedPage?.name || pageId}` : 'Select page'}</option>
+                                  {pages.map((page) => <option key={page.id} value={page.id}>{page.name}</option>)}
+                                </select>
+                                <p className="mt-1 text-xs font-semibold text-slate-400">
+                                  {accountPage ? accountPage.name : campaignTemplate?.config?.pageId ? `Template page ${campaignTemplate.config.pageId}` : 'Required before publish'}
+                                </p>
+                              </td>
+                              <td className="px-3 py-3">
+                                <select
+                                  value={accountPixelId}
+                                  onChange={(event) => updateAssignmentLaunch(account.id, assignment.launchItemId, 'pixelId', event.target.value)}
+                                  disabled={loadingPixels || !accountPixelOptions.length}
+                                  className="h-10 min-w-40 rounded-xl border border-sky-100 px-3 text-xs font-semibold outline-none focus:border-sky-400 focus:ring-4 focus:ring-sky-100 disabled:bg-slate-50"
+                                >
+                                  <option value="">{requiresPixel ? 'Select pixel' : 'No pixel'}</option>
+                                  {accountPixelId && !accountPixelOptions.some((pixel) => pixel.id === accountPixelId) ? (
+                                    <option value={accountPixelId}>{accountPixelName || accountPixelId}</option>
+                                  ) : null}
+                                  {accountPixelOptions.map((pixel) => <option key={pixel.id} value={pixel.id}>{pixel.name}</option>)}
+                                </select>
+                                <p className={`mt-1 text-xs font-semibold ${requiresPixel && !accountPixelId ? 'text-red-500' : 'text-slate-400'}`}>
+                                  {requiresPixel
+                                    ? accountPixelId
+                                      ? accountPixelName || 'Pixel selected'
+                                      : 'Required for this template'
+                                    : accountPixelId
+                                      ? accountPixelName || 'Optional pixel selected'
+                                      : 'Optional for tracking'}
+                                </p>
+                              </td>
+                              <td className="px-3 py-3">
+                                <div className="flex items-center gap-2">
+                                  <select value={assignment.campaignTemplateId || ''} onChange={(event) => updateAssignmentLaunch(account.id, assignment.launchItemId, 'campaignTemplateId', event.target.value)} className="h-10 min-w-52 rounded-xl border border-sky-100 px-3 text-xs font-semibold outline-none focus:border-sky-400 focus:ring-4 focus:ring-sky-100">
+                                    <option value="">Select campaign template</option>
+                                    {campaignTemplates.map((template) => <option key={template.id} value={template.id}>{template.name}</option>)}
+                                  </select>
+                                  <button
+                                    type="button"
+                                    onClick={() => setPreviewTemplate(campaignTemplate)}
+                                    disabled={!campaignTemplate}
+                                    className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-sky-100 bg-white text-sky-700 transition hover:bg-sky-50 disabled:cursor-not-allowed disabled:text-slate-300"
+                                    title="Preview campaign template"
+                                  >
+                                    <Eye size={17} strokeWidth={2.3} />
+                                  </button>
+                                </div>
+                                {campaignTemplate ? (
+                                  <div className="mt-2 flex flex-wrap items-center gap-2">
+                                    <span className={`rounded-full px-2.5 py-1 text-[11px] font-black ${getCampaignStatusBadgeClass(campaignStatus)}`}>
+                                      {campaignStatus}
+                                    </span>
+                                    {hasSchedule ? (
+                                      <span className="rounded-full bg-sky-50 px-2.5 py-1 text-[11px] font-black text-sky-700">
+                                        Scheduled
+                                      </span>
+                                    ) : null}
+                                    {scheduleError ? (
+                                      <span className="rounded-full bg-red-50 px-2.5 py-1 text-[11px] font-black text-red-700">
+                                        Schedule invalid
+                                      </span>
+                                    ) : null}
+                                    <span className="text-xs font-semibold text-slate-400">
+                                      {campaignTemplate.config?.objective || 'Objective'} | {campaignTemplate.config?.dailyBudget || 'Budget'} daily
+                                    </span>
+                                  </div>
+                                ) : null}
+                                {scheduleError ? (
+                                  <p className="mt-2 max-w-72 text-xs font-semibold leading-5 text-red-600">
+                                    {scheduleError}
+                                  </p>
+                                ) : hasSchedule ? (
+                                  <p className="mt-2 max-w-72 text-xs font-semibold leading-5 text-slate-400">
+                                    Schedule checked against {INDONESIA_TIME_ZONE_LABEL}.
+                                  </p>
+                                ) : null}
+                              </td>
+                              <td className="px-3 py-3">
+                                <div className="flex items-center gap-2">
+                                  <select value={assignment.mediaTemplateId || ''} onChange={(event) => updateAssignmentLaunch(account.id, assignment.launchItemId, 'mediaTemplateId', event.target.value)} className="h-10 min-w-52 rounded-xl border border-sky-100 px-3 text-xs font-semibold outline-none focus:border-sky-400 focus:ring-4 focus:ring-sky-100">
+                                    <option value="">Select media template</option>
+                                    {mediaTemplates.map((template) => <option key={template.id} value={template.id}>{template.name}</option>)}
+                                  </select>
+                                  <button
+                                    type="button"
+                                    onClick={() => setPreviewTemplate(mediaTemplate)}
+                                    disabled={!mediaTemplate}
+                                    className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-sky-100 bg-white text-sky-700 transition hover:bg-sky-50 disabled:cursor-not-allowed disabled:text-slate-300"
+                                    title="Preview media template"
+                                  >
+                                    <Eye size={17} strokeWidth={2.3} />
+                                  </button>
+                                </div>
+                                {mediaTemplate ? (
+                                  <p className="mt-1 text-xs font-semibold text-slate-400">
+                                    {mediaTemplate.config?.headline || getTemplateLabel(mediaTemplate)}
+                                  </p>
+                                ) : null}
+                              </td>
+                              <td className="px-3 py-3">
+                                <button
+                                  type="button"
+                                  onClick={() => setMediaPickerAccountId(assignment.assignmentKey)}
+                                  className="flex min-h-10 min-w-48 items-center gap-3 rounded-xl border border-sky-100 bg-white px-3 py-2 text-left text-xs font-semibold text-slate-700 transition hover:bg-sky-50"
+                                >
+                                  {mediaAsset?.media?.url ? (
+                                    <span className="h-10 w-10 shrink-0 overflow-hidden rounded-lg bg-slate-950">
+                                      {mediaAsset.mediaType === 'VIDEO' ? (
+                                        <video src={mediaAsset.media.url} className="h-full w-full object-cover" />
+                                      ) : (
+                                        <img src={mediaAsset.media.url} alt={mediaAsset.name} className="h-full w-full object-cover" />
+                                      )}
+                                    </span>
+                                  ) : (
+                                    <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-sky-50 text-sky-700">
+                                      <ImageIcon size={17} strokeWidth={2.4} />
+                                    </span>
+                                  )}
+                                  <span className="min-w-0">
+                                    <span className="block truncate font-black text-slate-900">{mediaAsset?.name || 'Choose media'}</span>
+                                    <span className="mt-0.5 block truncate text-[11px] font-semibold text-slate-400">
+                                      {mediaAsset ? `${mediaAsset.mediaType === 'VIDEO' ? 'Video' : 'Image'} | ${mediaAsset.media?.width || 0}x${mediaAsset.media?.height || 0}` : 'Open library'}
+                                    </span>
+                                  </span>
+                                </button>
+                                {videoMediaSelected ? (
+                                  <button
+                                    type="button"
+                                    onClick={() => setThumbnailPickerAccountId(assignment.assignmentKey)}
+                                    className={`mt-2 flex min-h-10 min-w-48 items-center gap-3 rounded-xl border px-3 py-2 text-left text-xs font-semibold transition ${
+                                      thumbnailAsset
+                                        ? 'border-emerald-100 bg-emerald-50 text-emerald-800 hover:bg-emerald-100'
+                                        : 'border-amber-100 bg-amber-50 text-amber-800 hover:bg-amber-100'
+                                    }`}
+                                  >
+                                    {thumbnailAsset?.media?.url ? (
+                                      <span className="h-10 w-10 shrink-0 overflow-hidden rounded-lg bg-slate-950">
+                                        <img src={thumbnailAsset.media.url} alt={thumbnailAsset.name} className="h-full w-full object-cover" />
+                                      </span>
+                                    ) : (
+                                      <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-white/80 text-amber-700">
+                                        <ImageIcon size={17} strokeWidth={2.4} />
+                                      </span>
+                                    )}
+                                    <span className="min-w-0">
+                                      <span className="block truncate font-black">{thumbnailAsset?.name || 'Choose thumbnail'}</span>
+                                      <span className="mt-0.5 block truncate text-[11px] font-semibold opacity-75">
+                                        {thumbnailAsset
+                                          ? `${thumbnailAsset.media?.width || 0}x${thumbnailAsset.media?.height || 0}${thumbnailAsset.isDefaultVideoThumbnail ? ' | Auto default' : ''}`
+                                          : 'Required for video'}
+                                      </span>
+                                    </span>
+                                  </button>
+                                ) : null}
+                                {videoMediaSelected && mediaAsset?.thumbnail?.url ? (
+                                  <button
+                                    type="button"
+                                    onClick={() => updateAssignmentLaunch(account.id, assignment.launchItemId, 'thumbnailAssetId', '')}
+                                    disabled={!assignment.thumbnailAssetId}
+                                    className="mt-2 inline-flex h-8 w-8 items-center justify-center rounded-lg border border-emerald-100 bg-emerald-50 text-emerald-700 transition hover:bg-emerald-100 disabled:cursor-not-allowed disabled:opacity-45"
+                                    title="Reload default thumbnail"
+                                  >
+                                    <RefreshCw size={14} strokeWidth={2.5} />
+                                  </button>
+                                ) : null}
+                              </td>
+                              <td className="px-3 py-3">
+                                <span className={`inline-flex items-center gap-2 rounded-full px-3 py-1 text-xs font-black ${readyClass}`}>
+                                  {apiBlocked ? <AlertTriangle size={14} /> : ready ? <CheckCircle2 size={14} /> : <Shuffle size={14} />}
+                                  {apiBlocked ? 'API blocked' : ready ? 'Ready' : 'Waiting'}
                                 </span>
-                              ) : (
-                                <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-white/80 text-amber-700">
-                                  <ImageIcon size={17} strokeWidth={2.4} />
-                                </span>
-                              )}
-                              <span className="min-w-0">
-                                <span className="block truncate font-black">{thumbnailAsset?.name || 'Choose thumbnail'}</span>
-                                <span className="mt-0.5 block truncate text-[11px] font-semibold opacity-75">
-                                  {thumbnailAsset
-                                    ? `${thumbnailAsset.media?.width || 0}x${thumbnailAsset.media?.height || 0}${thumbnailAsset.isDefaultVideoThumbnail ? ' | Auto default' : ''}`
-                                    : 'Required for video'}
-                                </span>
-                              </span>
-                            </button>
-                          ) : null}
-                          {videoMediaSelected && mediaAsset?.thumbnail?.url ? (
-                            <button
-                              type="button"
-                              onClick={() => updateAssignment(account.id, 'thumbnailAssetId', '')}
-                              disabled={!assignment.thumbnailAssetId}
-                              className="mt-2 inline-flex h-8 w-8 items-center justify-center rounded-lg border border-emerald-100 bg-emerald-50 text-emerald-700 transition hover:bg-emerald-100 disabled:cursor-not-allowed disabled:opacity-45"
-                              title="Reload default thumbnail"
-                            >
-                              <RefreshCw size={14} strokeWidth={2.5} />
-                            </button>
-                          ) : null}
-                        </td>
-                        <td className="px-3 py-3">
-                          <span className={`inline-flex items-center gap-2 rounded-full px-3 py-1 text-xs font-black ${readyClass}`}>
-                            {apiBlocked ? <AlertTriangle size={14} /> : ready ? <CheckCircle2 size={14} /> : <Shuffle size={14} />}
-                            {apiBlocked ? 'API blocked' : ready ? 'Ready' : 'Waiting'}
-                          </span>
-                          {apiBlocked ? (
-                            <p className="mt-2 max-w-44 text-xs font-semibold leading-5 text-red-600">
-                              {selectedTokenApiState.label} is {selectedTokenApiState.status}. Select another token or refresh after fixing.
-                            </p>
-                          ) : null}
-                        </td>
-                      </tr>
+                                {apiBlocked ? (
+                                  <p className="mt-2 max-w-44 text-xs font-semibold leading-5 text-red-600">
+                                    {selectedTokenApiState.label} is {selectedTokenApiState.status}. Select another token or refresh after fixing.
+                                  </p>
+                                ) : null}
+                                <div className="mt-3 flex items-center gap-2">
+                                  <button
+                                    type="button"
+                                    onClick={() => duplicateAssignmentLaunch(assignment)}
+                                    className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-sky-100 bg-white text-sky-700 transition hover:bg-sky-50"
+                                    title="Duplicate this campaign row"
+                                  >
+                                    <Copy size={14} strokeWidth={2.4} />
+                                  </button>
+                                  {!assignment.isPrimary ? (
+                                    <button
+                                      type="button"
+                                      onClick={() => removeAssignmentLaunch(account.id, assignment.launchItemId)}
+                                      className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-red-100 bg-red-50 text-red-600 transition hover:bg-red-100"
+                                      title="Remove this campaign row"
+                                    >
+                                      <Trash2 size={14} strokeWidth={2.4} />
+                                    </button>
+                                  ) : null}
+                                </div>
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </Fragment>
                     );
                   })}
                 </tbody>

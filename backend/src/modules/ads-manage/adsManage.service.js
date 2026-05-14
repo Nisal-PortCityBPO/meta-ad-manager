@@ -823,6 +823,7 @@ function mapAssetForHistory(asset) {
 function mapLaunchForHistory({ launch, media, thumbnail, accountLaunch = null, retryPayload = null }) {
   return {
     launchLabel: launch.launchLabel,
+    launchItemId: accountLaunch?.launchItemId || '',
     templateId: launch.templateId || '',
     campaignTemplateId: accountLaunch?.campaignTemplateId || '',
     mediaTemplateId: accountLaunch?.mediaTemplateId || '',
@@ -1081,6 +1082,7 @@ function buildSingleAccountRetryPayload({ launch, account, accountLaunch = null,
   if (accountLaunch) {
     payload.accountLaunches = [
       {
+        launchItemId: accountLaunch.launchItemId || '',
         adAccountId: account.id,
         campaignTemplateId: accountLaunch.campaignTemplateId || '',
         mediaTemplateId: accountLaunch.mediaTemplateId || '',
@@ -1103,8 +1105,11 @@ function buildSingleAccountRetryPayload({ launch, account, accountLaunch = null,
   });
 
   if (resumeState) {
+    if (accountLaunch?.launchItemId) {
+      resumeState.launchItemId = accountLaunch.launchItemId;
+    }
     payload.resumeState = {
-      [account.id]: resumeState,
+      [accountLaunch?.launchItemId || account.id]: resumeState,
     };
   }
 
@@ -1590,7 +1595,7 @@ async function recordPublishedCampaign({ token, launch, account, names, campaign
       },
     },
     {
-      new: true,
+      returnDocument: 'after',
       upsert: true,
       setDefaultsOnInsert: true,
     }
@@ -1712,7 +1717,7 @@ async function recordFailedLaunch({
       },
     },
     {
-      new: true,
+      returnDocument: 'after',
       upsert: true,
       setDefaultsOnInsert: true,
     }
@@ -1916,7 +1921,7 @@ async function duplicateCampaign({ tokenId, campaignId, name, status = 'PAUSED',
           },
         },
         {
-          new: true,
+          returnDocument: 'after',
           upsert: true,
           setDefaultsOnInsert: true,
         }
