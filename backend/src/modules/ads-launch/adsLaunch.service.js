@@ -1487,7 +1487,10 @@ async function startPublishSession({ sessionId = '', title = '', source = '', pa
         latestError: '',
         pauseRequested: false,
         pauseRequestedAt: null,
+        forceStopRequested: false,
+        forceStopRequestedAt: null,
         pausedAt: null,
+        stoppedAt: null,
         completedAt: null,
         updatedBy: actor?._id || null,
       },
@@ -1562,7 +1565,10 @@ async function enqueuePublishLaunch({ payload, actor }) {
         latestError: '',
         pauseRequested: false,
         pauseRequestedAt: null,
+        forceStopRequested: false,
+        forceStopRequestedAt: null,
         pausedAt: null,
+        stoppedAt: null,
         completedAt: null,
         queue: {
           status: PUBLISH_SESSION_QUEUE_STATUSES.PENDING,
@@ -1633,7 +1639,13 @@ async function appendPublishSessionEvent({ sessionId, event }) {
     };
   }
 
-  await AdsLaunchPublishSession.updateOne({ sessionId: normalizedSessionId }, update);
+  await AdsLaunchPublishSession.updateOne(
+    {
+      sessionId: normalizedSessionId,
+      status: { $ne: PUBLISH_SESSION_STATUSES.FORCE_STOPPED },
+    },
+    update
+  );
 }
 
 function buildTerminalPublishProgress({ status, result }) {
@@ -1652,7 +1664,7 @@ function buildTerminalPublishProgress({ status, result }) {
   const currentTotal = Number(baseProgress.total) || 0;
   const total = Math.max(currentTotal, currentCompleted, summaryTotal);
 
-  if (status === PUBLISH_SESSION_STATUSES.PAUSED || result?.paused) {
+  if (status === PUBLISH_SESSION_STATUSES.PAUSED || status === PUBLISH_SESSION_STATUSES.FORCE_STOPPED || result?.paused) {
     return {
       completed: currentCompleted || publishedCount + failedCount + queuedCount,
       total: total || summaryTotal,
@@ -1674,6 +1686,7 @@ function normalizeTerminalPublishSessionSafeObject(session) {
   const terminalStatuses = new Set([
     PUBLISH_SESSION_STATUSES.COMPLETED,
     PUBLISH_SESSION_STATUSES.FAILED,
+    PUBLISH_SESSION_STATUSES.FORCE_STOPPED,
     PUBLISH_SESSION_STATUSES.QUEUED,
   ]);
 
@@ -1725,18 +1738,23 @@ async function markPublishSessionFinished({ sessionId, status, result = null, er
     : null;
   const progress = {
     type: 'progress',
-    status: status === PUBLISH_SESSION_STATUSES.PAUSED ? 'paused' : status.toLowerCase(),
-    step: status === PUBLISH_SESSION_STATUSES.PAUSED ? 'paused' : 'complete',
+    status: status === PUBLISH_SESSION_STATUSES.PAUSED ? 'paused' : status === PUBLISH_SESSION_STATUSES.FORCE_STOPPED ? 'stopped' : status.toLowerCase(),
+    step: status === PUBLISH_SESSION_STATUSES.PAUSED ? 'paused' : status === PUBLISH_SESSION_STATUSES.FORCE_STOPPED ? 'force-stopped' : 'complete',
     timestamp: now.toISOString(),
     message:
       status === PUBLISH_SESSION_STATUSES.PAUSED
         ? `Publish paused. ${resumePayload?.selectedAdAccountIds?.length || 0} ad account${resumePayload?.selectedAdAccountIds?.length === 1 ? '' : 's'} left to continue.`
+        : status === PUBLISH_SESSION_STATUSES.FORCE_STOPPED
+          ? error || 'Publish force-stopped by user'
         : result?.message || error || 'Publish finished',
     progress: finalProgress,
   };
 
   await AdsLaunchPublishSession.updateOne(
-    { sessionId: normalizedSessionId },
+    {
+      sessionId: normalizedSessionId,
+      status: { $ne: PUBLISH_SESSION_STATUSES.FORCE_STOPPED },
+    },
     {
       $set: {
         status,
@@ -1746,7 +1764,10 @@ async function markPublishSessionFinished({ sessionId, status, result = null, er
         progress,
         pauseRequested: false,
         pauseRequestedAt: null,
+        forceStopRequested: status === PUBLISH_SESSION_STATUSES.FORCE_STOPPED,
+        forceStopRequestedAt: status === PUBLISH_SESSION_STATUSES.FORCE_STOPPED ? now : null,
         pausedAt: status === PUBLISH_SESSION_STATUSES.PAUSED ? now : null,
+        stoppedAt: status === PUBLISH_SESSION_STATUSES.FORCE_STOPPED ? now : null,
         completedAt: now,
       },
       $push: {
@@ -1801,6 +1822,81 @@ async function requestPublishSessionPause({ sessionId, actor }) {
   return session.toSafeObject();
 }
 
+async function forceStopPublishSession({ sessionId, actor, req }) {
+  const session = await getPublishSessionDocForActor(sessionId, actor);
+
+  if (session.status === PUBLISH_SESSION_STATUSES.FORCE_STOPPED) {
+    return session.toSafeObject();
+  }
+
+  const stoppableStatuses = new Set([
+    PUBLISH_SESSION_STATUSES.ACTIVE,
+    PUBLISH_SESSION_STATUSES.PAUSE_REQUESTED,
+    PUBLISH_SESSION_STATUSES.PAUSED,
+    PUBLISH_SESSION_STATUSES.PENDING,
+  ]);
+
+  if (!stoppableStatuses.has(session.status)) {
+    throw new HttpError(400, 'Only a running, waiting, or paused publish can be force-stopped');
+  }
+
+  const now = new Date();
+  const event = {
+    type: 'progress',
+    sessionId: session.sessionId,
+    step: 'force-stopped',
+    status: 'stopped',
+    timestamp: now.toISOString(),
+    message: 'Publish force-stopped by user. Any in-flight Meta request may still finish at Meta, but this local publish will not continue.',
+    progress: {
+      ...(session.progress?.progress || {}),
+      etaSeconds: 0,
+    },
+  };
+
+  session.status = PUBLISH_SESSION_STATUSES.FORCE_STOPPED;
+  session.latestError = 'Publish force-stopped by user';
+  session.latestResult = null;
+  session.resumePayload = null;
+  session.pauseRequested = false;
+  session.pauseRequestedAt = null;
+  session.forceStopRequested = true;
+  session.forceStopRequestedAt = now;
+  session.pausedAt = null;
+  session.stoppedAt = now;
+  session.completedAt = now;
+  session.progress = event;
+  session.queue = {
+    ...(session.queue?.toObject?.() || session.queue || {}),
+    status: [PUBLISH_SESSION_QUEUE_STATUSES.PENDING, PUBLISH_SESSION_QUEUE_STATUSES.RUNNING].includes(session.queue?.status)
+      ? PUBLISH_SESSION_QUEUE_STATUSES.FAILED
+      : session.queue?.status || PUBLISH_SESSION_QUEUE_STATUSES.NONE,
+    completedAt: now,
+    lastError: 'Publish force-stopped by user',
+  };
+  session.updatedBy = actor?._id || null;
+  session.events.push(event);
+  session.events = session.events.slice(-PUBLISH_SESSION_EVENT_LIMIT);
+  await session.save();
+
+  releasePublishSessionResources(session.sessionId);
+  schedulePublishSessionQueueRun(0);
+
+  await writeActivityLog({
+    user: actor,
+    action: 'ADS_PUBLISH_FORCE_STOPPED',
+    entity: 'AdsLaunchPublishSession',
+    entityId: session._id.toString(),
+    metadata: {
+      sessionId: session.sessionId,
+      title: session.title,
+    },
+    req,
+  });
+
+  return session.toSafeObject();
+}
+
 async function isPublishSessionPauseRequested(sessionId) {
   const normalizedSessionId = normalizePublishSessionId(sessionId);
 
@@ -1819,10 +1915,42 @@ async function isPublishSessionPauseRequested(sessionId) {
   );
 }
 
+async function isPublishSessionForceStopped(sessionId) {
+  const normalizedSessionId = normalizePublishSessionId(sessionId);
+
+  if (!normalizedSessionId) {
+    return false;
+  }
+
+  const session = await AdsLaunchPublishSession.findOne({ sessionId: normalizedSessionId })
+    .select('status forceStopRequested')
+    .lean();
+
+  return Boolean(
+    session?.forceStopRequested ||
+      session?.status === PUBLISH_SESSION_STATUSES.FORCE_STOPPED
+  );
+}
+
+async function throwIfPublishSessionForceStopped(sessionId) {
+  if (!(await isPublishSessionForceStopped(sessionId))) {
+    return;
+  }
+
+  throw new HttpError(409, 'Publish was force-stopped by user', {
+    forceStopped: true,
+  });
+}
+
+function isPublishForceStopError(error) {
+  return Boolean(error?.forceStopped);
+}
+
 async function clearPublishSessionHistory({ actor, req }) {
   const clearableStatuses = [
     PUBLISH_SESSION_STATUSES.COMPLETED,
     PUBLISH_SESSION_STATUSES.FAILED,
+    PUBLISH_SESSION_STATUSES.FORCE_STOPPED,
     PUBLISH_SESSION_STATUSES.QUEUED,
   ];
   const result = await AdsLaunchPublishSession.deleteMany({
@@ -1912,6 +2040,8 @@ async function waitBetweenPublishAccounts({ sessionId, settings, progress, progr
   emitCountdown();
 
   while (Date.now() - startedAt < delayMs) {
+    await throwIfPublishSessionForceStopped(sessionId);
+
     if (await isPublishSessionPauseRequested(sessionId)) {
       return { paused: true, delayMs: Date.now() - startedAt };
     }
@@ -2470,7 +2600,10 @@ async function resumePublishSession({ sessionId, actor, req }) {
   session.latestError = '';
   session.pauseRequested = false;
   session.pauseRequestedAt = null;
+  session.forceStopRequested = false;
+  session.forceStopRequestedAt = null;
   session.pausedAt = null;
+  session.stoppedAt = null;
   session.completedAt = null;
   session.progress = event;
   session.queue = {
@@ -4084,6 +4217,8 @@ function ensureCreativeAssetsArePublishable({ media, thumbnail }) {
 }
 
 async function runPublishStep(stepLabel, operation, progress = null, progressContext = {}, step = '') {
+  await throwIfPublishSessionForceStopped(progressContext.sessionId);
+
   progress?.info({
     ...progressContext,
     step,
@@ -4093,6 +4228,7 @@ async function runPublishStep(stepLabel, operation, progress = null, progressCon
 
   try {
     const result = await operation();
+    await throwIfPublishSessionForceStopped(progressContext.sessionId);
     progress?.complete({
       ...progressContext,
       step,
@@ -4100,6 +4236,10 @@ async function runPublishStep(stepLabel, operation, progress = null, progressCon
     });
     return result;
   } catch (error) {
+    if (isPublishForceStopError(error)) {
+      throw error;
+    }
+
     progress?.fail({
       ...progressContext,
       step,
@@ -4597,6 +4737,7 @@ async function publishLaunchUnlocked({ payload, actor, req, onProgress = null, t
         .catch(() => undefined);
     }
   };
+  await throwIfPublishSessionForceStopped(sessionId);
   const launch = ensurePublishPayload(payload);
   launch.staticDefaults = {
     ...launch.staticDefaults,
@@ -4628,6 +4769,7 @@ async function publishLaunchUnlocked({ payload, actor, req, onProgress = null, t
   const results = [];
   const failed = [];
   let paused = false;
+  let stopped = false;
   let pauseResumePayload = null;
   const progress = createPublishProgressReporter({
     onProgress: emitProgress,
@@ -4649,6 +4791,7 @@ async function publishLaunchUnlocked({ payload, actor, req, onProgress = null, t
     };
     const accountLabel = `Ad account ${index + 1}/${launch.selectedAdAccountIds.length} (${selectedAccount.name})`;
     const progressContext = {
+      sessionId,
       accountIndex: index + 1,
       totalAccounts: launch.selectedAdAccountIds.length,
       adAccountId,
@@ -4668,6 +4811,8 @@ async function publishLaunchUnlocked({ payload, actor, req, onProgress = null, t
     let ad = null;
 
     try {
+      await throwIfPublishSessionForceStopped(sessionId);
+
       accountResolved = usesAccountTemplates
         ? await resolveAccountLaunchFromTemplates({
             baseLaunch: launch,
@@ -4704,6 +4849,7 @@ async function publishLaunchUnlocked({ payload, actor, req, onProgress = null, t
         status: 'active',
         message: `${accountLabel}: starting`,
       });
+      await throwIfPublishSessionForceStopped(sessionId);
 
       if (resumeState.campaignId || resumeState.adSetId || resumeState.creativeId || resumeState.adId) {
         const resumeCheck = await verifyResumeStateForAccount({
@@ -4875,6 +5021,21 @@ async function publishLaunchUnlocked({ payload, actor, req, onProgress = null, t
         message: `${accountLabel}: publish complete`,
       });
     } catch (error) {
+      if (isPublishForceStopError(error)) {
+        stopped = true;
+        progress.info({
+          ...progressContext,
+          step: 'force-stopped',
+          status: 'stopped',
+          message: `${accountLabel}: publish force-stopped`,
+          progress: {
+            ...progress.getProgress(),
+            etaSeconds: 0,
+          },
+        });
+        break;
+      }
+
       failed.push({
         adAccountId,
         adAccountName: selectedAccount.name,
@@ -5029,7 +5190,9 @@ async function publishLaunchUnlocked({ payload, actor, req, onProgress = null, t
   const queuedCount = failed.filter((item) => item.queued).length;
   const hardFailedCount = failed.length - queuedCount;
   const pausedCount = pauseResumePayload?.selectedAdAccountIds?.length || 0;
-  const finalSessionStatus = paused
+  const finalSessionStatus = stopped
+    ? PUBLISH_SESSION_STATUSES.FORCE_STOPPED
+    : paused
     ? PUBLISH_SESSION_STATUSES.PAUSED
     : hardFailedCount > 0
       ? PUBLISH_SESSION_STATUSES.FAILED
@@ -5038,7 +5201,9 @@ async function publishLaunchUnlocked({ payload, actor, req, onProgress = null, t
         : PUBLISH_SESSION_STATUSES.COMPLETED;
   const publishResult = {
     message:
-      paused
+      stopped
+        ? `Publish force-stopped after ${results.length} success${failed.length ? ` and ${failed.length} handled failure${failed.length === 1 ? '' : 's'}` : ''}`
+        : paused
         ? `Publish paused after ${results.length} success${failed.length ? ` and ${failed.length} handled failure${failed.length === 1 ? '' : 's'}` : ''}. ${pausedCount} ad account${pausedCount === 1 ? '' : 's'} left to continue`
         : failed.length > 0
         ? queuedCount && !hardFailedCount
@@ -5055,8 +5220,10 @@ async function publishLaunchUnlocked({ payload, actor, req, onProgress = null, t
       failed: failed.length,
       queued: queuedCount,
       paused: pausedCount,
+      stopped: stopped ? 1 : 0,
     },
     paused,
+    stopped,
     canResume: paused,
     resumeCount: pausedCount,
     progress: progress.getProgress(),
@@ -5077,7 +5244,11 @@ async function publishLaunchUnlocked({ payload, actor, req, onProgress = null, t
       sessionId,
       status: finalSessionStatus,
       result: publishResult,
-      error: hardFailedCount > 0 ? `${hardFailedCount} ad account${hardFailedCount === 1 ? '' : 's'} failed during publish` : '',
+      error: stopped
+        ? 'Publish force-stopped by user'
+        : hardFailedCount > 0
+          ? `${hardFailedCount} ad account${hardFailedCount === 1 ? '' : 's'} failed during publish`
+          : '',
       resumePayload: pauseResumePayload,
     });
   }
@@ -5130,6 +5301,7 @@ module.exports = {
   deleteTemplate,
   enqueuePublishLaunch,
   failPublishSession,
+  forceStopPublishSession,
   getMediaAssetForActor,
   getTemplateAssetForActor,
   listPublishSessions,

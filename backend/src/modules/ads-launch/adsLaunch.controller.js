@@ -232,6 +232,19 @@ const pausePublishSession = asyncHandler(async (req, res) => {
   });
 });
 
+const forceStopPublishSession = asyncHandler(async (req, res) => {
+  const session = await adsLaunchService.forceStopPublishSession({
+    sessionId: req.params.sessionId,
+    actor: req.user,
+    req,
+  });
+
+  res.json({
+    message: 'Publish force-stopped.',
+    session,
+  });
+});
+
 const resumePublishSession = asyncHandler(async (req, res) => {
   const session = await adsLaunchService.resumePublishSession({
     sessionId: req.params.sessionId,
@@ -385,6 +398,7 @@ module.exports = {
   getTemplates,
   getTemplateAsset,
   pausePublishSession,
+  forceStopPublishSession,
   publishLaunch,
   publishLaunchStream,
   retryFailedLaunch,

@@ -90,6 +90,7 @@ const normalizeServerSession = (session) => {
     latestResult: session.latestResult || null,
     latestError: session.latestError || '',
     canPause: Boolean(session.canPause),
+    canForceStop: Boolean(session.canForceStop),
     canResume: Boolean(session.canResume),
     resumeCount: session.resumeCount || 0,
     pauseRequested: Boolean(session.pauseRequested),
@@ -112,6 +113,7 @@ export const PublishProgressProvider = ({ children }) => {
   const [currentPublishId, setCurrentPublishId] = useState('');
   const [pauseBusy, setPauseBusy] = useState(false);
   const [resumeBusy, setResumeBusy] = useState(false);
+  const [stopBusy, setStopBusy] = useState(false);
   const activeSessionRef = useRef(null);
   const publishHistoryUnreadCount = publishHistory.filter((item) => getHistorySortTime(item) > publishHistorySeenAt).length;
 
@@ -348,6 +350,7 @@ export const PublishProgressProvider = ({ children }) => {
     setCurrentPublishId('');
     setPauseBusy(false);
     setResumeBusy(false);
+    setStopBusy(false);
     activeSessionRef.current = null;
   };
 
@@ -386,6 +389,34 @@ export const PublishProgressProvider = ({ children }) => {
     setShowStartPopup(false);
     return true;
   }, [publishHistory]);
+
+  const forceStopPublish = useCallback(async (sessionId = currentPublishId) => {
+    if (!sessionId) {
+      throw new Error('No live publish session to stop');
+    }
+
+    setStopBusy(true);
+    try {
+      const data = await adsLaunchApi.forceStopPublishSession(sessionId);
+      const stoppedSession = normalizeServerSession(data.session);
+      if (data.session) {
+        applyServerSessions([data.session]);
+      }
+      if (stoppedSession) {
+        activeSessionRef.current = stoppedSession;
+        setCurrentPublishId(stoppedSession.id);
+        setIsPublishing(false);
+        setLatestResult(stoppedSession.latestResult || null);
+        setLatestError(stoppedSession.latestError || '');
+        setEvents((stoppedSession.events || []).slice(-40));
+        setProgress(stoppedSession.progress || null);
+        setShowStartPopup(false);
+      }
+      return data;
+    } finally {
+      setStopBusy(false);
+    }
+  }, [applyServerSessions, currentPublishId]);
 
   const markPublishHistorySeen = () => {
     const latestTimestamp = publishHistory
@@ -484,6 +515,7 @@ export const PublishProgressProvider = ({ children }) => {
       events,
       failPublish,
       focusPublishSession,
+      forceStopPublish,
       isPublishing,
       latestError,
       latestResult,
@@ -499,6 +531,7 @@ export const PublishProgressProvider = ({ children }) => {
       resumeBusy,
       resumePausedPublish,
       showStartPopup,
+      stopBusy,
     }),
     [
       currentPublishId,
@@ -514,11 +547,13 @@ export const PublishProgressProvider = ({ children }) => {
       applyPublishSessions,
       clearPublishHistory,
       focusPublishSession,
+      forceStopPublish,
       refreshPublishSessions,
       requestPausePublish,
       resumeBusy,
       resumePausedPublish,
       showStartPopup,
+      stopBusy,
     ]
   );
 

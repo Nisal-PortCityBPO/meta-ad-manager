@@ -6,6 +6,7 @@ const PUBLISH_SESSION_STATUSES = Object.freeze({
   PAUSED: 'PAUSED',
   COMPLETED: 'COMPLETED',
   FAILED: 'FAILED',
+  FORCE_STOPPED: 'FORCE_STOPPED',
   QUEUED: 'QUEUED',
   PENDING: 'PENDING',
 });
@@ -27,6 +28,10 @@ const toClientStatus = (status) => {
 
   if (normalizedStatus === PUBLISH_SESSION_STATUSES.PAUSE_REQUESTED) {
     return 'pausing';
+  }
+
+  if (normalizedStatus === PUBLISH_SESSION_STATUSES.FORCE_STOPPED) {
+    return 'stopped';
   }
 
   return normalizedStatus ? normalizedStatus.toLowerCase() : 'active';
@@ -92,6 +97,15 @@ const adsLaunchPublishSessionSchema = new mongoose.Schema(
       type: Date,
       default: null,
     },
+    forceStopRequested: {
+      type: Boolean,
+      default: false,
+      index: true,
+    },
+    forceStopRequestedAt: {
+      type: Date,
+      default: null,
+    },
     queue: {
       status: {
         type: String,
@@ -125,6 +139,10 @@ const adsLaunchPublishSessionSchema = new mongoose.Schema(
       },
     },
     pausedAt: {
+      type: Date,
+      default: null,
+    },
+    stoppedAt: {
       type: Date,
       default: null,
     },
@@ -168,15 +186,19 @@ adsLaunchPublishSessionSchema.methods.toSafeObject = function toSafeObject({ eve
     status,
     rawStatus: this.status,
     startedAt: this.createdAt,
-    completedAt: this.completedAt || this.pausedAt || null,
+    completedAt: this.completedAt || this.stoppedAt || this.pausedAt || null,
     pauseRequested: Boolean(this.pauseRequested),
     pauseRequestedAt: this.pauseRequestedAt,
+    forceStopRequested: Boolean(this.forceStopRequested),
+    forceStopRequestedAt: this.forceStopRequestedAt,
     pausedAt: this.pausedAt,
+    stoppedAt: this.stoppedAt,
     progress: this.progress || null,
     events: (this.events || []).slice(-eventLimit),
     latestResult: this.latestResult || null,
     latestError: this.latestError || '',
     canPause: status === 'active',
+    canForceStop: ['active', 'pausing', 'queued'].includes(status),
     canResume: status === 'paused' && resumeCount > 0,
     resumeCount,
     queue: this.queue

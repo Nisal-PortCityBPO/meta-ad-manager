@@ -35,6 +35,7 @@ const NotificationsPage = () => {
     currentPublishId,
     events,
     focusPublishSession,
+    forceStopPublish,
     latestError,
     latestResult,
     markPublishHistorySeen,
@@ -45,6 +46,7 @@ const NotificationsPage = () => {
     refreshPublishSessions,
     resumeBusy,
     resumePausedPublish,
+    stopBusy,
   } = usePublishProgress();
   const { publishTokenType } = useMetaKeySettings();
   const [retryingRecordId, setRetryingRecordId] = useState('');
@@ -236,6 +238,23 @@ const NotificationsPage = () => {
     }
   };
 
+  const forceStopLivePublish = async () => {
+    const confirmed = window.confirm(
+      'Force stop this publish? This stops the local worker and releases the publish lane. Any Meta request already in-flight may still finish inside Meta.'
+    );
+
+    if (!confirmed) {
+      return;
+    }
+
+    try {
+      const data = await forceStopPublish(currentPublishId);
+      toast.success(data.message || 'Publish force-stopped');
+    } catch (requestError) {
+      toast.error(requestError.message);
+    }
+  };
+
   const resumePublish = async (sessionId = currentPublishId) => {
     try {
       const data = await resumePausedPublish(sessionId);
@@ -252,16 +271,19 @@ const NotificationsPage = () => {
       {hasPublishNotice ? (
         <div className="mb-4">
           <PublishProgressPanel
+            canForceStop={Boolean(currentPublishItem?.canForceStop || ['active', 'pausing', 'waiting', 'queued'].includes(progress?.status))}
             canPause={Boolean(currentPublishItem?.canPause)}
             canResume={Boolean(currentPublishItem?.canResume)}
             events={events}
             latestError={latestError}
             latestResult={latestResult}
+            onForceStop={forceStopLivePublish}
             onPause={pauseLivePublish}
             onResume={() => resumePublish(currentPublishId)}
             pauseBusy={pauseBusy}
             progress={progress}
             resumeBusy={resumeBusy}
+            stopBusy={stopBusy}
           />
         </div>
       ) : null}

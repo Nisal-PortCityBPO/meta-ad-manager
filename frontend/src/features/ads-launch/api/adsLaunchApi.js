@@ -241,6 +241,10 @@ export const adsLaunchApi = {
     apiRequest(`/ads-launch/publish-sessions/${sessionId}/pause`, {
       method: 'POST',
     }),
+  forceStopPublishSession: (sessionId) =>
+    apiRequest(`/ads-launch/publish-sessions/${sessionId}/force-stop`, {
+      method: 'POST',
+    }),
   resumePublishSession: (sessionId) =>
     apiRequest(`/ads-launch/publish-sessions/${sessionId}/resume`, {
       method: 'POST',

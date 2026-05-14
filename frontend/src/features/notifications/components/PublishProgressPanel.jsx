@@ -27,7 +27,7 @@ const getProgressTone = (status) => {
     return 'bg-orange-50 text-orange-700';
   }
 
-  if (status === 'failed') {
+  if (status === 'failed' || status === 'stopped') {
     return 'bg-red-50 text-red-700';
   }
 
@@ -47,7 +47,7 @@ const getStatusIcon = (status) => {
     return PauseCircle;
   }
 
-  if (status === 'failed') {
+  if (status === 'failed' || status === 'stopped') {
     return XCircle;
   }
 
@@ -61,16 +61,19 @@ const getEventTime = (event) => {
 
 const PublishProgressPanel = ({
   canPause = false,
+  canForceStop = false,
   canResume = false,
   events,
   label = 'Live publish process',
   latestError,
   latestResult,
   onPause = null,
+  onForceStop = null,
   onResume = null,
   pauseBusy = false,
   progress,
   resumeBusy = false,
+  stopBusy = false,
 }) => {
   if (!progress && !events.length && !latestResult && !latestError) {
     return null;
@@ -85,6 +88,7 @@ const PublishProgressPanel = ({
   const hasPauseTarget = remainingAfterCurrentAccount > 0;
   const waitingBetweenAccounts = progress?.step === 'account-interval' || progress?.status === 'waiting';
   const showPause = Boolean(onPause && canPause && hasPauseTarget && (progress?.status === 'active' || waitingBetweenAccounts));
+  const showForceStop = Boolean(onForceStop && canForceStop && ['active', 'pausing', 'waiting', 'queued'].includes(progress?.status));
   const showResume = Boolean(onResume && canResume && progress?.status === 'paused');
   const visibleEvents = [...events]
     .filter((event) => event.step !== 'account-interval')
@@ -116,7 +120,9 @@ const PublishProgressPanel = ({
                       ? 'text-amber-600'
                       : progress?.status === 'paused' || progress?.status === 'pausing'
                         ? 'text-orange-600'
-                        : 'text-emerald-600'
+                        : progress?.status === 'stopped'
+                          ? 'text-red-600'
+                          : 'text-emerald-600'
               }
             />
             <p className="text-sm font-black text-slate-950">{progress?.message || latestResult?.message || latestError || 'No active publish'}</p>
@@ -132,6 +138,18 @@ const PublishProgressPanel = ({
             >
               {pauseBusy ? <LoaderCircle size={14} className="animate-spin" /> : <PauseCircle size={14} />}
               {waitingBetweenAccounts ? 'Pause before next' : 'Pause after current'}
+            </button>
+          ) : null}
+          {showForceStop ? (
+            <button
+              type="button"
+              onClick={onForceStop}
+              disabled={stopBusy}
+              className="inline-flex h-9 items-center gap-2 rounded-lg border border-red-100 bg-red-50 px-3 text-xs font-black uppercase tracking-[0.12em] text-red-700 transition hover:bg-red-100 disabled:opacity-60"
+              title="Use only when a Meta request is stuck and the normal pause cannot finish."
+            >
+              {stopBusy ? <LoaderCircle size={14} className="animate-spin" /> : <XCircle size={14} />}
+              Force stop
             </button>
           ) : null}
           {showResume ? (
