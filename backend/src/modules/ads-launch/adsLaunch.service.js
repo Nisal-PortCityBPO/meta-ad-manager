@@ -136,7 +136,12 @@ const DEFAULT_STATIC_DEFAULTS = Object.freeze({
   billingEvent: 'IMPRESSIONS',
   bidStrategy: 'LOWEST_COST_WITHOUT_CAP',
   bidAmount: '',
-  attributionSetting: 'CLICK_1D',
+  attributionSetting: 'CLICK_7D_VIEW_1D',
+  attributionWindows: {
+    clickThrough: '7D',
+    engagedView: '1D',
+    viewThrough: '1D',
+  },
 });
 const SPECIAL_AD_CATEGORY_NONE = 'NONE';
 const ATTRIBUTION_SETTINGS = Object.freeze({
@@ -146,12 +151,15 @@ const ATTRIBUTION_SETTINGS = Object.freeze({
   CLICK_1D_VIEW_1D: 'CLICK_1D_VIEW_1D',
   CLICK_7D_VIEW_1D: 'CLICK_7D_VIEW_1D',
 });
+const CLICK_THROUGH_ATTRIBUTION_WINDOWS = new Set(['1D', '7D']);
+const OPTIONAL_ATTRIBUTION_WINDOWS = new Set(['NONE', '1D']);
 const SUPPORTED_BID_STRATEGIES = new Set([
   'LOWEST_COST_WITHOUT_CAP',
   'LOWEST_COST_WITH_BID_CAP',
   'COST_CAP',
 ]);
 const BID_AMOUNT_STRATEGIES = new Set(['LOWEST_COST_WITH_BID_CAP', 'COST_CAP']);
+const META_ENGAGED_VIEW_ATTRIBUTION_EVENT_TYPE = 'ENGAGED_VIDEO_VIEW';
 
 function isSuperAdmin(user) {
   return user?.role === USER_ROLES.SUPER_ADMIN;
@@ -320,28 +328,161 @@ function normalizeAttributionSetting(value) {
     : DEFAULT_STATIC_DEFAULTS.attributionSetting;
 }
 
-function buildAttributionSpec(staticDefaults = {}) {
+function getAttributionWindowsFromLegacySetting(value) {
+  const attributionSetting = normalizeAttributionSetting(value);
+
+  if (attributionSetting === ATTRIBUTION_SETTINGS.CLICK_1D) {
+    return {
+      clickThrough: '1D',
+      engagedView: 'NONE',
+      viewThrough: 'NONE',
+    };
+  }
+
+  if (attributionSetting === ATTRIBUTION_SETTINGS.CLICK_7D) {
+    return {
+      clickThrough: '7D',
+      engagedView: 'NONE',
+      viewThrough: 'NONE',
+    };
+  }
+
+  if (attributionSetting === ATTRIBUTION_SETTINGS.CLICK_1D_VIEW_1D) {
+    return {
+      clickThrough: '1D',
+      engagedView: 'NONE',
+      viewThrough: '1D',
+    };
+  }
+
+  if (attributionSetting === ATTRIBUTION_SETTINGS.CLICK_7D_VIEW_1D) {
+    return {
+      clickThrough: '7D',
+      engagedView: 'NONE',
+      viewThrough: '1D',
+    };
+  }
+
+  return {
+    ...DEFAULT_STATIC_DEFAULTS.attributionWindows,
+  };
+}
+
+function normalizeAttributionWindowValue(value, allowedValues, fallback) {
+  const normalizedValue = normalizeText(value).toUpperCase();
+  return allowedValues.has(normalizedValue) ? normalizedValue : fallback;
+}
+
+function normalizeAttributionWindows(staticDefaults = {}) {
+  const attributionWindows = staticDefaults.attributionWindows || {};
+  const hasStructuredWindows = ['clickThrough', 'engagedView', 'viewThrough'].some((field) =>
+    normalizeText(attributionWindows[field])
+  );
+  const fallbackWindows = hasStructuredWindows
+    ? DEFAULT_STATIC_DEFAULTS.attributionWindows
+    : getAttributionWindowsFromLegacySetting(staticDefaults.attributionSetting);
+
+  return {
+    clickThrough: normalizeAttributionWindowValue(
+      attributionWindows.clickThrough || fallbackWindows.clickThrough,
+      CLICK_THROUGH_ATTRIBUTION_WINDOWS,
+      fallbackWindows.clickThrough
+    ),
+    engagedView: normalizeAttributionWindowValue(
+      attributionWindows.engagedView || fallbackWindows.engagedView,
+      OPTIONAL_ATTRIBUTION_WINDOWS,
+      fallbackWindows.engagedView
+    ),
+    viewThrough: normalizeAttributionWindowValue(
+      attributionWindows.viewThrough || fallbackWindows.viewThrough,
+      OPTIONAL_ATTRIBUTION_WINDOWS,
+      fallbackWindows.viewThrough
+    ),
+  };
+}
+
+function getAttributionSettingFromWindows(windows = {}) {
+  const normalizedWindows = normalizeAttributionWindows({
+    attributionWindows: windows,
+  });
+  const clickPrefix = normalizedWindows.clickThrough === '1D'
+    ? ATTRIBUTION_SETTINGS.CLICK_1D
+    : ATTRIBUTION_SETTINGS.CLICK_7D;
+
+  return normalizedWindows.viewThrough === '1D' ? `${clickPrefix}_VIEW_1D` : clickPrefix;
+}
+
+function sanitizeStaticDefaults(staticDefaults = {}) {
+  const attributionWindows = normalizeAttributionWindows(staticDefaults);
+
+  return {
+    buyingType: normalizeText(staticDefaults.buyingType) || DEFAULT_STATIC_DEFAULTS.buyingType,
+    campaignStatus: resolveCampaignStatus(staticDefaults.campaignStatus),
+    specialAdCategories:
+      normalizeText(staticDefaults.specialAdCategories) || DEFAULT_STATIC_DEFAULTS.specialAdCategories,
+    placements: normalizeText(staticDefaults.placements) || DEFAULT_STATIC_DEFAULTS.placements,
+    budgetLevel: normalizeText(staticDefaults.budgetLevel) || DEFAULT_STATIC_DEFAULTS.budgetLevel,
+    dynamicCreative: normalizeText(staticDefaults.dynamicCreative) || DEFAULT_STATIC_DEFAULTS.dynamicCreative,
+    audienceAgeMin: normalizeText(staticDefaults.audienceAgeMin) || DEFAULT_STATIC_DEFAULTS.audienceAgeMin,
+    audienceAgeMax: normalizeText(staticDefaults.audienceAgeMax) || DEFAULT_STATIC_DEFAULTS.audienceAgeMax,
+    genderTargeting: normalizeText(staticDefaults.genderTargeting) || DEFAULT_STATIC_DEFAULTS.genderTargeting,
+    billingEvent: normalizeText(staticDefaults.billingEvent) || DEFAULT_STATIC_DEFAULTS.billingEvent,
+    bidStrategy: normalizeText(staticDefaults.bidStrategy) || DEFAULT_STATIC_DEFAULTS.bidStrategy,
+    bidAmount: normalizeText(staticDefaults.bidAmount),
+    attributionSetting: getAttributionSettingFromWindows(attributionWindows),
+    attributionWindows,
+  };
+}
+
+function mergeStaticDefaultsWithAttribution(baseStaticDefaults = {}, overrideStaticDefaults = {}) {
+  const mergedStaticDefaults = {
+    ...baseStaticDefaults,
+    ...overrideStaticDefaults,
+  };
+  const hasOverrideAttribution =
+    Object.prototype.hasOwnProperty.call(overrideStaticDefaults, 'attributionSetting') ||
+    Object.prototype.hasOwnProperty.call(overrideStaticDefaults, 'attributionWindows');
+
+  if (hasOverrideAttribution && !overrideStaticDefaults.attributionWindows) {
+    delete mergedStaticDefaults.attributionWindows;
+  }
+
+  return mergedStaticDefaults;
+}
+
+function buildAttributionSpec(staticDefaults = {}, objective = '', hasVideoCreative = false) {
   const attributionSetting = normalizeAttributionSetting(staticDefaults.attributionSetting);
 
   if (attributionSetting === ATTRIBUTION_SETTINGS.META_DEFAULT) {
     return null;
   }
 
+  const objectiveSettings = SUPPORTED_OBJECTIVES[objective];
+  if (objectiveSettings && !objectiveSettings.requiresPixel) {
+    return [
+      {
+        event_type: 'CLICK_THROUGH',
+        window_days: 1,
+      },
+    ];
+  }
+
+  const attributionWindows = normalizeAttributionWindows(staticDefaults);
   const spec = [];
 
-  if (attributionSetting.includes('CLICK_1D')) {
+  spec.push({
+    event_type: 'CLICK_THROUGH',
+    window_days: attributionWindows.clickThrough === '1D' ? 1 : 7,
+  });
+
+  if (hasVideoCreative && attributionWindows.engagedView === '1D') {
     spec.push({
-      event_type: 'CLICK_THROUGH',
+      event_type: META_ENGAGED_VIEW_ATTRIBUTION_EVENT_TYPE,
       window_days: 1,
-    });
-  } else if (attributionSetting.includes('CLICK_7D')) {
-    spec.push({
-      event_type: 'CLICK_THROUGH',
-      window_days: 7,
     });
   }
 
-  if (attributionSetting.includes('VIEW_1D')) {
+  if (attributionWindows.viewThrough === '1D') {
     spec.push({
       event_type: 'VIEW_THROUGH',
       window_days: 1,
@@ -351,7 +492,46 @@ function buildAttributionSpec(staticDefaults = {}) {
   return spec.length ? spec : null;
 }
 
-function buildFallbackAttributionSpecFromMetaError(error) {
+function normalizeMetaAttributionSpec(spec = []) {
+  let rawSpec = spec;
+
+  if (typeof rawSpec === 'string') {
+    try {
+      rawSpec = JSON.parse(rawSpec);
+    } catch (error) {
+      rawSpec = [];
+    }
+  }
+
+  if (!Array.isArray(rawSpec)) {
+    return [];
+  }
+
+  return rawSpec
+    .map((item) => ({
+      event_type:
+        normalizeText(item?.event_type).toUpperCase() === 'ENGAGED_VIEW'
+          ? META_ENGAGED_VIEW_ATTRIBUTION_EVENT_TYPE
+          : normalizeText(item?.event_type).toUpperCase(),
+      window_days: Number(item?.window_days),
+    }))
+    .filter((item) => item.event_type && Number.isFinite(item.window_days) && item.window_days > 0);
+}
+
+function hasEngagedViewAttribution(spec = []) {
+  return normalizeMetaAttributionSpec(spec).some((item) => item.event_type === META_ENGAGED_VIEW_ATTRIBUTION_EVENT_TYPE);
+}
+
+function isAttributionSpecApplied(expectedSpec = [], currentSpec = []) {
+  const expectedItems = normalizeMetaAttributionSpec(expectedSpec);
+  const currentMap = new Map(
+    normalizeMetaAttributionSpec(currentSpec).map((item) => [item.event_type, item.window_days])
+  );
+
+  return expectedItems.every((item) => currentMap.get(item.event_type) === item.window_days);
+}
+
+function buildFallbackAttributionSpecFromMetaError(error, originalSpec = []) {
   const message = String(error?.message || '');
   const match = message.match(/supported combination of click-through and view-through attribution window values are:\s*\((\d+),\s*(\d+)\)/i);
 
@@ -377,12 +557,124 @@ function buildFallbackAttributionSpecFromMetaError(error) {
     });
   }
 
+  if (Array.isArray(originalSpec)) {
+    originalSpec
+      .filter((item) => hasEngagedViewAttribution([item]) && Number(item.window_days) > 0)
+      .forEach((item) => {
+        spec.push({
+          event_type: META_ENGAGED_VIEW_ATTRIBUTION_EVENT_TYPE,
+          window_days: Number(item.window_days),
+        });
+      });
+  }
+
   return spec.length ? spec : [];
 }
 
 function isAttributionWindowMetaError(error) {
   const message = String(error?.message || '').toLowerCase();
   return message.includes('attribution window') || message.includes('attribution_spec');
+}
+
+async function syncVideoAdSetAttribution({
+  token,
+  adSetId,
+  objective,
+  staticDefaults,
+  progress = null,
+  progressContext = {},
+}) {
+  const attributionSpec = buildAttributionSpec(staticDefaults, objective, true);
+
+  if (!adSetId || !hasEngagedViewAttribution(attributionSpec)) {
+    return {
+      requested: normalizeMetaAttributionSpec(attributionSpec),
+      applied: [],
+      verified: false,
+      skipped: true,
+    };
+  }
+
+  const syncMessage = `${progressContext.accountLabel}: syncing engaged-view attribution after video publish`;
+  progress?.info({
+    ...progressContext,
+    step: 'attribution-sync',
+    status: 'active',
+    message: syncMessage,
+  });
+
+  const readAdSetAttribution = async () => {
+    const payload = await getFromMeta({
+      token,
+      path: adSetId,
+      params: {
+        fields: 'id,attribution_spec',
+      },
+    });
+
+    return normalizeMetaAttributionSpec(payload?.attribution_spec);
+  };
+
+  const applyAttribution = async () =>
+    postToMeta({
+      token,
+      path: adSetId,
+      params: {
+        attribution_spec: attributionSpec,
+      },
+    });
+
+  try {
+    await applyAttribution();
+    let appliedSpec = await readAdSetAttribution();
+
+    if (!isAttributionSpecApplied(attributionSpec, appliedSpec)) {
+      await sleep(1500);
+      await applyAttribution();
+      appliedSpec = await readAdSetAttribution();
+    }
+
+    const verified = isAttributionSpecApplied(attributionSpec, appliedSpec);
+
+    progress?.info({
+      ...progressContext,
+      step: 'attribution-sync',
+      status: verified ? 'completed' : 'active',
+      message: verified
+        ? `${progressContext.accountLabel}: engaged-view attribution confirmed on the Meta ad set`
+        : `${progressContext.accountLabel}: engaged-view attribution was requested, but Meta kept a different ad set attribution`,
+      details: {
+        requestedAttributionSpec: normalizeMetaAttributionSpec(attributionSpec),
+        appliedAttributionSpec: appliedSpec,
+      },
+    });
+
+    return {
+      requested: normalizeMetaAttributionSpec(attributionSpec),
+      applied: appliedSpec,
+      verified,
+      skipped: false,
+    };
+  } catch (error) {
+    progress?.info({
+      ...progressContext,
+      step: 'attribution-sync',
+      status: 'active',
+      error: error.message,
+      message: `${progressContext.accountLabel}: unable to confirm engaged-view attribution after publish`,
+      details: {
+        requestedAttributionSpec: normalizeMetaAttributionSpec(attributionSpec),
+      },
+    });
+
+    return {
+      requested: normalizeMetaAttributionSpec(attributionSpec),
+      applied: [],
+      verified: false,
+      skipped: false,
+      error: error.message,
+    };
+  }
 }
 
 function sanitizeTemplateConfig(input = {}) {
@@ -415,22 +707,7 @@ function sanitizeTemplateConfig(input = {}) {
     scheduleStart,
     scheduleEnd,
     callToAction: normalizeText(input.callToAction),
-    staticDefaults: {
-      buyingType: normalizeText(staticDefaults.buyingType) || DEFAULT_STATIC_DEFAULTS.buyingType,
-      campaignStatus: resolveCampaignStatus(staticDefaults.campaignStatus),
-      specialAdCategories:
-        normalizeText(staticDefaults.specialAdCategories) || DEFAULT_STATIC_DEFAULTS.specialAdCategories,
-      placements: normalizeText(staticDefaults.placements) || DEFAULT_STATIC_DEFAULTS.placements,
-      budgetLevel: normalizeText(staticDefaults.budgetLevel) || DEFAULT_STATIC_DEFAULTS.budgetLevel,
-      dynamicCreative: normalizeText(staticDefaults.dynamicCreative) || DEFAULT_STATIC_DEFAULTS.dynamicCreative,
-      audienceAgeMin: normalizeText(staticDefaults.audienceAgeMin) || DEFAULT_STATIC_DEFAULTS.audienceAgeMin,
-      audienceAgeMax: normalizeText(staticDefaults.audienceAgeMax) || DEFAULT_STATIC_DEFAULTS.audienceAgeMax,
-      genderTargeting: normalizeText(staticDefaults.genderTargeting) || DEFAULT_STATIC_DEFAULTS.genderTargeting,
-      billingEvent: normalizeText(staticDefaults.billingEvent) || DEFAULT_STATIC_DEFAULTS.billingEvent,
-      bidStrategy: normalizeText(staticDefaults.bidStrategy) || DEFAULT_STATIC_DEFAULTS.bidStrategy,
-      bidAmount: normalizeText(staticDefaults.bidAmount),
-      attributionSetting: normalizeAttributionSetting(staticDefaults.attributionSetting),
-    },
+    staticDefaults: sanitizeStaticDefaults(staticDefaults),
   };
 }
 
@@ -1511,6 +1788,15 @@ async function getPublishSessionDocForActor(sessionId, actor) {
 
 async function startPublishSession({ sessionId = '', title = '', source = '', payload, actor }) {
   const normalizedSessionId = normalizePublishSessionId(sessionId) || createPublishSessionId();
+  const sessionTitle = normalizeText(title) || getPublishTitleFromPayload(payload);
+  const sessionSource = normalizeText(source) || 'Meta publish';
+  const sessionPayload = {
+    ...(payload || {}),
+    publishSessionId: normalizedSessionId,
+    bulkId: normalizeText(payload?.bulkId) || normalizedSessionId,
+    bulkLabel: normalizeText(payload?.bulkLabel) || sessionTitle,
+    bulkSource: normalizeText(payload?.bulkSource) || sessionSource,
+  };
   forceStoppedPublishSessionIds.delete(normalizedSessionId);
   const session = await AdsLaunchPublishSession.findOneAndUpdate(
     {
@@ -1519,10 +1805,10 @@ async function startPublishSession({ sessionId = '', title = '', source = '', pa
     },
     {
       $set: {
-        title: normalizeText(title) || getPublishTitleFromPayload(payload),
-        source: normalizeText(source) || 'Meta publish',
+        title: sessionTitle,
+        source: sessionSource,
         status: PUBLISH_SESSION_STATUSES.ACTIVE,
-        payload,
+        payload: sessionPayload,
         resumePayload: null,
         latestResult: null,
         latestError: '',
@@ -1571,6 +1857,8 @@ async function enqueuePublishLaunch({ payload, actor }) {
   const normalizedSessionId = normalizePublishSessionId(payload?.publishSessionId) || createPublishSessionId();
   forceStoppedPublishSessionIds.delete(normalizedSessionId);
   const now = new Date();
+  const sessionTitle = normalizeText(payload?.publishTitle) || getPublishTitleFromPayload(payload);
+  const sessionSource = normalizeText(payload?.publishSource) || 'Meta publish';
   const queuedEvent = {
     sessionId: normalizedSessionId,
     type: 'progress',
@@ -1589,6 +1877,9 @@ async function enqueuePublishLaunch({ payload, actor }) {
   const queuedPayload = {
     ...(payload || {}),
     publishSessionId: normalizedSessionId,
+    bulkId: normalizeText(payload?.bulkId) || normalizedSessionId,
+    bulkLabel: normalizeText(payload?.bulkLabel) || sessionTitle,
+    bulkSource: normalizeText(payload?.bulkSource) || sessionSource,
   };
   const session = await AdsLaunchPublishSession.findOneAndUpdate(
     {
@@ -1597,8 +1888,8 @@ async function enqueuePublishLaunch({ payload, actor }) {
     },
     {
       $set: {
-        title: normalizeText(payload?.publishTitle) || getPublishTitleFromPayload(payload),
-        source: normalizeText(payload?.publishSource) || 'Meta publish',
+        title: sessionTitle,
+        source: sessionSource,
         status: PUBLISH_SESSION_STATUSES.PENDING,
         payload: queuedPayload,
         resumePayload: null,
@@ -3621,6 +3912,10 @@ function ensurePublishPayload(payload) {
   const cleaned = {
     templateId: normalizeText(payload.templateId),
     launchLabel: normalizeText(payload.launchLabel),
+    publishSessionId: normalizePublishSessionId(payload.publishSessionId),
+    bulkId: normalizeText(payload.bulkId || payload.publishSessionId),
+    bulkLabel: normalizeText(payload.bulkLabel || payload.publishTitle),
+    bulkSource: normalizeText(payload.bulkSource || payload.publishSource),
     brandId: normalizeText(payload.brandId),
     brandName: normalizeText(payload.brandName),
     tokenId: normalizeText(payload.tokenId),
@@ -3654,22 +3949,7 @@ function ensurePublishPayload(payload) {
       : [],
     pageName: normalizeText(payload.pageName),
     pixelName: normalizeText(payload.pixelName),
-    staticDefaults: {
-      buyingType: normalizeText(staticDefaults.buyingType) || DEFAULT_STATIC_DEFAULTS.buyingType,
-      campaignStatus: resolveCampaignStatus(staticDefaults.campaignStatus),
-      specialAdCategories:
-        normalizeText(staticDefaults.specialAdCategories) || DEFAULT_STATIC_DEFAULTS.specialAdCategories,
-      placements: normalizeText(staticDefaults.placements) || DEFAULT_STATIC_DEFAULTS.placements,
-      budgetLevel: normalizeText(staticDefaults.budgetLevel) || DEFAULT_STATIC_DEFAULTS.budgetLevel,
-      dynamicCreative: normalizeText(staticDefaults.dynamicCreative) || DEFAULT_STATIC_DEFAULTS.dynamicCreative,
-      audienceAgeMin: normalizeText(staticDefaults.audienceAgeMin) || DEFAULT_STATIC_DEFAULTS.audienceAgeMin,
-      audienceAgeMax: normalizeText(staticDefaults.audienceAgeMax) || DEFAULT_STATIC_DEFAULTS.audienceAgeMax,
-      genderTargeting: normalizeText(staticDefaults.genderTargeting) || DEFAULT_STATIC_DEFAULTS.genderTargeting,
-      billingEvent: normalizeText(staticDefaults.billingEvent) || DEFAULT_STATIC_DEFAULTS.billingEvent,
-      bidStrategy: normalizeText(staticDefaults.bidStrategy) || DEFAULT_STATIC_DEFAULTS.bidStrategy,
-      bidAmount: normalizeText(staticDefaults.bidAmount),
-      attributionSetting: normalizeAttributionSetting(staticDefaults.attributionSetting),
-    },
+    staticDefaults: sanitizeStaticDefaults(staticDefaults),
     media: sanitizeTemplateAssetInput(payload.media),
     thumbnail: sanitizeTemplateAssetInput(payload.thumbnail),
     mediaAssetId: normalizeText(payload.mediaAssetId),
@@ -3845,6 +4125,7 @@ async function createAdSet({
   pixelId,
   websiteEvent,
   staticDefaults,
+  hasVideoCreative = false,
 }) {
   const settings = SUPPORTED_OBJECTIVES[objective];
   const ageMin = Number.parseInt(staticDefaults.audienceAgeMin, 10);
@@ -3852,7 +4133,7 @@ async function createAdSet({
   const isSpecialAdCategory = isSpecialAdCategoryCampaign(staticDefaults.specialAdCategories);
   const campaignBudget = usesCampaignBudget(staticDefaults);
   const bidStrategy = resolveBidStrategy(staticDefaults.bidStrategy);
-  const attributionSpec = buildAttributionSpec(staticDefaults);
+  const attributionSpec = buildAttributionSpec(staticDefaults, objective, hasVideoCreative);
   const targeting = {
     geo_locations: {
       countries,
@@ -3929,7 +4210,7 @@ async function createAdSet({
       throw error;
     }
 
-    const fallbackAttributionSpec = buildFallbackAttributionSpecFromMetaError(error);
+    const fallbackAttributionSpec = buildFallbackAttributionSpecFromMetaError(error, params.attribution_spec);
     const fallbackParams = {
       ...params,
     };
@@ -3937,7 +4218,15 @@ async function createAdSet({
     if (fallbackAttributionSpec) {
       fallbackParams.attribution_spec = fallbackAttributionSpec;
     } else {
-      delete fallbackParams.attribution_spec;
+      const attributionSpecWithoutEngagedView = params.attribution_spec.filter(
+        (spec) => !hasEngagedViewAttribution([spec])
+      );
+
+      if (attributionSpecWithoutEngagedView.length !== params.attribution_spec.length) {
+        fallbackParams.attribution_spec = attributionSpecWithoutEngagedView;
+      } else {
+        delete fallbackParams.attribution_spec;
+      }
     }
 
     return postToMeta({
@@ -4757,8 +5046,7 @@ function mergeTemplateConfig(baseLaunch, campaignConfig = {}, mediaConfig = {}, 
       baseLaunch.urlParameters,
     callToAction: normalizeText(mediaConfig.callToAction) || baseLaunch.callToAction,
     staticDefaults: {
-      ...baseStaticDefaults,
-      ...campaignStaticDefaults,
+      ...mergeStaticDefaultsWithAttribution(baseStaticDefaults, campaignStaticDefaults),
       country: countries[0] || baseLaunch.country,
       countries,
     },
@@ -5061,6 +5349,7 @@ async function publishLaunchUnlocked({ payload, actor, req, onProgress = null, t
             pixelId: effectiveLaunch.pixelId,
             websiteEvent: effectiveLaunch.websiteEvent,
             staticDefaults: effectiveLaunch.staticDefaults,
+            hasVideoCreative: String(creativeAssets.media.type || '').startsWith('video/'),
           }),
           progress,
           progressContext,
@@ -5117,6 +5406,17 @@ async function publishLaunchUnlocked({ payload, actor, req, onProgress = null, t
           progressContext,
           'ad'
         );
+      }
+
+      if (String(creativeAssets.media?.type || '').startsWith('video/')) {
+        await syncVideoAdSetAttribution({
+          token,
+          adSetId: adSet.id,
+          objective: effectiveLaunch.objective,
+          staticDefaults: effectiveLaunch.staticDefaults,
+          progress,
+          progressContext,
+        });
       }
 
       let historyRecord = null;

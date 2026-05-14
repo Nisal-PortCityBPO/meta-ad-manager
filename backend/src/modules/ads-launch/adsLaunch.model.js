@@ -197,8 +197,25 @@ const launchTemplateConfigSchema = new mongoose.Schema(
       },
       attributionSetting: {
         type: String,
-        default: 'CLICK_1D',
+        default: 'CLICK_7D_VIEW_1D',
         trim: true,
+      },
+      attributionWindows: {
+        clickThrough: {
+          type: String,
+          default: '7D',
+          trim: true,
+        },
+        engagedView: {
+          type: String,
+          default: '1D',
+          trim: true,
+        },
+        viewThrough: {
+          type: String,
+          default: '1D',
+          trim: true,
+        },
       },
     },
   },

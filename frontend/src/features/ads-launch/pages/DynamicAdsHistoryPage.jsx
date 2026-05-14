@@ -188,6 +188,7 @@ const DynamicAdsHistoryPage = () => {
     queued: 0,
     adAccounts: 0,
     brands: 0,
+    bulks: 0,
   });
   const [pagination, setPagination] = useState({ page: 1, limit: 25, total: 0, pages: 1 });
   const [loading, setLoading] = useState(true);
@@ -270,10 +271,10 @@ const DynamicAdsHistoryPage = () => {
 
       <div className="mb-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
         <StatCard icon={Database} label="History rows" value={summary.total} detail="Saved dynamic campaign rows" />
+        <StatCard icon={Megaphone} label="Bulk launches" value={summary.bulks} tone="sky" detail={`${summary.queued || 0} queued rows`} />
         <StatCard icon={CheckCircle2} label="Successful" value={summary.success} tone="emerald" />
         <StatCard icon={AlertTriangle} label="Failed" value={summary.failed} tone="red" />
-        <StatCard icon={Megaphone} label="Ad accounts" value={summary.adAccounts} tone="slate" />
-        <StatCard icon={BarChart3} label="Queued" value={summary.queued} tone="amber" detail={`${summary.active || 0} active, ${summary.paused || 0} paused`} />
+        <StatCard icon={BarChart3} label="Ad accounts" value={summary.adAccounts} tone="slate" detail={`${summary.active || 0} active, ${summary.paused || 0} paused`} />
       </div>
 
       <DashboardPanel className="mb-4">
@@ -284,7 +285,7 @@ const DynamicAdsHistoryPage = () => {
               value={filters.search}
               onChange={(event) => updateFilter('search', event.target.value)}
               className="h-11 w-full rounded-xl border border-sky-100 bg-white pl-10 pr-3 text-sm font-semibold outline-none transition focus:border-sky-300 focus:ring-4 focus:ring-sky-100"
-              placeholder="Search campaign, account, template, media, Meta id..."
+              placeholder="Search bulk, campaign, account, template, media, Meta id..."
             />
           </div>
           <select
@@ -373,10 +374,11 @@ const DynamicAdsHistoryPage = () => {
           </div>
         ) : history.length ? (
           <div className="overflow-x-auto rounded-2xl border border-sky-100">
-            <table className="min-w-[1220px] w-full divide-y divide-sky-100 bg-white text-left">
+            <table className="min-w-[1340px] w-full divide-y divide-sky-100 bg-white text-left">
               <thead className="bg-sky-50/80">
                 <tr className="text-[11px] font-black uppercase tracking-[0.16em] text-slate-500">
                   <th className="px-3 py-3">#</th>
+                  <th className="px-3 py-3">Bulk</th>
                   <th className="px-3 py-3">Launch / status</th>
                   <th className="px-3 py-3">Ad account / brand</th>
                   <th className="px-3 py-3">Templates / media</th>
@@ -392,6 +394,17 @@ const DynamicAdsHistoryPage = () => {
                   return (
                     <tr key={item.id} className="align-top transition hover:bg-sky-50/40">
                       <td className="px-3 py-3 text-sm font-black text-slate-400">{rowNumber}</td>
+                      <td className="px-3 py-3">
+                        <p className="max-w-48 break-words text-sm font-black text-slate-950">
+                          {item.launch?.bulkLabel || item.launch?.launchLabel || 'Bulk launch'}
+                        </p>
+                        <p className="mt-1 text-xs font-semibold text-slate-500">{formatShortId(item.launch?.bulkId)}</p>
+                        {item.launch?.bulkSource ? (
+                          <span className="mt-2 inline-flex rounded-full bg-sky-50 px-2.5 py-1 text-[11px] font-black text-sky-700">
+                            {item.launch.bulkSource}
+                          </span>
+                        ) : null}
+                      </td>
                       <td className="px-3 py-3">
                         <p className="max-w-64 break-words text-sm font-black text-slate-950">{item.campaignName || item.launch?.launchLabel}</p>
                         <p className="mt-1 max-w-64 break-words text-xs font-semibold text-slate-500">{item.launch?.launchLabel || 'Dynamic launch'}</p>
@@ -496,6 +509,9 @@ const DynamicAdsHistoryPage = () => {
               <DetailLine label="Agency" value={detailItem.agencyName} />
               <DetailLine label="Token key" value={detailItem.tokenLabel} />
               <DetailLine label="AdsPower profile" value={detailItem.adsPowerProfile} />
+              <DetailLine label="Bulk label" value={detailItem.launch?.bulkLabel} />
+              <DetailLine label="Bulk ID" value={detailItem.launch?.bulkId} />
+              <DetailLine label="Bulk source" value={detailItem.launch?.bulkSource} />
               <DetailLine label="Objective" value={detailItem.objective} />
               <DetailLine label="Budget" value={formatBudget(detailItem)} />
               <DetailLine label="Countries" value={detailItem.launch?.countryLabel || detailItem.launch?.countries?.join(', ')} />

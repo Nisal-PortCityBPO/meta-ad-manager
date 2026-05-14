@@ -16,6 +16,11 @@ import {
   INDONESIA_TIME_ZONE_LABEL,
   toSchedulePayloadValue,
 } from '../utils/scheduleTime';
+import {
+  DEFAULT_ATTRIBUTION_WINDOWS,
+  formatAttributionWindows,
+  mergeAttributionStaticDefaults,
+} from '../utils/attributionSettings';
 
 const defaultStaticDefaults = {
   buyingType: 'AUCTION',
@@ -30,15 +35,8 @@ const defaultStaticDefaults = {
   billingEvent: 'IMPRESSIONS',
   bidStrategy: 'LOWEST_COST_WITHOUT_CAP',
   bidAmount: '',
-  attributionSetting: 'CLICK_1D',
-};
-
-const attributionSettingLabels = {
-  CLICK_1D: '1-day click only',
-  CLICK_7D_VIEW_1D: '7-day click + 1-day view',
-  CLICK_7D: '7-day click only',
-  CLICK_1D_VIEW_1D: '1-day click + 1-day view',
-  META_DEFAULT: 'Use Meta default',
+  attributionSetting: 'CLICK_7D_VIEW_1D',
+  attributionWindows: { ...DEFAULT_ATTRIBUTION_WINDOWS },
 };
 
 const defaultWebsiteEventByObjective = {
@@ -226,7 +224,7 @@ const TemplatePreviewModal = ({ template, onClose }) => {
             <TemplateDetail label="Budget level" value={config.staticDefaults?.budgetLevel} />
             <TemplateDetail
               label="Attribution"
-              value={attributionSettingLabels[config.staticDefaults?.attributionSetting || defaultStaticDefaults.attributionSetting]}
+              value={formatAttributionWindows(config.staticDefaults || defaultStaticDefaults)}
             />
             <TemplateDetail
               label="Bid strategy"
@@ -1132,10 +1130,7 @@ const DynamicAdsLaunchPage = () => {
       callToAction: mediaConfig.callToAction || 'LEARN_MORE',
       media: firstMediaAsset?.media || null,
       thumbnail: firstThumbnailAsset?.media || null,
-      staticDefaults: {
-        ...defaultStaticDefaults,
-        ...(campaignConfig.staticDefaults || {}),
-      },
+      staticDefaults: mergeAttributionStaticDefaults(defaultStaticDefaults, campaignConfig.staticDefaults || {}),
       accountLaunches: readyAssignments.map((assignment) => ({
         launchItemId: assignment.launchItemId,
         adAccountId: assignment.account.id,

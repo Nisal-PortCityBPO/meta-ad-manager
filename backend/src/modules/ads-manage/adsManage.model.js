@@ -140,6 +140,21 @@ const launchDetailsSchema = new mongoose.Schema(
       default: '',
       trim: true,
     },
+    bulkId: {
+      type: String,
+      default: '',
+      trim: true,
+    },
+    bulkLabel: {
+      type: String,
+      default: '',
+      trim: true,
+    },
+    bulkSource: {
+      type: String,
+      default: '',
+      trim: true,
+    },
     templateId: {
       type: String,
       default: '',

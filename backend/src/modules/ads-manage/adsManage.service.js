@@ -565,6 +565,9 @@ function buildDynamicHistoryRow(record, tokenContextById = new Map()) {
     launch: {
       launchLabel: dynamicLabel,
       launchItemId: launch.launchItemId || '',
+      bulkId: launch.bulkId || '',
+      bulkLabel: launch.bulkLabel || launch.launchLabel || '',
+      bulkSource: launch.bulkSource || '',
       campaignTemplateId: launch.campaignTemplateId || '',
       mediaTemplateId: launch.mediaTemplateId || '',
       mediaAssetId: launch.mediaAssetId || '',
@@ -660,6 +663,9 @@ function applyDynamicHistoryFilters(rows, { status = '', search = '', brandId = 
       row.adAccount?.id,
       row.launch?.launchLabel,
       row.launch?.launchItemId,
+      row.launch?.bulkId,
+      row.launch?.bulkLabel,
+      row.launch?.bulkSource,
       row.launch?.campaignTemplateId,
       row.launch?.mediaTemplateId,
       row.launch?.mediaAssetId,
@@ -680,6 +686,7 @@ function applyDynamicHistoryFilters(rows, { status = '', search = '', brandId = 
 function summarizeDynamicHistoryRows(rows) {
   const adAccounts = new Set();
   const brands = new Set();
+  const bulks = new Set();
 
   return rows.reduce(
     (summary, row) => {
@@ -711,8 +718,13 @@ function summarizeDynamicHistoryRows(rows) {
         brands.add(row.brandId || row.brandName);
       }
 
+      if (row.launch?.bulkId || row.launch?.bulkLabel) {
+        bulks.add(row.launch.bulkId || row.launch.bulkLabel);
+      }
+
       summary.adAccounts = adAccounts.size;
       summary.brands = brands.size;
+      summary.bulks = bulks.size;
       return summary;
     },
     {
@@ -724,6 +736,7 @@ function summarizeDynamicHistoryRows(rows) {
       queued: 0,
       adAccounts: 0,
       brands: 0,
+      bulks: 0,
     }
   );
 }
@@ -1068,6 +1081,9 @@ function mapLaunchForHistory({ launch, media, thumbnail, accountLaunch = null, r
   return {
     launchLabel: launch.launchLabel,
     launchItemId: accountLaunch?.launchItemId || '',
+    bulkId: launch.bulkId || launch.publishSessionId || '',
+    bulkLabel: launch.bulkLabel || launch.launchLabel || '',
+    bulkSource: launch.bulkSource || '',
     templateId: launch.templateId || '',
     campaignTemplateId: accountLaunch?.campaignTemplateId || '',
     mediaTemplateId: accountLaunch?.mediaTemplateId || '',

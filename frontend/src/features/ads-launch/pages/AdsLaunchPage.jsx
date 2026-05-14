@@ -28,6 +28,7 @@ import { useTokens } from '../../token-management/hooks/useTokens';
 import { usePublishProgress } from '../../notifications/PublishProgressContext';
 import { useMetaKeySettings } from '../../settings/MetaKeySettingsContext';
 import { adsLaunchApi } from '../api/adsLaunchApi';
+import AttributionSettingsPanel from '../components/AttributionSettingsPanel';
 import MediaLibraryFolderPicker from '../components/MediaLibraryFolderPicker';
 import { useLaunchTemplates } from '../hooks/useLaunchTemplates';
 import { useTokenMetaAssets } from '../hooks/useTokenMetaAssets';
@@ -38,6 +39,12 @@ import {
   toDateTimeLocalInputValue,
   toSchedulePayloadValue,
 } from '../utils/scheduleTime';
+import {
+  DEFAULT_ATTRIBUTION_WINDOWS,
+  formatAttributionWindows,
+  mergeAttributionStaticDefaults,
+  withAttributionStaticDefaults,
+} from '../utils/attributionSettings';
 import { createVideoThumbnailFile } from '../utils/videoThumbnail';
 
 const countryOptions = [
@@ -166,13 +173,6 @@ const staticDefaultOptions = {
     { value: 'LOWEST_COST_WITH_BID_CAP', label: 'Bid cap' },
     { value: 'COST_CAP', label: 'Cost cap' },
   ],
-  attributionSetting: [
-    { value: 'CLICK_1D', label: '1-day click only' },
-    { value: 'CLICK_7D_VIEW_1D', label: '7-day click + 1-day view' },
-    { value: 'CLICK_7D', label: '7-day click only' },
-    { value: 'CLICK_1D_VIEW_1D', label: '1-day click + 1-day view' },
-    { value: 'META_DEFAULT', label: 'Use Meta default' },
-  ],
 };
 
 const cappedBidStrategies = new Set(['LOWEST_COST_WITH_BID_CAP', 'COST_CAP']);
@@ -190,7 +190,8 @@ const defaultStaticDefaults = {
   billingEvent: 'IMPRESSIONS',
   bidStrategy: 'LOWEST_COST_WITHOUT_CAP',
   bidAmount: '',
-  attributionSetting: 'CLICK_1D',
+  attributionSetting: 'CLICK_7D_VIEW_1D',
+  attributionWindows: { ...DEFAULT_ATTRIBUTION_WINDOWS },
 };
 
 const emptyForm = {
@@ -221,9 +222,7 @@ const createEmptyForm = () => ({
   ...emptyForm,
   countries: [...emptyForm.countries],
   selectedAdAccountIds: [],
-  staticDefaults: {
-    ...defaultStaticDefaults,
-  },
+  staticDefaults: withAttributionStaticDefaults(defaultStaticDefaults),
 });
 
 const FieldLabel = ({ htmlFor, children }) => (
@@ -1098,10 +1097,20 @@ const AdsLaunchPage = () => {
   const updateStaticDefault = (field, value) => {
     setForm((current) => ({
       ...current,
-      staticDefaults: {
+      staticDefaults: withAttributionStaticDefaults({
         ...current.staticDefaults,
         [field]: value,
-      },
+      }),
+    }));
+  };
+
+  const updateAttributionWindows = (attributionWindows) => {
+    setForm((current) => ({
+      ...current,
+      staticDefaults: withAttributionStaticDefaults({
+        ...current.staticDefaults,
+        attributionWindows,
+      }),
     }));
   };
 
@@ -1440,9 +1449,7 @@ const AdsLaunchPage = () => {
         websiteEvent: pixelRequired ? form.websiteEvent : '',
         scheduleStart: toSchedulePayloadValue(form.scheduleStart),
         scheduleEnd: toSchedulePayloadValue(form.scheduleEnd),
-        staticDefaults: {
-          ...form.staticDefaults,
-        },
+        staticDefaults: withAttributionStaticDefaults(form.staticDefaults),
       },
       snapshot: {
         brandName: selectedBrand?.name || '',
@@ -1520,9 +1527,7 @@ const AdsLaunchPage = () => {
       scheduleStart: toSchedulePayloadValue(form.scheduleStart),
       scheduleEnd: toSchedulePayloadValue(form.scheduleEnd),
       callToAction: form.callToAction,
-      staticDefaults: {
-        ...form.staticDefaults,
-      },
+      staticDefaults: withAttributionStaticDefaults(form.staticDefaults),
       media,
       thumbnail,
       mediaAssetId,
@@ -1696,10 +1701,7 @@ const AdsLaunchPage = () => {
       scheduleStart: toDateTimeLocalInputValue(config.scheduleStart),
       scheduleEnd: toDateTimeLocalInputValue(config.scheduleEnd),
       selectedAdAccountIds,
-      staticDefaults: {
-        ...defaultStaticDefaults,
-        ...(config.staticDefaults || {}),
-      },
+      staticDefaults: mergeAttributionStaticDefaults(defaultStaticDefaults, config.staticDefaults || {}),
     });
     setActiveTemplateId(template.id);
     setTemplateName(template.name);
@@ -2937,21 +2939,15 @@ const AdsLaunchPage = () => {
                 </div>
 
                 <div className="space-y-2 md:col-span-2">
-                  <FieldLabel htmlFor="default-attribution-setting">Attribution setting</FieldLabel>
-                  <select
-                    id="default-attribution-setting"
-                    value={form.staticDefaults.attributionSetting || defaultStaticDefaults.attributionSetting}
-                    onChange={(event) => updateStaticDefault('attributionSetting', event.target.value)}
-                    className="h-12 w-full rounded-xl border border-sky-100 bg-white px-4 outline-none transition focus:border-sky-400 focus:ring-4 focus:ring-sky-100"
-                  >
-                    {staticDefaultOptions.attributionSetting.map((option) => (
-                      <option key={option.value} value={option.value}>
-                        {option.label}
-                      </option>
-                    ))}
-                  </select>
+                  <AttributionSettingsPanel
+                    idPrefix="default-attribution"
+                    value={form.staticDefaults}
+                    objective={currentObjective}
+                    mediaType={activeMediaAsset ? (isVideoAsset ? 'video' : 'image') : ''}
+                    onChange={updateAttributionWindows}
+                  />
                   <p className="text-xs font-semibold text-slate-400">
-                    Sent to Meta as ad set attribution_spec. Use Meta default if the account/objective should decide automatically.
+                    Sent to Meta as ad set attribution_spec. Traffic/link-click campaigns are safely normalized by the backend if Meta only allows click attribution.
                   </p>
                 </div>
               </div>
@@ -3018,9 +3014,9 @@ const AdsLaunchPage = () => {
                   </span>
                 </div>
                 <div className="flex items-start justify-between gap-3 rounded-xl bg-sky-50/70 px-4 py-3">
-                  <span className="text-sm font-semibold text-slate-500">Attribution setting</span>
+                  <span className="text-sm font-semibold text-slate-500">Attribution settings</span>
                   <span className="text-right text-sm font-black text-slate-950">
-                    {getOptionLabel(staticDefaultOptions.attributionSetting, form.staticDefaults.attributionSetting || defaultStaticDefaults.attributionSetting)}
+                    {formatAttributionWindows(form.staticDefaults)}
                   </span>
                 </div>
                 {bidAmountRequired ? (

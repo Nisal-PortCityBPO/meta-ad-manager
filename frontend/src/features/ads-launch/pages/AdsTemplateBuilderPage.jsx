@@ -5,6 +5,7 @@ import { businessDataApi } from '../../dashboard/api/businessDataApi';
 import DashboardHeader from '../../dashboard/components/DashboardHeader';
 import DashboardPanel from '../../dashboard/components/DashboardPanel';
 import { adsLaunchApi } from '../api/adsLaunchApi';
+import AttributionSettingsPanel from '../components/AttributionSettingsPanel';
 import { useLaunchTemplates } from '../hooks/useLaunchTemplates';
 import {
   getMinimumScheduleStartValue,
@@ -13,6 +14,11 @@ import {
   toDateTimeLocalInputValue,
   toSchedulePayloadValue,
 } from '../utils/scheduleTime';
+import {
+  DEFAULT_ATTRIBUTION_WINDOWS,
+  mergeAttributionStaticDefaults,
+  withAttributionStaticDefaults,
+} from '../utils/attributionSettings';
 
 const TEMPLATE_TYPES = {
   CAMPAIGN: 'CAMPAIGN',
@@ -42,7 +48,8 @@ const campaignDefaults = {
     billingEvent: 'IMPRESSIONS',
     bidStrategy: 'LOWEST_COST_WITHOUT_CAP',
     bidAmount: '',
-    attributionSetting: 'CLICK_1D',
+    attributionSetting: 'CLICK_7D_VIEW_1D',
+    attributionWindows: { ...DEFAULT_ATTRIBUTION_WINDOWS },
   },
 };
 
@@ -139,13 +146,6 @@ const staticDefaultOptions = {
     { value: 'LOWEST_COST_WITHOUT_CAP', label: 'Lowest cost' },
     { value: 'LOWEST_COST_WITH_BID_CAP', label: 'Bid cap' },
     { value: 'COST_CAP', label: 'Cost cap' },
-  ],
-  attributionSetting: [
-    { value: 'CLICK_1D', label: '1-day click only' },
-    { value: 'CLICK_7D_VIEW_1D', label: '7-day click + 1-day view' },
-    { value: 'CLICK_7D', label: '7-day click only' },
-    { value: 'CLICK_1D_VIEW_1D', label: '1-day click + 1-day view' },
-    { value: 'META_DEFAULT', label: 'Use Meta default' },
   ],
 };
 
@@ -270,9 +270,7 @@ const getUrlParameterValidationError = (value) => {
 const createCampaignDefaults = () => ({
   ...campaignDefaults,
   countries: [...campaignDefaults.countries],
-  staticDefaults: {
-    ...campaignDefaults.staticDefaults,
-  },
+  staticDefaults: withAttributionStaticDefaults(campaignDefaults.staticDefaults),
 });
 
 const createMediaDefaults = () => ({
@@ -503,10 +501,20 @@ const AdsTemplateBuilderPage = () => {
   const updateCampaignDefault = (field, value) => {
     setCampaignForm((current) => ({
       ...current,
-      staticDefaults: {
+      staticDefaults: withAttributionStaticDefaults({
         ...current.staticDefaults,
         [field]: value,
-      },
+      }),
+    }));
+  };
+
+  const updateCampaignAttributionWindows = (attributionWindows) => {
+    setCampaignForm((current) => ({
+      ...current,
+      staticDefaults: withAttributionStaticDefaults({
+        ...current.staticDefaults,
+        attributionWindows,
+      }),
     }));
   };
 
@@ -560,10 +568,7 @@ const AdsTemplateBuilderPage = () => {
   const editCampaignTemplate = (template) => {
     const config = template.config || {};
     const countries = normalizeTemplateCountries(config);
-    const staticDefaults = {
-      ...campaignDefaults.staticDefaults,
-      ...(config.staticDefaults || {}),
-    };
+    const staticDefaults = mergeAttributionStaticDefaults(campaignDefaults.staticDefaults, config.staticDefaults || {});
 
     setCampaignForm({
       ...createCampaignDefaults(),
@@ -649,7 +654,7 @@ const AdsTemplateBuilderPage = () => {
           dailyBudget: campaignForm.dailyBudget,
           scheduleStart: toSchedulePayloadValue(campaignForm.scheduleStart),
           scheduleEnd: toSchedulePayloadValue(campaignForm.scheduleEnd),
-          staticDefaults: campaignForm.staticDefaults,
+          staticDefaults: withAttributionStaticDefaults(campaignForm.staticDefaults),
         },
         snapshot: {
           brandName: campaignTemplateBrand?.name || '',
@@ -940,20 +945,13 @@ const AdsTemplateBuilderPage = () => {
                 />
               </div>
               <div className="space-y-2 xl:col-span-2">
-                <FieldLabel htmlFor="campaign-attribution-setting">Attribution setting</FieldLabel>
-                <select
-                  id="campaign-attribution-setting"
-                  value={campaignForm.staticDefaults.attributionSetting || campaignDefaults.staticDefaults.attributionSetting}
-                  onChange={(event) => updateCampaignDefault('attributionSetting', event.target.value)}
-                  className="h-12 w-full rounded-xl border border-sky-100 px-4 outline-none focus:border-sky-400 focus:ring-4 focus:ring-sky-100"
-                >
-                  {staticDefaultOptions.attributionSetting.map((option) => (
-                    <option key={option.value} value={option.value}>{option.label}</option>
-                  ))}
-                </select>
-                <p className="text-xs font-semibold text-slate-400">
-                  Saved into campaign templates and sent to Meta as ad set attribution_spec.
-                </p>
+                <AttributionSettingsPanel
+                  idPrefix="campaign-template-attribution"
+                  value={campaignForm.staticDefaults}
+                  objective={campaignForm.objective}
+                  onChange={updateCampaignAttributionWindows}
+                />
+     
               </div>
               <div className="space-y-2">
                 <FieldLabel htmlFor="campaign-schedule-start">Schedule start</FieldLabel>
