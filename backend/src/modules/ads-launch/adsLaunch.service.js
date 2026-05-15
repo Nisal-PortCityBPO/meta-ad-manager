@@ -3,6 +3,15 @@ const mongoose = require('mongoose');
 const path = require('path');
 const HttpError = require('../../app/utils/httpError');
 const { waitForMetaApiPacing } = require('../../app/utils/metaApiPacing');
+const {
+  STORAGE_PROVIDERS,
+  deleteObjectStorageAsset,
+  moveFileWithinLocalStorage,
+  readObjectStorageBuffer,
+  uploadBufferToObjectStorage,
+  uploadFileToObjectStorage,
+  writeBufferWithinLocalStorage,
+} = require('../../app/utils/objectStorage');
 const { writeActivityLog } = require('../activity-logs/activityLog.service');
 const { User, USER_ROLES } = require('../users/user.model');
 const LaunchTemplate = require('./adsLaunch.model');
@@ -24,6 +33,8 @@ const GRAPH_VIDEO_API_BASE = `https://graph-video.facebook.com/${META_GRAPH_VERS
 const TEMPLATE_ASSET_DIR = path.resolve(__dirname, '../../../storage/ads-launch-template-assets');
 const MEDIA_LIBRARY_ASSET_DIR = path.resolve(__dirname, '../../../storage/ads-launch-media-assets');
 const MEDIA_CHUNK_UPLOAD_DIR = path.resolve(__dirname, '../../../storage/ads-launch-media-chunks');
+const TEMPLATE_ASSET_STORAGE_NAMESPACE = 'ads-launch-template-assets';
+const MEDIA_LIBRARY_ASSET_STORAGE_NAMESPACE = 'ads-launch-media-assets';
 const DEFAULT_VIDEO_READY_TIMEOUT_MS = 180000;
 const DEFAULT_VIDEO_READY_POLL_MS = 5000;
 const MAX_VIDEO_READY_TIMEOUT_MS = 600000;
@@ -1013,93 +1024,211 @@ function normalizeMediaLibraryMimeType(mimeType, filename = '') {
   return normalizedMimeType;
 }
 
-function deleteStoredTemplateAsset(asset) {
+function isSpacesStoredAsset(asset) {
+  return asset?.storageProvider === STORAGE_PROVIDERS.SPACES;
+}
+
+function buildLocalStoredAssetPath(directory, asset) {
+  if (!asset?.storageKey) {
+    return null;
+  }
+
+  return path.join(directory, asset.storageKey);
+}
+
+async function readStoredAssetBuffer({ asset, directory }) {
+  if (!asset?.storageKey) {
+    return null;
+  }
+
+  if (isSpacesStoredAsset(asset)) {
+    return readObjectStorageBuffer(asset.storageKey);
+  }
+
+  const filePath = buildLocalStoredAssetPath(directory, asset);
+  if (!filePath || !fs.existsSync(filePath)) {
+    return null;
+  }
+
+  return fs.readFileSync(filePath);
+}
+
+async function deleteStoredAsset({ asset, directory }) {
   if (!asset?.storageKey) {
     return;
   }
 
-  const filePath = path.join(TEMPLATE_ASSET_DIR, asset.storageKey);
-
   try {
-    fs.rmSync(filePath, { force: true });
+    if (isSpacesStoredAsset(asset)) {
+      await deleteObjectStorageAsset(asset.storageKey);
+      return;
+    }
+
+    const filePath = buildLocalStoredAssetPath(directory, asset);
+    if (filePath) {
+      fs.rmSync(filePath, { force: true });
+    }
   } catch (error) {
-    // Ignore cleanup failures so template operations still complete.
+    // Ignore cleanup failures so asset operations still complete.
   }
 }
 
-function deleteTemplateStoredAssets(template) {
-  deleteStoredTemplateAsset(template?.snapshot?.media);
-  deleteStoredTemplateAsset(template?.snapshot?.thumbnail);
+function buildStoredAssetResponse(asset, directory) {
+  if (!asset?.storageKey || !asset?.type) {
+    return null;
+  }
+
+  if (isSpacesStoredAsset(asset)) {
+    return {
+      storageProvider: STORAGE_PROVIDERS.SPACES,
+      storageKey: asset.storageKey,
+      filename: asset.name || 'asset',
+      mimeType: asset.type,
+    };
+  }
+
+  const filePath = buildLocalStoredAssetPath(directory, asset);
+  if (!filePath || !fs.existsSync(filePath)) {
+    return null;
+  }
+
+  return {
+    filePath,
+    filename: asset.name || 'asset',
+    mimeType: asset.type,
+  };
 }
 
-function persistTemplateAsset({ templateId, asset, assetKind }) {
+async function persistBufferAsset({ namespace, directory, filename, buffer, contentType }) {
+  const spacesAsset = await uploadBufferToObjectStorage({
+    namespace,
+    filename,
+    buffer,
+    contentType,
+  });
+
+  if (spacesAsset) {
+    return spacesAsset;
+  }
+
+  writeBufferWithinLocalStorage({
+    targetDir: directory,
+    filename,
+    buffer,
+  });
+
+  return {
+    storageProvider: STORAGE_PROVIDERS.LOCAL,
+    storageKey: filename,
+    url: '',
+  };
+}
+
+async function persistFileAsset({ namespace, directory, filename, filePath, contentType, contentLength }) {
+  const spacesAsset = await uploadFileToObjectStorage({
+    namespace,
+    filename,
+    filePath,
+    contentType,
+    contentLength,
+  });
+
+  if (spacesAsset) {
+    return spacesAsset;
+  }
+
+  moveFileWithinLocalStorage({
+    sourcePath: filePath,
+    targetDir: directory,
+    filename,
+  });
+
+  return {
+    storageProvider: STORAGE_PROVIDERS.LOCAL,
+    storageKey: filename,
+    url: '',
+  };
+}
+
+async function deleteStoredTemplateAsset(asset) {
+  await deleteStoredAsset({
+    asset,
+    directory: TEMPLATE_ASSET_DIR,
+  });
+}
+
+async function deleteTemplateStoredAssets(template) {
+  await deleteStoredTemplateAsset(template?.snapshot?.media);
+  await deleteStoredTemplateAsset(template?.snapshot?.thumbnail);
+}
+
+async function persistTemplateAsset({ templateId, asset, assetKind }) {
   const parsed = parseDataUrlFile(asset, assetKind === 'thumbnail' ? 'Thumbnail' : 'Creative', {
     allowedMimeTypePrefixes: assetKind === 'thumbnail' ? ['image/'] : ['image/', 'video/'],
   });
   const extension = getAssetFileExtension(parsed.name, parsed.mimeType);
-  const storageKey = `${templateId}-${assetKind}-${Date.now()}${extension}`;
-  const filePath = path.join(TEMPLATE_ASSET_DIR, storageKey);
+  const filename = `${templateId}-${assetKind}-${Date.now()}${extension}`;
+  const storedAsset = await persistBufferAsset({
+    namespace: TEMPLATE_ASSET_STORAGE_NAMESPACE,
+    directory: TEMPLATE_ASSET_DIR,
+    filename,
+    buffer: parsed.buffer,
+    contentType: parsed.mimeType,
+  });
 
   ensureTemplateAssetDir();
-  fs.writeFileSync(filePath, parsed.buffer);
 
   return {
     name: parsed.name,
     type: parsed.mimeType,
     size: parsed.buffer.length,
-    storageKey,
+    ...storedAsset,
   };
 }
 
-function copyMediaLibraryAssetToTemplateAsset({ templateId, asset, assetKind }) {
-  const sourcePath = getStoredMediaLibraryAssetPath(asset);
+async function copyMediaLibraryAssetToTemplateAsset({ templateId, asset, assetKind }) {
+  const buffer = await readStoredAssetBuffer({
+    asset,
+    directory: MEDIA_LIBRARY_ASSET_DIR,
+  });
 
-  if (!sourcePath || !asset?.type) {
+  if (!buffer || !asset?.type) {
     throw new HttpError(400, `${assetKind === 'thumbnail' ? 'Thumbnail' : 'Media'} library asset is missing its saved file`);
   }
 
   const extension = getAssetFileExtension(asset.name, asset.type);
-  const storageKey = `${templateId}-${assetKind}-${Date.now()}${extension}`;
-  const filePath = path.join(TEMPLATE_ASSET_DIR, storageKey);
-
-  ensureTemplateAssetDir();
-  fs.copyFileSync(sourcePath, filePath);
+  const filename = `${templateId}-${assetKind}-${Date.now()}${extension}`;
+  const storedAsset = await persistBufferAsset({
+    namespace: TEMPLATE_ASSET_STORAGE_NAMESPACE,
+    directory: TEMPLATE_ASSET_DIR,
+    filename,
+    buffer,
+    contentType: asset.type,
+  });
 
   return {
     name: asset.name,
     type: asset.type,
-    size: asset.size || fs.statSync(filePath).size,
-    storageKey,
+    size: asset.size || buffer.length,
+    ...storedAsset,
   };
 }
 
-function readStoredTemplateAsset(asset) {
-  if (!asset?.storageKey) {
+async function readStoredTemplateAsset(asset) {
+  const buffer = await readStoredAssetBuffer({
+    asset,
+    directory: TEMPLATE_ASSET_DIR,
+  });
+
+  if (!buffer || !asset?.type) {
     return null;
   }
-
-  const filePath = path.join(TEMPLATE_ASSET_DIR, asset.storageKey);
-
-  if (!fs.existsSync(filePath)) {
-    return null;
-  }
-
-  const buffer = fs.readFileSync(filePath);
 
   return {
     name: asset.name,
     type: asset.type,
     dataUrl: `data:${asset.type};base64,${buffer.toString('base64')}`,
   };
-}
-
-function getStoredTemplateAssetPath(asset) {
-  if (!asset?.storageKey) {
-    return null;
-  }
-
-  const filePath = path.join(TEMPLATE_ASSET_DIR, asset.storageKey);
-  return fs.existsSync(filePath) ? filePath : null;
 }
 
 function ensureMediaLibraryAssetDir() {
@@ -1236,7 +1365,7 @@ function validateMediaLibraryParsedAsset(parsed, mediaType, assetKind = 'media')
   }
 }
 
-function persistMediaLibraryAsset({ mediaId, asset, assetKind, mediaType }) {
+async function persistMediaLibraryAsset({ mediaId, asset, assetKind, mediaType }) {
   const effectiveMediaType = assetKind === 'thumbnail' ? ADS_MEDIA_TYPES.IMAGE : mediaType;
   const parsed = parseMediaLibraryAsset(asset, assetKind === 'thumbnail' ? 'Video thumbnail' : 'Media', effectiveMediaType);
 
@@ -1247,24 +1376,29 @@ function persistMediaLibraryAsset({ mediaId, asset, assetKind, mediaType }) {
   }
 
   const extension = getAssetFileExtension(parsed.name, parsed.mimeType);
-  const storageKey = `${mediaId}-${assetKind}-${Date.now()}${extension}`;
-  const filePath = path.join(MEDIA_LIBRARY_ASSET_DIR, storageKey);
+  const filename = `${mediaId}-${assetKind}-${Date.now()}${extension}`;
+  const storedAsset = await persistBufferAsset({
+    namespace: MEDIA_LIBRARY_ASSET_STORAGE_NAMESPACE,
+    directory: MEDIA_LIBRARY_ASSET_DIR,
+    filename,
+    buffer: parsed.buffer,
+    contentType: parsed.mimeType,
+  });
 
   ensureMediaLibraryAssetDir();
-  fs.writeFileSync(filePath, parsed.buffer);
 
   return {
     name: parsed.name,
     type: parsed.mimeType,
     size: parsed.buffer.length,
-    storageKey,
+    ...storedAsset,
     width: parsed.width,
     height: parsed.height,
     duration: parsed.duration,
   };
 }
 
-function persistUploadedMediaLibraryAsset({ mediaId, file, metadata, assetKind, mediaType }) {
+async function persistUploadedMediaLibraryAsset({ mediaId, file, metadata, assetKind, mediaType }) {
   const effectiveMediaType = assetKind === 'thumbnail' ? ADS_MEDIA_TYPES.IMAGE : mediaType;
   const parsed = parseUploadedMediaLibraryAsset(
     file,
@@ -1284,17 +1418,23 @@ function persistUploadedMediaLibraryAsset({ mediaId, file, metadata, assetKind, 
   }
 
   const extension = getAssetFileExtension(parsed.name, parsed.mimeType);
-  const storageKey = `${mediaId}-${assetKind}-${Date.now()}${extension}`;
-  const filePath = path.join(MEDIA_LIBRARY_ASSET_DIR, storageKey);
+  const filename = `${mediaId}-${assetKind}-${Date.now()}${extension}`;
+  const storedAsset = await persistFileAsset({
+    namespace: MEDIA_LIBRARY_ASSET_STORAGE_NAMESPACE,
+    directory: MEDIA_LIBRARY_ASSET_DIR,
+    filename,
+    filePath: parsed.filePath,
+    contentType: parsed.mimeType,
+    contentLength: parsed.size,
+  });
 
   ensureMediaLibraryAssetDir();
-  fs.renameSync(parsed.filePath, filePath);
 
   return {
     name: parsed.name,
     type: parsed.mimeType,
     size: parsed.size,
-    storageKey,
+    ...storedAsset,
     width: parsed.width,
     height: parsed.height,
     duration: parsed.duration,
@@ -1486,37 +1626,22 @@ function assembleMediaUploadChunks({ uploadId, actor, originalName, mimeType, si
   }
 }
 
-function deleteStoredMediaLibraryAsset(asset) {
-  if (!asset?.storageKey) {
-    return;
-  }
-
-  const filePath = path.join(MEDIA_LIBRARY_ASSET_DIR, asset.storageKey);
-
-  try {
-    fs.rmSync(filePath, { force: true });
-  } catch (error) {
-    // Ignore cleanup failures so media library operations still complete.
-  }
+async function deleteStoredMediaLibraryAsset(asset) {
+  await deleteStoredAsset({
+    asset,
+    directory: MEDIA_LIBRARY_ASSET_DIR,
+  });
 }
 
-function getStoredMediaLibraryAssetPath(asset) {
-  if (!asset?.storageKey) {
+async function readStoredMediaLibraryAsset(asset) {
+  const buffer = await readStoredAssetBuffer({
+    asset,
+    directory: MEDIA_LIBRARY_ASSET_DIR,
+  });
+
+  if (!buffer || !asset?.type) {
     return null;
   }
-
-  const filePath = path.join(MEDIA_LIBRARY_ASSET_DIR, asset.storageKey);
-  return fs.existsSync(filePath) ? filePath : null;
-}
-
-function readStoredMediaLibraryAsset(asset) {
-  const filePath = getStoredMediaLibraryAssetPath(asset);
-
-  if (!filePath || !asset?.type) {
-    return null;
-  }
-
-  const buffer = fs.readFileSync(filePath);
 
   return {
     name: asset.name,
@@ -1535,44 +1660,44 @@ async function applyTemplateAssets({ template, snapshotInput, existingSnapshot =
   let thumbnailAsset = existingSnapshot?.thumbnail || template.snapshot?.thumbnail || null;
 
   if (shouldClearAssets) {
-    deleteStoredTemplateAsset(mediaAsset);
-    deleteStoredTemplateAsset(thumbnailAsset);
+    await deleteStoredTemplateAsset(mediaAsset);
+    await deleteStoredTemplateAsset(thumbnailAsset);
     mediaAsset = null;
     thumbnailAsset = null;
   } else if (nextMediaAssetId) {
     const libraryMediaAsset = await getMediaAssetDocForActor(nextMediaAssetId, actor);
     const previousMedia = mediaAsset;
     const previousThumbnail = thumbnailAsset;
-    mediaAsset = copyMediaLibraryAssetToTemplateAsset({
+    mediaAsset = await copyMediaLibraryAssetToTemplateAsset({
       templateId: template._id.toString(),
       asset: libraryMediaAsset.media,
       assetKind: 'media',
     });
 
     thumbnailAsset = libraryMediaAsset.thumbnail
-      ? copyMediaLibraryAssetToTemplateAsset({
+      ? await copyMediaLibraryAssetToTemplateAsset({
           templateId: template._id.toString(),
           asset: libraryMediaAsset.thumbnail,
           assetKind: 'thumbnail',
         })
       : null;
 
-    deleteStoredTemplateAsset(previousMedia);
-    deleteStoredTemplateAsset(previousThumbnail);
+    await deleteStoredTemplateAsset(previousMedia);
+    await deleteStoredTemplateAsset(previousThumbnail);
   } else if (nextMediaInput) {
     const previousMedia = mediaAsset;
-    mediaAsset = persistTemplateAsset({
+    mediaAsset = await persistTemplateAsset({
       templateId: template._id.toString(),
       asset: nextMediaInput,
       assetKind: 'media',
     });
-    deleteStoredTemplateAsset(previousMedia);
+    await deleteStoredTemplateAsset(previousMedia);
 
     if (!mediaAsset.type.startsWith('video/')) {
-      deleteStoredTemplateAsset(thumbnailAsset);
+      await deleteStoredTemplateAsset(thumbnailAsset);
       thumbnailAsset = null;
     } else if (!nextThumbnailInput) {
-      deleteStoredTemplateAsset(thumbnailAsset);
+      await deleteStoredTemplateAsset(thumbnailAsset);
       thumbnailAsset = null;
     }
   }
@@ -1583,20 +1708,20 @@ async function applyTemplateAssets({ template, snapshotInput, existingSnapshot =
       throw new HttpError(400, 'Template thumbnail must be an image media library asset');
     }
     const previousThumbnail = thumbnailAsset;
-    thumbnailAsset = copyMediaLibraryAssetToTemplateAsset({
+    thumbnailAsset = await copyMediaLibraryAssetToTemplateAsset({
       templateId: template._id.toString(),
       asset: libraryThumbnailAsset.media,
       assetKind: 'thumbnail',
     });
-    deleteStoredTemplateAsset(previousThumbnail);
+    await deleteStoredTemplateAsset(previousThumbnail);
   } else if (nextThumbnailInput) {
     const previousThumbnail = thumbnailAsset;
-    thumbnailAsset = persistTemplateAsset({
+    thumbnailAsset = await persistTemplateAsset({
       templateId: template._id.toString(),
       asset: nextThumbnailInput,
       assetKind: 'thumbnail',
     });
-    deleteStoredTemplateAsset(previousThumbnail);
+    await deleteStoredTemplateAsset(previousThumbnail);
   }
 
   template.snapshot = {
@@ -3193,6 +3318,11 @@ async function listMediaAssets({ actor, brandId = '', search = '', includeUnassi
       { name: searchRegex },
       { brandName: searchRegex },
       { 'media.name': searchRegex },
+      { 'metaReview.lastMetaStatus': searchRegex },
+      { 'metaReview.lastReason': searchRegex },
+      { 'metaReview.lastAd.adName': searchRegex },
+      { 'metaReview.lastAd.campaignName': searchRegex },
+      { 'metaReview.lastAd.adAccountName': searchRegex },
     ];
   }
 
@@ -3259,14 +3389,14 @@ async function createMediaAsset({
 
   try {
     mediaAsset.media = uploadedMedia
-      ? persistUploadedMediaLibraryAsset({
+      ? await persistUploadedMediaLibraryAsset({
           mediaId: mediaAsset._id.toString(),
           file: uploadedMedia,
           metadata: mediaMetadata,
           assetKind: 'media',
           mediaType,
         })
-      : persistMediaLibraryAsset({
+      : await persistMediaLibraryAsset({
           mediaId: mediaAsset._id.toString(),
           asset: mediaInput,
           assetKind: 'media',
@@ -3275,14 +3405,14 @@ async function createMediaAsset({
     mediaAsset.thumbnail =
       mediaType === ADS_MEDIA_TYPES.VIDEO && (uploadedThumbnail || thumbnailInput)
         ? uploadedThumbnail
-          ? persistUploadedMediaLibraryAsset({
+          ? await persistUploadedMediaLibraryAsset({
               mediaId: mediaAsset._id.toString(),
               file: uploadedThumbnail,
               metadata: thumbnailMetadata,
               assetKind: 'thumbnail',
               mediaType,
             })
-          : persistMediaLibraryAsset({
+          : await persistMediaLibraryAsset({
               mediaId: mediaAsset._id.toString(),
               asset: thumbnailInput,
               assetKind: 'thumbnail',
@@ -3291,8 +3421,8 @@ async function createMediaAsset({
         : null;
     await mediaAsset.save();
   } catch (error) {
-    deleteStoredMediaLibraryAsset(mediaAsset.media);
-    deleteStoredMediaLibraryAsset(mediaAsset.thumbnail);
+    await deleteStoredMediaLibraryAsset(mediaAsset.media);
+    await deleteStoredMediaLibraryAsset(mediaAsset.thumbnail);
     throw error;
   } finally {
     cleanupUploadedMediaFile(uploadedMedia);
@@ -3372,8 +3502,8 @@ async function completeChunkedMediaAsset({
 async function deleteMediaAsset({ mediaId, actor, req }) {
   const mediaAsset = await getMediaAssetDocForActor(mediaId, actor);
 
-  deleteStoredMediaLibraryAsset(mediaAsset.media);
-  deleteStoredMediaLibraryAsset(mediaAsset.thumbnail);
+  await deleteStoredMediaLibraryAsset(mediaAsset.media);
+  await deleteStoredMediaLibraryAsset(mediaAsset.thumbnail);
   await mediaAsset.deleteOne();
 
   await writeActivityLog({
@@ -3401,10 +3531,12 @@ async function deleteMediaFolder({ folderId, actor, req }) {
     },
   });
 
-  mediaAssets.forEach((mediaAsset) => {
-    deleteStoredMediaLibraryAsset(mediaAsset.media);
-    deleteStoredMediaLibraryAsset(mediaAsset.thumbnail);
-  });
+  await Promise.all(
+    mediaAssets.flatMap((mediaAsset) => [
+      deleteStoredMediaLibraryAsset(mediaAsset.media),
+      deleteStoredMediaLibraryAsset(mediaAsset.thumbnail),
+    ])
+  );
 
   const mediaDeleteResult = mediaAssets.length
     ? await AdsLaunchMedia.deleteMany({
@@ -3550,7 +3682,7 @@ async function updateTemplate({ templateId, name, templateType, config, snapshot
 
 async function deleteTemplate({ templateId, actor, req }) {
   const template = await getTemplateForActor(templateId, actor);
-  deleteTemplateStoredAssets(template);
+  await deleteTemplateStoredAssets(template);
   await template.deleteOne();
 
   await writeActivityLog({
@@ -4672,17 +4804,13 @@ async function getTemplateAssetForActor({ templateId, assetKind, actor }) {
 
   const template = await getTemplateForActor(templateId, actor);
   const asset = assetKind === 'thumbnail' ? template.snapshot?.thumbnail : template.snapshot?.media;
-  const filePath = getStoredTemplateAssetPath(asset);
+  const storedAsset = buildStoredAssetResponse(asset, TEMPLATE_ASSET_DIR);
 
-  if (!filePath || !asset?.type) {
+  if (!storedAsset) {
     throw new HttpError(404, 'Template asset not found');
   }
 
-  return {
-    filePath,
-    filename: asset.name || `${assetKind}`,
-    mimeType: asset.type,
-  };
+  return storedAsset;
 }
 
 async function getMediaAssetForActor({ mediaId, assetKind, actor }) {
@@ -4692,17 +4820,13 @@ async function getMediaAssetForActor({ mediaId, assetKind, actor }) {
 
   const mediaAsset = await getMediaAssetDocForActor(mediaId, actor);
   const asset = assetKind === 'thumbnail' ? mediaAsset.thumbnail : mediaAsset.media;
-  const filePath = getStoredMediaLibraryAssetPath(asset);
+  const storedAsset = buildStoredAssetResponse(asset, MEDIA_LIBRARY_ASSET_DIR);
 
-  if (!filePath || !asset?.type) {
+  if (!storedAsset) {
     throw new HttpError(404, 'Media library asset not found');
   }
 
-  return {
-    filePath,
-    filename: asset.name || `${assetKind}`,
-    mimeType: asset.type,
-  };
+  return storedAsset;
 }
 
 async function resolvePublishCreativeAssets({ launch, actor }) {
@@ -4715,11 +4839,11 @@ async function resolvePublishCreativeAssets({ launch, actor }) {
 
   if (launch.mediaAssetId) {
     const mediaAsset = await getMediaAssetDocForActor(launch.mediaAssetId, actor);
-    const creativeAssets = readCreativeAssetsFromMediaAsset(mediaAsset);
+    const creativeAssets = await readCreativeAssetsFromMediaAsset(mediaAsset);
 
     if (launch.thumbnailAssetId) {
       const thumbnailAsset = await getMediaAssetDocForActor(launch.thumbnailAssetId, actor);
-      creativeAssets.thumbnail = readThumbnailFromMediaLibraryAsset(thumbnailAsset);
+      creativeAssets.thumbnail = await readThumbnailFromMediaLibraryAsset(thumbnailAsset);
     }
 
     return creativeAssets;
@@ -4730,8 +4854,8 @@ async function resolvePublishCreativeAssets({ launch, actor }) {
   }
 
   const template = await getTemplateForActor(launch.templateId, actor);
-  const media = readStoredTemplateAsset(template.snapshot?.media);
-  let thumbnail = readStoredTemplateAsset(template.snapshot?.thumbnail);
+  const media = await readStoredTemplateAsset(template.snapshot?.media);
+  let thumbnail = await readStoredTemplateAsset(template.snapshot?.thumbnail);
 
   if (!media) {
     throw new HttpError(400, 'The selected template does not have a saved creative asset');
@@ -4739,7 +4863,7 @@ async function resolvePublishCreativeAssets({ launch, actor }) {
 
   if (launch.thumbnailAssetId) {
     const thumbnailAsset = await getMediaAssetDocForActor(launch.thumbnailAssetId, actor);
-    thumbnail = readThumbnailFromMediaLibraryAsset(thumbnailAsset);
+    thumbnail = await readThumbnailFromMediaLibraryAsset(thumbnailAsset);
   }
 
   return {
@@ -4748,9 +4872,9 @@ async function resolvePublishCreativeAssets({ launch, actor }) {
   };
 }
 
-function readCreativeAssetsFromMediaAsset(mediaAsset) {
-  const media = readStoredMediaLibraryAsset(mediaAsset?.media);
-  const thumbnail = readStoredMediaLibraryAsset(mediaAsset?.thumbnail);
+async function readCreativeAssetsFromMediaAsset(mediaAsset) {
+  const media = await readStoredMediaLibraryAsset(mediaAsset?.media);
+  const thumbnail = await readStoredMediaLibraryAsset(mediaAsset?.thumbnail);
 
   if (!media) {
     throw new HttpError(400, `Media library asset "${mediaAsset?.name || 'selected'}" is missing its saved file`);
@@ -4762,12 +4886,12 @@ function readCreativeAssetsFromMediaAsset(mediaAsset) {
   };
 }
 
-function readThumbnailFromMediaLibraryAsset(mediaAsset) {
+async function readThumbnailFromMediaLibraryAsset(mediaAsset) {
   if (mediaAsset?.mediaType !== ADS_MEDIA_TYPES.IMAGE) {
     throw new HttpError(400, `Thumbnail asset "${mediaAsset?.name || 'selected'}" must be an image from the media library`);
   }
 
-  const thumbnail = readStoredMediaLibraryAsset(mediaAsset.media);
+  const thumbnail = await readStoredMediaLibraryAsset(mediaAsset.media);
 
   if (!thumbnail) {
     throw new HttpError(400, `Thumbnail asset "${mediaAsset?.name || 'selected'}" is missing its saved file`);
@@ -5053,9 +5177,9 @@ function mergeTemplateConfig(baseLaunch, campaignConfig = {}, mediaConfig = {}, 
   };
 }
 
-function readCreativeAssetsFromTemplate(template) {
-  const media = readStoredTemplateAsset(template?.snapshot?.media);
-  const thumbnail = readStoredTemplateAsset(template?.snapshot?.thumbnail);
+async function readCreativeAssetsFromTemplate(template) {
+  const media = await readStoredTemplateAsset(template?.snapshot?.media);
+  const thumbnail = await readStoredTemplateAsset(template?.snapshot?.thumbnail);
 
   if (!media) {
     throw new HttpError(400, `Media template "${template?.name || 'selected'}" does not have a saved creative asset`);
@@ -5117,9 +5241,9 @@ async function resolveAccountLaunchFromTemplates({ baseLaunch, accountLaunch, se
   };
 
   const creativeAssets = mediaAsset
-    ? readCreativeAssetsFromMediaAsset(mediaAsset)
+    ? await readCreativeAssetsFromMediaAsset(mediaAsset)
     : mediaTemplate
-      ? readCreativeAssetsFromTemplate(mediaTemplate)
+      ? await readCreativeAssetsFromTemplate(mediaTemplate)
       : await resolvePublishCreativeAssets({
           launch: effectiveLaunch,
           actor,
@@ -5131,7 +5255,7 @@ async function resolveAccountLaunchFromTemplates({ baseLaunch, accountLaunch, se
     }
 
     if (thumbnailAsset) {
-      creativeAssets.thumbnail = readThumbnailFromMediaLibraryAsset(thumbnailAsset);
+      creativeAssets.thumbnail = await readThumbnailFromMediaLibraryAsset(thumbnailAsset);
     }
   }
 

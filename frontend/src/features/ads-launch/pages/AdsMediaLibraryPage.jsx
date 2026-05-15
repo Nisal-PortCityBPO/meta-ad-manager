@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import toast from 'react-hot-toast';
 import {
+  AlertTriangle,
   ChevronDown,
   ChevronRight,
   FileUp,
@@ -116,6 +117,19 @@ const formatDuration = (duration = 0) => {
     .toString()
     .padStart(2, '0');
   return `${minutes}:${seconds}`;
+};
+
+const hasMetaReviewWarning = (mediaAsset) => mediaAsset?.metaReview?.riskStatus === 'PREVIOUSLY_REJECTED';
+
+const formatReviewDate = (value) => {
+  if (!value) {
+    return '';
+  }
+
+  return new Intl.DateTimeFormat('en', {
+    dateStyle: 'medium',
+    timeStyle: 'short',
+  }).format(new Date(value));
 };
 
 const getAspectRatio = ({ width, height }) => (height ? width / height : 0);
@@ -312,6 +326,9 @@ const MediaTile = ({ brands, brandsLoading, mediaAsset, onBrandChange, onDelete,
   const media = mediaAsset.media || {};
   const brandLabel = mediaAsset.brandName || 'Unassigned brand';
   const folderLocked = Boolean(mediaAsset.folderId);
+  const reviewWarning = hasMetaReviewWarning(mediaAsset);
+  const review = mediaAsset.metaReview || {};
+  const reviewAd = review.lastAd || {};
 
   return (
     <div className={`group overflow-hidden rounded-2xl border bg-white shadow-sm shadow-sky-100/70 transition hover:-translate-y-0.5 hover:shadow-md hover:shadow-sky-100 ${selected ? 'border-sky-500 ring-4 ring-sky-100' : 'border-sky-100'}`}>
@@ -333,6 +350,12 @@ const MediaTile = ({ brands, brandsLoading, mediaAsset, onBrandChange, onDelete,
           {isVideo ? <Video size={13} /> : <ImageIcon size={13} />}
           {isVideo ? 'Video' : 'Image'}
         </span>
+        {reviewWarning ? (
+          <span className="absolute left-3 top-14 inline-flex max-w-[calc(100%-1.5rem)] items-center gap-1 rounded-full bg-red-50 px-2.5 py-1 text-[11px] font-black text-red-700 shadow-sm">
+            <AlertTriangle size={13} strokeWidth={2.4} />
+            Previously rejected
+          </span>
+        ) : null}
         <button
           type="button"
           onClick={() => onDelete(mediaAsset)}
@@ -348,6 +371,26 @@ const MediaTile = ({ brands, brandsLoading, mediaAsset, onBrandChange, onDelete,
         <p className={`mt-2 inline-flex rounded-full px-3 py-1 text-[11px] font-black uppercase tracking-[0.12em] ${mediaAsset.brandId ? 'bg-sky-50 text-sky-700' : 'bg-amber-50 text-amber-700'}`}>
           {brandLabel}
         </p>
+
+        {reviewWarning ? (
+          <div className="mt-3 rounded-2xl border border-red-100 bg-red-50/70 p-3">
+            <p className="flex items-center gap-2 text-[11px] font-black uppercase tracking-[0.14em] text-red-700">
+              <AlertTriangle size={14} strokeWidth={2.4} />
+              Meta rejection memory
+            </p>
+            <p className="mt-2 text-sm font-bold leading-5 text-red-700">
+              Used on {review.lastMetaStatus || 'a rejected ad'}{reviewAd.adAccountName ? ` in ${reviewAd.adAccountName}` : ''}.
+            </p>
+            <p className="mt-1 line-clamp-2 text-xs font-semibold leading-5 text-red-500">
+              {review.lastReason || reviewAd.campaignName || 'Meta previously rejected or disapproved an ad using this media.'}
+            </p>
+            {review.lastRejectedAt ? (
+              <p className="mt-2 text-[11px] font-black uppercase tracking-[0.12em] text-red-400">
+                Last seen {formatReviewDate(review.lastRejectedAt)}
+              </p>
+            ) : null}
+          </div>
+        ) : null}
 
         {folderLocked ? (
           <div className="mt-3 rounded-2xl border border-sky-100 bg-sky-50/50 p-3">

@@ -1,12 +1,10 @@
+require('../app/config/env');
 const bcrypt = require('bcryptjs');
-const dotenv = require('dotenv');
 const connectDB = require('../app/config/db');
 const { writeActivityLog } = require('../modules/activity-logs/activityLog.service');
 const Brand = require('../modules/brands/brand.model');
 const { seedProtectedFooter } = require('../modules/system-integrity/systemIntegrity.service');
 const { User, USER_ROLES } = require('../modules/users/user.model');
-
-dotenv.config();
 
 const protectedFooterSeed = {
   marker: '200M_PROTECTED_FOOTER_V1',
