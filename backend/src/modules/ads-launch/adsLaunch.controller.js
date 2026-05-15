@@ -1,13 +1,34 @@
 const asyncHandler = require('../../app/utils/asyncHandler');
+const { STORAGE_PROVIDERS, getObjectStorageReadStream } = require('../../app/utils/objectStorage');
 const adsManageService = require('../ads-manage/adsManage.service');
 const adsLaunchService = require('./adsLaunch.service');
 
-function sendStoredAsset(res, asset) {
+async function sendStoredAsset(req, res, asset) {
   res.setHeader('Content-Type', asset.mimeType);
   res.setHeader('Content-Disposition', `inline; filename="${encodeURIComponent(asset.filename)}"`);
+  res.setHeader('Cache-Control', 'private, no-store');
 
-  if (asset.redirectUrl) {
-    res.redirect(asset.redirectUrl);
+  if (asset.storageProvider === STORAGE_PROVIDERS.SPACES) {
+    const object = await getObjectStorageReadStream(asset.storageKey, {
+      range: req.headers.range || '',
+    });
+
+    if (!object?.body) {
+      res.status(404).json({ message: 'Media library asset not found' });
+      return;
+    }
+
+    if (object.contentRange) {
+      res.status(206);
+      res.setHeader('Content-Range', object.contentRange);
+    }
+
+    res.setHeader('Accept-Ranges', 'bytes');
+    if (object.contentLength) {
+      res.setHeader('Content-Length', object.contentLength);
+    }
+
+    object.body.pipe(res);
     return;
   }
 
@@ -30,7 +51,7 @@ const getTemplateAsset = asyncHandler(async (req, res) => {
     actor: req.user,
   });
 
-  sendStoredAsset(res, asset);
+  await sendStoredAsset(req, res, asset);
 });
 
 const getMediaAssets = asyncHandler(async (req, res) => {
@@ -75,7 +96,7 @@ const getMediaAsset = asyncHandler(async (req, res) => {
     actor: req.user,
   });
 
-  sendStoredAsset(res, asset);
+  await sendStoredAsset(req, res, asset);
 });
 
 const createMediaAsset = asyncHandler(async (req, res) => {

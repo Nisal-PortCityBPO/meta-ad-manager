@@ -338,7 +338,7 @@ launchTemplateSchema.methods.toSafeObject = function toSafeObject() {
       type: asset.type,
       size: asset.size || 0,
       storageProvider: asset.storageProvider || 'LOCAL',
-      url: asset.url || `/api/ads-launch/templates/${this._id.toString()}/assets/${assetKind}`,
+      url: `/api/ads-launch/templates/${this._id.toString()}/assets/${assetKind}`,
     };
   };
 
