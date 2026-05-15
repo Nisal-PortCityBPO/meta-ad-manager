@@ -58,4 +58,4 @@ jobs:
           port: 22
           envs: VERSION,GHCR_USER,GHCR_TOKEN
           script: |
-            bash /var/www/deploy_meta_app.sh  
+            bash /var/www/deploy_meta_app.sh "${VERSION}"
