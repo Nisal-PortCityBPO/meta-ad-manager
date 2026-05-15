@@ -132,4 +132,4 @@ deploy:
           chmod +x ./deploy_meta_app.sh
 
           ./deploy_meta_app.sh "$VERSION"
->>>>>>> c2b21f45290d7fcbfcfafa48b40fe142e95afc10
+
