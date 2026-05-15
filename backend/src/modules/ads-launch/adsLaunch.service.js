@@ -3193,6 +3193,11 @@ async function listMediaAssets({ actor, brandId = '', search = '', includeUnassi
       { name: searchRegex },
       { brandName: searchRegex },
       { 'media.name': searchRegex },
+      { 'metaReview.lastMetaStatus': searchRegex },
+      { 'metaReview.lastReason': searchRegex },
+      { 'metaReview.lastAd.adName': searchRegex },
+      { 'metaReview.lastAd.campaignName': searchRegex },
+      { 'metaReview.lastAd.adAccountName': searchRegex },
     ];
   }
 
