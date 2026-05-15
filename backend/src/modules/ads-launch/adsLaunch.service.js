@@ -6,7 +6,6 @@ const { waitForMetaApiPacing } = require('../../app/utils/metaApiPacing');
 const {
   STORAGE_PROVIDERS,
   deleteObjectStorageAsset,
-  getPublicObjectUrl,
   moveFileWithinLocalStorage,
   readObjectStorageBuffer,
   uploadBufferToObjectStorage,
@@ -1080,13 +1079,9 @@ function buildStoredAssetResponse(asset, directory) {
   }
 
   if (isSpacesStoredAsset(asset)) {
-    const redirectUrl = asset.url || getPublicObjectUrl(asset.storageKey);
-    if (!redirectUrl) {
-      return null;
-    }
-
     return {
-      redirectUrl,
+      storageProvider: STORAGE_PROVIDERS.SPACES,
+      storageKey: asset.storageKey,
       filename: asset.name || 'asset',
       mimeType: asset.type,
     };

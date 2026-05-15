@@ -1,7 +1,14 @@
 const fs = require('fs');
 const path = require('path');
 require('../config/env');
-const { DeleteObjectCommand, GetObjectCommand, PutObjectCommand, S3Client } = require('@aws-sdk/client-s3');
+const {
+  DeleteObjectCommand,
+  GetObjectCommand,
+  ListObjectsV2Command,
+  PutObjectAclCommand,
+  PutObjectCommand,
+  S3Client,
+} = require('@aws-sdk/client-s3');
 
 const STORAGE_PROVIDERS = Object.freeze({
   LOCAL: 'LOCAL',
@@ -155,15 +162,15 @@ async function uploadBufferToObjectStorage({ namespace, filename, buffer, conten
       Key: key,
       Body: buffer,
       ContentType: contentType || 'application/octet-stream',
-      ACL: 'public-read',
-      CacheControl: 'public, max-age=31536000, immutable',
+      ACL: 'private',
+      CacheControl: 'private, no-store',
     })
   );
 
   return {
     storageProvider: STORAGE_PROVIDERS.SPACES,
     storageKey: key,
-    url: getPublicObjectUrl(key),
+    url: '',
   };
 }
 
@@ -182,15 +189,15 @@ async function uploadFileToObjectStorage({ namespace, filename, filePath, conten
       Body: fs.createReadStream(filePath),
       ContentType: contentType || 'application/octet-stream',
       ContentLength: contentLength || fs.statSync(filePath).size,
-      ACL: 'public-read',
-      CacheControl: 'public, max-age=31536000, immutable',
+      ACL: 'private',
+      CacheControl: 'private, no-store',
     })
   );
 
   return {
     storageProvider: STORAGE_PROVIDERS.SPACES,
     storageKey: key,
-    url: getPublicObjectUrl(key),
+    url: '',
   };
 }
 
@@ -211,6 +218,29 @@ async function readObjectStorageBuffer(storageKey) {
   return streamToBuffer(payload.Body);
 }
 
+async function getObjectStorageReadStream(storageKey, { range = '' } = {}) {
+  const client = getSpacesClient();
+
+  if (!client || !storageKey) {
+    return null;
+  }
+
+  const payload = await client.send(
+    new GetObjectCommand({
+      Bucket: process.env.DO_SPACES_BUCKET,
+      Key: storageKey,
+      Range: range || undefined,
+    })
+  );
+
+  return {
+    body: payload.Body,
+    contentLength: payload.ContentLength || null,
+    contentRange: payload.ContentRange || '',
+    contentType: payload.ContentType || '',
+  };
+}
+
 async function deleteObjectStorageAsset(storageKey) {
   const client = getSpacesClient();
 
@@ -224,6 +254,59 @@ async function deleteObjectStorageAsset(storageKey) {
       Key: storageKey,
     })
   );
+}
+
+async function setObjectStorageAssetPrivate(storageKey) {
+  const client = getSpacesClient();
+
+  if (!client || !storageKey) {
+    return;
+  }
+
+  await client.send(
+    new PutObjectAclCommand({
+      Bucket: process.env.DO_SPACES_BUCKET,
+      Key: storageKey,
+      ACL: 'private',
+    })
+  );
+}
+
+async function setObjectStoragePrefixPrivate(prefix) {
+  const client = getSpacesClient();
+
+  if (!client || !prefix) {
+    return {
+      updated: 0,
+    };
+  }
+
+  let continuationToken = null;
+  let updated = 0;
+
+  do {
+    const page = await client.send(
+      new ListObjectsV2Command({
+        Bucket: process.env.DO_SPACES_BUCKET,
+        Prefix: prefix,
+        ContinuationToken: continuationToken || undefined,
+      })
+    );
+    const objects = Array.isArray(page.Contents) ? page.Contents : [];
+
+    for (const object of objects) {
+      if (object.Key) {
+        await setObjectStorageAssetPrivate(object.Key);
+        updated += 1;
+      }
+    }
+
+    continuationToken = page.IsTruncated ? page.NextContinuationToken : null;
+  } while (continuationToken);
+
+  return {
+    updated,
+  };
 }
 
 function moveFileWithinLocalStorage({ sourcePath, targetDir, filename }) {
@@ -244,10 +327,13 @@ module.exports = {
   STORAGE_PROVIDERS,
   deleteObjectStorageAsset,
   getPublicObjectUrl,
+  getObjectStorageReadStream,
   getStorageDiagnostics,
   getStorageProvider,
   moveFileWithinLocalStorage,
   readObjectStorageBuffer,
+  setObjectStorageAssetPrivate,
+  setObjectStoragePrefixPrivate,
   uploadBufferToObjectStorage,
   uploadFileToObjectStorage,
   writeBufferWithinLocalStorage,

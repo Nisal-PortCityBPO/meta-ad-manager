@@ -242,7 +242,7 @@ adsLaunchMediaSchema.methods.toSafeObject = function toSafeObject() {
       width: asset.width || 0,
       height: asset.height || 0,
       duration: asset.duration || 0,
-      url: asset.url || `/api/ads-launch/media/${id}/${assetKind}`,
+      url: `/api/ads-launch/media/${id}/${assetKind}`,
     };
   };
 
