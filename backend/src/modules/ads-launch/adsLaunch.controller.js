@@ -2,6 +2,18 @@ const asyncHandler = require('../../app/utils/asyncHandler');
 const adsManageService = require('../ads-manage/adsManage.service');
 const adsLaunchService = require('./adsLaunch.service');
 
+function sendStoredAsset(res, asset) {
+  res.setHeader('Content-Type', asset.mimeType);
+  res.setHeader('Content-Disposition', `inline; filename="${encodeURIComponent(asset.filename)}"`);
+
+  if (asset.redirectUrl) {
+    res.redirect(asset.redirectUrl);
+    return;
+  }
+
+  res.sendFile(asset.filePath);
+}
+
 const getTemplates = asyncHandler(async (req, res) => {
   const templates = await adsLaunchService.listTemplates({
     actor: req.user,
@@ -18,9 +30,7 @@ const getTemplateAsset = asyncHandler(async (req, res) => {
     actor: req.user,
   });
 
-  res.setHeader('Content-Type', asset.mimeType);
-  res.setHeader('Content-Disposition', `inline; filename="${encodeURIComponent(asset.filename)}"`);
-  res.sendFile(asset.filePath);
+  sendStoredAsset(res, asset);
 });
 
 const getMediaAssets = asyncHandler(async (req, res) => {
@@ -65,9 +75,7 @@ const getMediaAsset = asyncHandler(async (req, res) => {
     actor: req.user,
   });
 
-  res.setHeader('Content-Type', asset.mimeType);
-  res.setHeader('Content-Disposition', `inline; filename="${encodeURIComponent(asset.filename)}"`);
-  res.sendFile(asset.filePath);
+  sendStoredAsset(res, asset);
 });
 
 const createMediaAsset = asyncHandler(async (req, res) => {

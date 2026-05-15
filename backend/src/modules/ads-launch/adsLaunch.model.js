@@ -28,6 +28,17 @@ const launchTemplateAssetSchema = new mongoose.Schema(
       default: '',
       trim: true,
     },
+    storageProvider: {
+      type: String,
+      enum: ['LOCAL', 'SPACES'],
+      default: 'LOCAL',
+      trim: true,
+    },
+    url: {
+      type: String,
+      default: '',
+      trim: true,
+    },
   },
   {
     _id: false,
@@ -326,7 +337,8 @@ launchTemplateSchema.methods.toSafeObject = function toSafeObject() {
       name: asset.name,
       type: asset.type,
       size: asset.size || 0,
-      url: `/api/ads-launch/templates/${this._id.toString()}/assets/${assetKind}`,
+      storageProvider: asset.storageProvider || 'LOCAL',
+      url: asset.url || `/api/ads-launch/templates/${this._id.toString()}/assets/${assetKind}`,
     };
   };
 

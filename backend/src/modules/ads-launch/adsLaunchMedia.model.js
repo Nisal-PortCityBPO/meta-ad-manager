@@ -27,6 +27,17 @@ const adsMediaAssetSchema = new mongoose.Schema(
       default: '',
       trim: true,
     },
+    storageProvider: {
+      type: String,
+      enum: ['LOCAL', 'SPACES'],
+      default: 'LOCAL',
+      trim: true,
+    },
+    url: {
+      type: String,
+      default: '',
+      trim: true,
+    },
     width: {
       type: Number,
       default: 0,
@@ -227,10 +238,11 @@ adsLaunchMediaSchema.methods.toSafeObject = function toSafeObject() {
       name: asset.name,
       type: asset.type,
       size: asset.size || 0,
+      storageProvider: asset.storageProvider || 'LOCAL',
       width: asset.width || 0,
       height: asset.height || 0,
       duration: asset.duration || 0,
-      url: `/api/ads-launch/media/${id}/${assetKind}`,
+      url: asset.url || `/api/ads-launch/media/${id}/${assetKind}`,
     };
   };
 
