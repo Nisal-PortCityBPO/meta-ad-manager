@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { ChevronDown, ChevronRight, Folder, FolderOpen, ImageIcon, RefreshCw, Upload, Video, X } from 'lucide-react';
+import { AlertTriangle, ChevronDown, ChevronRight, Folder, FolderOpen, ImageIcon, RefreshCw, Upload, Video, X } from 'lucide-react';
 import { useAuth } from '../../auth/hooks/useAuth';
 
 const ROOT_FOLDER_ID = 'root';
@@ -39,6 +39,8 @@ const formatFileSize = (bytes = 0) => {
 
   return `${Math.max(Math.round(bytes / 1024), 1)} KB`;
 };
+
+const hasMetaReviewWarning = (mediaAsset) => mediaAsset?.metaReview?.riskStatus === 'PREVIOUSLY_REJECTED';
 
 const buildFolderGroups = (folders) =>
   folders.reduce((groups, folder) => {
@@ -333,6 +335,8 @@ const MediaLibraryFolderPicker = ({
                   {visibleMediaAssets.map((mediaAsset) => {
                     const isVideo = mediaAsset.mediaType === 'VIDEO';
                     const media = mediaAsset.media || {};
+                    const reviewWarning = hasMetaReviewWarning(mediaAsset);
+                    const review = mediaAsset.metaReview || {};
                     const selected = selectedMediaAssetId
                       ? selectedMediaAssetId === mediaAsset.id
                       : selectedMediaAssetUrl === media.url;
@@ -358,6 +362,12 @@ const MediaLibraryFolderPicker = ({
                             {isVideo ? <Video size={14} strokeWidth={2.4} /> : <ImageIcon size={14} strokeWidth={2.4} />}
                             {isVideo ? 'Video' : 'Image'}
                           </span>
+                          {reviewWarning ? (
+                            <span className="absolute left-3 top-12 inline-flex max-w-[calc(100%-1.5rem)] items-center gap-1 rounded-full bg-red-50 px-2.5 py-1 text-[11px] font-black text-red-700 shadow-sm">
+                              <AlertTriangle size={13} strokeWidth={2.4} />
+                              Previously rejected
+                            </span>
+                          ) : null}
                           {selected ? (
                             <span className="absolute right-3 top-3 rounded-full bg-emerald-50 px-3 py-1 text-xs font-black text-emerald-700">
                               Selected
@@ -372,6 +382,11 @@ const MediaLibraryFolderPicker = ({
                           <p className="mt-2 inline-flex rounded-full bg-sky-50 px-3 py-1 text-[11px] font-black uppercase tracking-[0.12em] text-sky-700">
                             {mediaAsset.brandName || 'Unassigned brand'}
                           </p>
+                          {reviewWarning ? (
+                            <p className="mt-2 line-clamp-2 rounded-xl bg-red-50 px-3 py-2 text-xs font-bold leading-5 text-red-700">
+                              {review.lastReason || 'Meta previously rejected or disapproved an ad using this media.'}
+                            </p>
+                          ) : null}
                           {isVideo ? (
                             <p className="mt-2 rounded-xl bg-amber-50 px-3 py-2 text-xs font-bold text-amber-700">
                               Choose a separate image thumbnail for publishing

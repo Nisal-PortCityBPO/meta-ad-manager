@@ -48,6 +48,113 @@ const adsMediaAssetSchema = new mongoose.Schema(
   }
 );
 
+const metaReviewAdSchema = new mongoose.Schema(
+  {
+    adId: {
+      type: String,
+      default: '',
+      trim: true,
+    },
+    adName: {
+      type: String,
+      default: '',
+      trim: true,
+    },
+    adSetId: {
+      type: String,
+      default: '',
+      trim: true,
+    },
+    adSetName: {
+      type: String,
+      default: '',
+      trim: true,
+    },
+    campaignId: {
+      type: String,
+      default: '',
+      trim: true,
+    },
+    campaignName: {
+      type: String,
+      default: '',
+      trim: true,
+    },
+    adAccountId: {
+      type: String,
+      default: '',
+      trim: true,
+    },
+    adAccountName: {
+      type: String,
+      default: '',
+      trim: true,
+    },
+    businessProfileId: {
+      type: String,
+      default: '',
+      trim: true,
+    },
+    businessProfileName: {
+      type: String,
+      default: '',
+      trim: true,
+    },
+    mediaRole: {
+      type: String,
+      default: 'MEDIA',
+      trim: true,
+    },
+  },
+  {
+    _id: false,
+  }
+);
+
+const metaReviewSchema = new mongoose.Schema(
+  {
+    riskStatus: {
+      type: String,
+      default: 'CLEAR',
+      trim: true,
+      index: true,
+    },
+    lastMetaStatus: {
+      type: String,
+      default: '',
+      trim: true,
+    },
+    lastReason: {
+      type: String,
+      default: '',
+      trim: true,
+    },
+    lastRejectedAt: {
+      type: Date,
+      default: null,
+    },
+    lastCheckedAt: {
+      type: Date,
+      default: null,
+    },
+    rejectedAdIds: {
+      type: [String],
+      default: [],
+    },
+    rejectedCampaignIds: {
+      type: [String],
+      default: [],
+    },
+    lastAd: {
+      type: metaReviewAdSchema,
+      default: null,
+    },
+  },
+  {
+    _id: false,
+  }
+);
+
 const adsLaunchMediaSchema = new mongoose.Schema(
   {
     name: {
@@ -96,6 +203,10 @@ const adsLaunchMediaSchema = new mongoose.Schema(
       ref: 'User',
       default: null,
     },
+    metaReview: {
+      type: metaReviewSchema,
+      default: () => ({}),
+    },
   },
   {
     timestamps: true,
@@ -103,6 +214,7 @@ const adsLaunchMediaSchema = new mongoose.Schema(
 );
 
 adsLaunchMediaSchema.index({ brandId: 1, updatedAt: -1 });
+adsLaunchMediaSchema.index({ 'metaReview.riskStatus': 1, updatedAt: -1 });
 
 adsLaunchMediaSchema.methods.toSafeObject = function toSafeObject() {
   const id = this._id.toString();
@@ -131,6 +243,22 @@ adsLaunchMediaSchema.methods.toSafeObject = function toSafeObject() {
     folderId: this.folder?._id?.toString?.() || this.folder?.toString?.() || null,
     media: mapAsset(this.media, 'file'),
     thumbnail: mapAsset(this.thumbnail, 'thumbnail'),
+    metaReview: this.metaReview
+      ? {
+          riskStatus: this.metaReview.riskStatus || 'CLEAR',
+          lastMetaStatus: this.metaReview.lastMetaStatus || '',
+          lastReason: this.metaReview.lastReason || '',
+          lastRejectedAt: this.metaReview.lastRejectedAt || null,
+          lastCheckedAt: this.metaReview.lastCheckedAt || null,
+          rejectedAdCount: Array.isArray(this.metaReview.rejectedAdIds) ? this.metaReview.rejectedAdIds.length : 0,
+          rejectedCampaignCount: Array.isArray(this.metaReview.rejectedCampaignIds)
+            ? this.metaReview.rejectedCampaignIds.length
+            : 0,
+          lastAd: this.metaReview.lastAd || null,
+        }
+      : {
+          riskStatus: 'CLEAR',
+        },
     createdBy: this.createdBy
       ? {
           id: this.createdBy._id?.toString?.() || this.createdBy.toString(),

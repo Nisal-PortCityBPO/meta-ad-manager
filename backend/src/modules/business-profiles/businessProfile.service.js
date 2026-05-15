@@ -5,6 +5,8 @@ const { writeActivityLog } = require('../activity-logs/activityLog.service');
 const socialAccountService = require('../social-accounts/socialAccount.service');
 const SocialAccount = require('../social-accounts/socialAccount.model');
 const tokenService = require('../token-management/token.service');
+const AdsLaunchMedia = require('../ads-launch/adsLaunchMedia.model');
+const ManagedCampaign = require('../ads-manage/adsManage.model');
 const {
   BusinessProfile,
   BUSINESS_PROFILE_ASSET_METRIC_STATUSES,
@@ -42,7 +44,7 @@ const META_AD_CREATIVE_SAFE_FIELDS = [
   'effective_object_story_id',
   'object_story_spec',
 ].join(',');
-const META_AD_FIELDS = `id,name,status,effective_status,configured_status,creative{${META_AD_CREATIVE_FIELDS}},insights.date_preset(maximum).limit(1){${META_INSIGHT_FIELDS}}`;
+const META_AD_FIELDS = `id,name,status,effective_status,configured_status,ad_review_feedback,creative{${META_AD_CREATIVE_FIELDS}},insights.date_preset(maximum).limit(1){${META_INSIGHT_FIELDS}}`;
 const META_AD_SAFE_FIELDS = `id,name,status,effective_status,configured_status,creative{${META_AD_CREATIVE_SAFE_FIELDS}},insights.date_preset(maximum).limit(1){${META_INSIGHT_FIELDS}}`;
 const getMetaAdSetFields = (adFields) =>
   `id,name,status,effective_status,daily_budget,lifetime_budget,budget_remaining,ads.limit(100).summary(true){${adFields}},insights.date_preset(maximum).limit(1){${META_INSIGHT_FIELDS}}`;
@@ -81,6 +83,30 @@ function normalizePagination({ page = 1, limit = 5 } = {}) {
 
 function escapeRegExp(value) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function normalizeText(value) {
+  if (value === undefined || value === null) {
+    return '';
+  }
+
+  if (typeof value === 'string') {
+    return value.trim();
+  }
+
+  if (typeof value === 'number' || typeof value === 'boolean' || typeof value === 'bigint') {
+    return String(value).trim();
+  }
+
+  if (value instanceof mongoose.Types.ObjectId) {
+    return value.toString();
+  }
+
+  if (typeof value.toString === 'function' && value.toString !== Object.prototype.toString) {
+    return value.toString().trim();
+  }
+
+  return '';
 }
 
 function buildBusinessProfileQuery({ search, tokenLabel } = {}) {
@@ -290,7 +316,12 @@ async function fetchAdAccountHierarchyForToken(token, adAccount, summary) {
   } catch (error) {
     const message = error.message?.toLowerCase() || '';
 
-    if (!message.includes('creative') && !message.includes('asset_feed_spec') && !message.includes('object_story_spec')) {
+    if (
+      !message.includes('creative') &&
+      !message.includes('asset_feed_spec') &&
+      !message.includes('object_story_spec') &&
+      !message.includes('ad_review_feedback')
+    ) {
       throw error;
     }
 
@@ -808,6 +839,43 @@ function getCreativeImageHash(creative = {}) {
   );
 }
 
+function extractReviewFeedbackText(feedback = {}) {
+  if (!feedback || typeof feedback !== 'object') {
+    return '';
+  }
+
+  const values = [];
+  const visit = (value) => {
+    if (!value) {
+      return;
+    }
+
+    if (typeof value === 'string') {
+      values.push(value);
+      return;
+    }
+
+    if (Array.isArray(value)) {
+      value.forEach(visit);
+      return;
+    }
+
+    if (typeof value === 'object') {
+      Object.entries(value).forEach(([key, nestedValue]) => {
+        if (['string', 'number', 'boolean'].includes(typeof nestedValue)) {
+          values.push(`${key}: ${nestedValue}`);
+          return;
+        }
+
+        visit(nestedValue);
+      });
+    }
+  };
+
+  visit(feedback);
+  return [...new Set(values.map((value) => String(value).trim()).filter(Boolean))].slice(0, 6).join(' | ');
+}
+
 function normalizeAdAsset(ad, { adSet, campaign, currency, pagesById }) {
   const creative = ad.creative || {};
   const pageId = getCreativePageId(creative);
@@ -817,6 +885,7 @@ function normalizeAdAsset(ad, { adSet, campaign, currency, pagesById }) {
   const imageHash = getCreativeImageHash(creative);
   const storyId = creative.effective_object_story_id || creative.effective_instagram_story_id || null;
   const mediaType = videoId ? 'Video' : 'Image';
+  const adReviewFeedback = ad.ad_review_feedback || ad.review_feedback || null;
 
   return {
     id: String(ad.id),
@@ -825,6 +894,9 @@ function normalizeAdAsset(ad, { adSet, campaign, currency, pagesById }) {
     status: getMetaStatusValue(ad),
     configuredStatus: ad.configured_status || null,
     effectiveStatus: ad.effective_status || null,
+    reviewStatus: ad.review_status || null,
+    adReviewFeedback,
+    rejectionReason: extractReviewFeedbackText(adReviewFeedback),
     campaignId: String(campaign.id),
     campaignName: campaign.name || `Campaign ${campaign.id}`,
     adSetId: String(adSet.id),
@@ -866,6 +938,8 @@ function normalizeAdAsset(ad, { adSet, campaign, currency, pagesById }) {
       videoId,
       imageHash,
       storyId,
+      adReviewFeedback,
+      rejectionReason: extractReviewFeedbackText(adReviewFeedback),
     },
     insights,
   };
@@ -980,6 +1054,207 @@ function normalizeAdAccountAsset(account, pagesById = new Map(), syncedAt = null
   };
 }
 
+function getAdReviewStatusValues(ad = {}) {
+  const details = ad.details || {};
+  const reviewFeedback = ad.adReviewFeedback || details.adReviewFeedback || {};
+
+  return [
+    ad.status,
+    ad.effectiveStatus,
+    ad.configuredStatus,
+    ad.reviewStatus,
+    details.status,
+    details.reviewStatus,
+    reviewFeedback.global?.status,
+    reviewFeedback.ad?.status,
+  ]
+    .filter(Boolean)
+    .map((status) => normalizeText(status).toUpperCase())
+    .filter(Boolean);
+}
+
+function isRejectedMetaAd(ad = {}) {
+  return getAdReviewStatusValues(ad).some(
+    (status) => status.includes('DISAPPROVED') || status.includes('REJECTED')
+  );
+}
+
+function getRejectedAdStatus(ad = {}) {
+  return getAdReviewStatusValues(ad).find(
+    (status) => status.includes('DISAPPROVED') || status.includes('REJECTED')
+  ) || normalizeText(ad.status || ad.effectiveStatus || 'REJECTED');
+}
+
+function getRejectedAdReason(ad = {}) {
+  return (
+    normalizeText(ad.rejectionReason) ||
+    normalizeText(ad.details?.rejectionReason) ||
+    'Meta marked this ad as rejected or disapproved'
+  );
+}
+
+function collectRejectedAdsFromAdAccounts({ profile, adAccounts = [] }) {
+  const profileId = profile?._id?.toString?.() || profile?.id?.toString?.() || '';
+  const profileName = profile?.name || '';
+  const rejectedAds = [];
+
+  adAccounts.forEach((adAccount) => {
+    (Array.isArray(adAccount?.campaigns) ? adAccount.campaigns : []).forEach((campaign) => {
+      (Array.isArray(campaign?.adSets) ? campaign.adSets : []).forEach((adSet) => {
+        (Array.isArray(adSet?.ads) ? adSet.ads : []).forEach((ad) => {
+          if (!isRejectedMetaAd(ad)) {
+            return;
+          }
+
+          rejectedAds.push({
+            adId: normalizeText(ad.id),
+            adName: normalizeText(ad.name || ad.title),
+            adSetId: normalizeText(adSet.id || ad.adSetId),
+            adSetName: normalizeText(adSet.name || ad.adSetName),
+            campaignId: normalizeText(campaign.id || ad.campaignId),
+            campaignName: normalizeText(campaign.name || ad.campaignName),
+            adAccountId: normalizeText(adAccount.id || adAccount.accountId),
+            adAccountName: normalizeText(adAccount.name),
+            businessProfileId: profileId,
+            businessProfileName: profileName,
+            status: getRejectedAdStatus(ad),
+            reason: getRejectedAdReason(ad),
+          });
+        });
+      });
+    });
+  });
+
+  return rejectedAds;
+}
+
+async function markRejectedLaunchMediaFromAdAccounts({ profile, adAccounts = [], syncedAt = new Date() }) {
+  const rejectedAds = collectRejectedAdsFromAdAccounts({ profile, adAccounts });
+  const campaignIds = [...new Set(rejectedAds.map((ad) => ad.campaignId).filter(Boolean))];
+
+  if (!campaignIds.length) {
+    return {
+      rejectedAds: rejectedAds.length,
+      markedMedia: 0,
+    };
+  }
+
+  const launchRecords = await ManagedCampaign.find({
+    campaignId: {
+      $in: campaignIds,
+    },
+  })
+    .select('campaignId adId adSetId name adAccount launch')
+    .lean();
+  const recordsByCampaignId = new Map(launchRecords.map((record) => [normalizeText(record.campaignId), record]));
+  const recordsByAdId = new Map(
+    launchRecords
+      .filter((record) => normalizeText(record.adId))
+      .map((record) => [normalizeText(record.adId), record])
+  );
+  const operations = [];
+  const markedMediaIds = new Set();
+
+  rejectedAds.forEach((ad) => {
+    const record = recordsByAdId.get(ad.adId) || recordsByCampaignId.get(ad.campaignId);
+
+    if (!record?.launch) {
+      return;
+    }
+
+    [
+      {
+        mediaId: normalizeText(record.launch.mediaAssetId),
+        mediaRole: 'MEDIA',
+      },
+      {
+        mediaId: normalizeText(record.launch.thumbnailAssetId),
+        mediaRole: 'THUMBNAIL',
+      },
+    ]
+      .filter((item) => item.mediaId && mongoose.Types.ObjectId.isValid(item.mediaId))
+      .forEach((item) => {
+        markedMediaIds.add(item.mediaId);
+        const lastAd = {
+          adId: ad.adId || normalizeText(record.adId),
+          adName: ad.adName,
+          adSetId: ad.adSetId || normalizeText(record.adSetId),
+          adSetName: ad.adSetName,
+          campaignId: ad.campaignId,
+          campaignName: ad.campaignName || normalizeText(record.name),
+          adAccountId: ad.adAccountId || normalizeText(record.adAccount?.id),
+          adAccountName: ad.adAccountName || normalizeText(record.adAccount?.name),
+          businessProfileId: ad.businessProfileId,
+          businessProfileName: ad.businessProfileName,
+          mediaRole: item.mediaRole,
+        };
+        const update = {
+          $set: {
+            'metaReview.riskStatus': 'PREVIOUSLY_REJECTED',
+            'metaReview.lastMetaStatus': ad.status,
+            'metaReview.lastReason': ad.reason,
+            'metaReview.lastRejectedAt': syncedAt,
+            'metaReview.lastCheckedAt': syncedAt,
+            'metaReview.lastAd': lastAd,
+            updatedAt: syncedAt,
+          },
+          $addToSet: {
+            'metaReview.rejectedCampaignIds': ad.campaignId,
+          },
+        };
+
+        if (lastAd.adId) {
+          update.$addToSet['metaReview.rejectedAdIds'] = lastAd.adId;
+        }
+
+        operations.push({
+          updateOne: {
+            filter: {
+              _id: item.mediaId,
+            },
+            update,
+          },
+        });
+      });
+  });
+
+  if (operations.length) {
+    await AdsLaunchMedia.bulkWrite(operations, {
+      ordered: false,
+    });
+  }
+
+  return {
+    rejectedAds: rejectedAds.length,
+    markedMedia: markedMediaIds.size,
+  };
+}
+
+async function safelyMarkRejectedLaunchMediaFromAdAccounts(args) {
+  try {
+    return await markRejectedLaunchMediaFromAdAccounts(args);
+  } catch (error) {
+    return {
+      rejectedAds: 0,
+      markedMedia: 0,
+      error: error.message || 'Media rejection tagging failed',
+    };
+  }
+}
+
+function addMediaReviewSummary(summary, mediaReviewSummary) {
+  if (!summary || !mediaReviewSummary) {
+    return;
+  }
+
+  summary.mediaReviewRejectedAds = (summary.mediaReviewRejectedAds || 0) + (mediaReviewSummary.rejectedAds || 0);
+  summary.mediaReviewMarked = (summary.mediaReviewMarked || 0) + (mediaReviewSummary.markedMedia || 0);
+
+  if (mediaReviewSummary.error) {
+    summary.mediaReviewErrors = [...(summary.mediaReviewErrors || []), mediaReviewSummary.error];
+  }
+}
+
 function getAdAccountAssets(metaProfile, syncedAt) {
   const pagesById = getPagesById(metaProfile);
 
@@ -1069,7 +1344,7 @@ function applyAssetMetrics(profile, metaProfile, syncedAt) {
   profile.adAccounts = assetMetrics.adAccounts;
 }
 
-async function upsertMetaProfile(metaProfile, token, syncedAt, socialAccount) {
+async function upsertMetaProfile(metaProfile, token, syncedAt, socialAccount, summary = null) {
   const existingProfile = await BusinessProfile.findOne({ metaBusinessId: metaProfile.id });
 
   if (!existingProfile) {
@@ -1091,6 +1366,12 @@ async function upsertMetaProfile(metaProfile, token, syncedAt, socialAccount) {
 
     applyAssetMetrics(profile, metaProfile, syncedAt);
     await profile.save();
+    const mediaReviewSummary = await safelyMarkRejectedLaunchMediaFromAdAccounts({
+      profile,
+      adAccounts: profile.adAccounts || [],
+      syncedAt,
+    });
+    addMediaReviewSummary(summary, mediaReviewSummary);
     return 'created';
   }
 
@@ -1105,6 +1386,12 @@ async function upsertMetaProfile(metaProfile, token, syncedAt, socialAccount) {
     existingProfile.agency = null;
     applyAssetMetrics(existingProfile, metaProfile, syncedAt);
     await existingProfile.save();
+    const mediaReviewSummary = await safelyMarkRejectedLaunchMediaFromAdAccounts({
+      profile: existingProfile,
+      adAccounts: existingProfile.adAccounts || [],
+      syncedAt,
+    });
+    addMediaReviewSummary(summary, mediaReviewSummary);
     return 'skipped';
   }
 
@@ -1124,6 +1411,12 @@ async function upsertMetaProfile(metaProfile, token, syncedAt, socialAccount) {
   existingProfile.rawMetaData = metaProfile;
   existingProfile.lastSyncedAt = syncedAt;
   await existingProfile.save();
+  const mediaReviewSummary = await safelyMarkRejectedLaunchMediaFromAdAccounts({
+    profile: existingProfile,
+    adAccounts: existingProfile.adAccounts || [],
+    syncedAt,
+  });
+  addMediaReviewSummary(summary, mediaReviewSummary);
   return 'updated';
 }
 
@@ -2017,6 +2310,8 @@ async function syncAdAccount({ profileId, adAccountId, actor, req, tokenId = nul
     skipped: 0,
     failed: 0,
     hierarchyFetchFailed: 0,
+    mediaReviewRejectedAds: 0,
+    mediaReviewMarked: 0,
     errors: [],
   };
 
@@ -2042,7 +2337,13 @@ async function syncAdAccount({ profileId, adAccountId, actor, req, tokenId = nul
     profile.adAccounts = updatedAccounts;
     applyStoredAdAccountMetrics(profile, syncedAt);
     await profile.save();
+    const mediaReviewSummary = await safelyMarkRejectedLaunchMediaFromAdAccounts({
+      profile,
+      adAccounts: [updatedAccount],
+      syncedAt,
+    });
     summary.updated = 1;
+    addMediaReviewSummary(summary, mediaReviewSummary);
 
     await writeActivityLog({
       user: actor,
@@ -2118,6 +2419,8 @@ async function syncBusinessProfiles({ actor, req, tokenId = null, socialAccountI
     failed: 0,
     statusCheckFailed: 0,
     hierarchyFetchFailed: 0,
+    mediaReviewRejectedAds: 0,
+    mediaReviewMarked: 0,
     socialAccountsCreated: 0,
     socialAccountsUpdated: 0,
     socialAccountsSkipped: 0,
@@ -2167,7 +2470,7 @@ async function syncBusinessProfiles({ actor, req, tokenId = null, socialAccountI
           requestDisabledStatus = false;
         }
 
-        const result = await upsertMetaProfile(checkedMetaProfile, token, syncedAt, socialAccountResult.account);
+        const result = await upsertMetaProfile(checkedMetaProfile, token, syncedAt, socialAccountResult.account, summary);
         summary[result] += 1;
       }
     } catch (error) {
