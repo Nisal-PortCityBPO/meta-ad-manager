@@ -243,7 +243,7 @@ const SocialAccountsTable = ({
     >
       <div className="mb-4 flex flex-col justify-between gap-3 sm:flex-row sm:items-center">
         <p className="text-sm leading-6 text-slate-500">
-          Social accounts are fetched from saved Meta Connections. Brand and agency ownership comes from the connection settings. Test
+          Social accounts are fetched from saved Meta Connections. Brand and agency ownership comes from the connection settings.
         </p>
       </div>
 
@@ -327,7 +327,7 @@ const SocialAccountsTable = ({
             onClick={onClearFilters}
             className="h-11 rounded-xl border border-sky-100 bg-white px-4 text-sm font-bold text-slate-700 transition hover:bg-sky-50"
           >
-            Clear
+            Clear All
           </button>
         </div>
       </div>
