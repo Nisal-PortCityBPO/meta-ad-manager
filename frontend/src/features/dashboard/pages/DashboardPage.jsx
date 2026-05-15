@@ -243,7 +243,7 @@ const SocialAccountsTable = ({
     >
       <div className="mb-4 flex flex-col justify-between gap-3 sm:flex-row sm:items-center">
         <p className="text-sm leading-6 text-slate-500">
-          Social accounts are fetched from saved Meta Connections. Brand and agency ownership comes from the connection settings.
+          Social accounts are fetched from saved Meta Connections. Brand and agency ownership comes from the connection settings. Test
         </p>
       </div>
 
