@@ -93,43 +93,43 @@
 
 
 
-deploy:
-  runs-on: ubuntu-latest
-  needs: [version, build]
+# deploy:
+#   runs-on: ubuntu-latest
+#   needs: [version, build]
 
-  steps:
-    - name: Deploy over SSH
-      uses: appleboy/ssh-action@v1.2.0
-      env:
-        VERSION: ${{ needs.version.outputs.version }}
-        IMAGE: ghcr.io/${{ github.repository_owner }}/meta-add
-        GHCR_USER: ${{ github.actor }}
-        GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+#   steps:
+#     - name: Deploy over SSH
+#       uses: appleboy/ssh-action@v1.2.0
+#       env:
+#         VERSION: ${{ needs.version.outputs.version }}
+#         IMAGE: ghcr.io/${{ github.repository_owner }}/meta-add
+#         GHCR_USER: ${{ github.actor }}
+#         GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      with:
-        host: ${{ secrets.DEV_VPS_HOST }}
-        username: ${{ secrets.DEV_VPS_USER }}
-        key: ${{ secrets.DEV_VPS_SSH_KEY }}
-        port: 22
+#       with:
+#         host: ${{ secrets.DEV_VPS_HOST }}
+#         username: ${{ secrets.DEV_VPS_USER }}
+#         key: ${{ secrets.DEV_VPS_SSH_KEY }}
+#         port: 22
 
-        envs: VERSION,IMAGE,GHCR_USER,GHCR_TOKEN
+#         envs: VERSION,IMAGE,GHCR_USER,GHCR_TOKEN
 
-        script: |
-          set -e
+#         script: |
+#           set -e
 
-          cd /var/www
+#           cd /var/www
 
-          echo "🚀 Deploying $IMAGE:$VERSION"
+#           echo "🚀 Deploying $IMAGE:$VERSION"
 
-          echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USER" --password-stdin
+#           echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USER" --password-stdin
 
-          docker pull $IMAGE:$VERSION
+#           docker pull $IMAGE:$VERSION
 
-          docker tag $IMAGE:$VERSION $IMAGE:current
-          docker tag $IMAGE:$VERSION $IMAGE:dev
-          docker tag $IMAGE:$VERSION $IMAGE:latest
+#           docker tag $IMAGE:$VERSION $IMAGE:current
+#           docker tag $IMAGE:$VERSION $IMAGE:dev
+#           docker tag $IMAGE:$VERSION $IMAGE:latest
 
-          chmod +x ./deploy_meta_app.sh
+#           chmod +x ./deploy_meta_app.sh
 
-          ./deploy_meta_app.sh "$VERSION"
+#           ./deploy_meta_app.sh "$VERSION"
 
