@@ -62,7 +62,6 @@
 #             ./deploy_meta_app.sh "${VERSION}"
 
 
-
 name: Dev - Build, Push to GHCR and Deploy
 
 on:
@@ -105,21 +104,24 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Set image name (FIXED GHCR PACKAGE NAME)
+      # ✅ FIX: lowercase GHCR owner + correct image name
+      - name: Set image name (GHCR FIXED)
         id: image
-        run: echo "image=ghcr.io/${{ github.repository_owner }}/meta-add" >> "$GITHUB_OUTPUT"
+        run: |
+          OWNER=$(echo "${GITHUB_REPOSITORY_OWNER}" | tr '[:upper:]' '[:lower:]')
+          echo "image=ghcr.io/$OWNER/meta-add" >> "$GITHUB_OUTPUT"
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Log in to GHCR
+      - name: Login to GHCR
         uses: docker/login-action@v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Build and push image
+      - name: Build and Push Docker Image
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -139,24 +141,27 @@ jobs:
         uses: appleboy/ssh-action@v1.2.0
         env:
           VERSION: ${{ needs.version.outputs.version }}
-          IMAGE: ghcr.io/${{ github.repository_owner }}/meta-add
+          OWNER: ${{ github.repository_owner }}
         with:
           host: ${{ secrets.DEV_VPS_HOST }}
           username: ${{ secrets.DEV_VPS_USER }}
           key: ${{ secrets.DEV_VPS_SSH_KEY }}
           port: 22
-          envs: VERSION,IMAGE
+          envs: VERSION,OWNER
           script: |
             cd /var/www
 
-            echo "🚀 Deploying meta-add:$VERSION"
+            OWNER_LC=$(echo "$OWNER" | tr '[:upper:]' '[:lower:]')
+
+            IMAGE="ghcr.io/$OWNER_LC/meta-add"
+
+            echo "🚀 Deploying $IMAGE:$VERSION"
 
             docker login ghcr.io -u ${{ github.actor }} -p ${{ secrets.GITHUB_TOKEN }}
 
             docker pull $IMAGE:$VERSION
 
             docker tag $IMAGE:$VERSION $IMAGE:current
-
             docker tag $IMAGE:$VERSION $IMAGE:dev
 
             ./deploy_meta_app.sh "$VERSION"
