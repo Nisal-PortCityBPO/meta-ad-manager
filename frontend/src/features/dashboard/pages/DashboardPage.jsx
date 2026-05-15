@@ -327,7 +327,7 @@ const SocialAccountsTable = ({
             onClick={onClearFilters}
             className="h-11 rounded-xl border border-sky-100 bg-white px-4 text-sm font-bold text-slate-700 transition hover:bg-sky-50"
           >
-            Clear 
+            Clear All
           </button>
         </div>
       </div>
