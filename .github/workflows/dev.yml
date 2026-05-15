@@ -1,67 +1,3 @@
-# name: Dev - Build, Push to GHCR and Deploy
-
-# on:
-#   workflow_dispatch:
-#   push:
-#     branches:
-#       - dev
-
-# permissions:
-#   contents: read
-#   packages: write
-
-# jobs:
-#   build:
-#     runs-on: ubuntu-latest
-#     steps:
-#       - name: Checkout
-#         uses: actions/checkout@v4
-
-#       - name: Normalize image name
-#         id: image
-#         run: echo "image=ghcr.io/${GITHUB_REPOSITORY,,}" >> "$GITHUB_OUTPUT"
-
-#       - name: Set up Docker Buildx
-#         uses: docker/setup-buildx-action@v3
-
-#       - name: Log in to GHCR
-#         uses: docker/login-action@v3
-#         with:
-#           registry: ghcr.io
-#           username: ${{ github.actor }}
-#           password: ${{ secrets.GITHUBTOKEN || github.token }}
-
-#       - name: Build and push dev image
-#         uses: docker/build-push-action@v6
-#         with:
-#           context: .
-#           file: ./Dockerfile
-#           push: true
-#           tags: |
-#             ${{ steps.image.outputs.image }}:dev-${{ github.sha }}
-#             ${{ steps.image.outputs.image }}:dev
-
-#   deploy:
-#     runs-on: ubuntu-latest
-#     needs: build
-#     steps:
-#       - name: Deploy over SSH
-#         uses: appleboy/ssh-action@v1.2.0
-#         env:
-#           VERSION: dev-${{ github.sha }}
-#           GHCR_USER: ${{ github.actor }}
-#           GHCR_TOKEN: ${{ secrets.GITHUBTOKEN || github.token }}
-#         with:
-#           host: ${{ secrets.DEV_VPS_HOST }}
-#           username: ${{ secrets.DEV_VPS_USER }}
-#           key: ${{ secrets.DEV_VPS_SSH_KEY }}
-#           port: 22
-#           envs: VERSION,GHCR_USER,GHCR_TOKEN
-#           script: |
-#             cd /var/www
-#             ./deploy_meta_app.sh "${VERSION}"
-
-
 name: Dev - Build, Push to GHCR and Deploy
 
 on:
@@ -75,85 +11,52 @@ permissions:
   packages: write
 
 jobs:
-  version:
-    runs-on: ubuntu-latest
-    outputs:
-      version: ${{ steps.ver.outputs.version }}
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Generate version (NO BRANCHES)
-        id: ver
-        run: |
-          VERSION="0.0.${GITHUB_RUN_NUMBER}"
-          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-
   build:
     runs-on: ubuntu-latest
-    needs: version
-
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Set image name (LOWERCASE SAFE GHCR)
+      - name: Normalize image name
         id: image
-        run: |
-          OWNER=$(echo "${GITHUB_REPOSITORY_OWNER}" | tr '[:upper:]' '[:lower:]')
-          echo "image=ghcr.io/$OWNER/meta-add" >> "$GITHUB_OUTPUT"
+        run: echo "image=ghcr.io/${GITHUB_REPOSITORY,,}" >> "$GITHUB_OUTPUT"
 
-      - name: Setup Docker Buildx
+      - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Login to GHCR
+      - name: Log in to GHCR
         uses: docker/login-action@v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+          password: ${{ secrets.GITHUBTOKEN || github.token }}
 
-      - name: Build and Push Docker Image
+      - name: Build and push dev image
         uses: docker/build-push-action@v6
         with:
           context: .
           file: ./Dockerfile
           push: true
           tags: |
-            ${{ steps.image.outputs.image }}:${{ needs.version.outputs.version }}
+            ${{ steps.image.outputs.image }}:dev-${{ github.sha }}
             ${{ steps.image.outputs.image }}:dev
-            ${{ steps.image.outputs.image }}:latest
 
   deploy:
     runs-on: ubuntu-latest
-    needs: [version, build]
-
+    needs: build
     steps:
       - name: Deploy over SSH
         uses: appleboy/ssh-action@v1.2.0
         env:
-          VERSION: ${{ needs.version.outputs.version }}
-          OWNER: ${{ github.repository_owner }}
+          VERSION: dev-${{ github.sha }}
+          GHCR_USER: ${{ github.actor }}
+          GHCR_TOKEN: ${{ secrets.GITHUBTOKEN || github.token }}
         with:
           host: ${{ secrets.DEV_VPS_HOST }}
           username: ${{ secrets.DEV_VPS_USER }}
           key: ${{ secrets.DEV_VPS_SSH_KEY }}
           port: 22
-          envs: VERSION,OWNER
+          envs: VERSION,GHCR_USER,GHCR_TOKEN
           script: |
             cd /var/www
-
-            OWNER_LC=$(echo "$OWNER" | tr '[:upper:]' '[:lower:]')
-            IMAGE="ghcr.io/$OWNER_LC/meta-add"
-
-            echo "🚀 Deploying $IMAGE:$VERSION"
-
-            docker login ghcr.io -u ${{ github.actor }} -p ${{ secrets.GITHUB_TOKEN }}
-
-            docker pull $IMAGE:$VERSION
-
-            docker tag $IMAGE:$VERSION $IMAGE:current
-            docker tag $IMAGE:$VERSION $IMAGE:dev
-
-            ./deploy_meta_app.sh "$VERSION"
+            ./deploy_meta_app.sh "${VERSION}"
